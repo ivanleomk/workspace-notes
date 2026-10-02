@@ -16,6 +16,9 @@
         <nav class="lesson-nav">
             <a href="#introduction">Introduction</a>
             <a href="#what-is-mmlu">What is MMLU?</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#sft-training">SFT Training</a>
+            <a href="#contamination">Contamination</a>
             <a href="#quiz">Interactive Quiz</a>
             <a href="#data-explorer">Data Explorer</a>
             <a href="#limitations">Limitations</a>
@@ -78,6 +81,434 @@
                 MMLU typically uses 5-shot evaluation because it helps the model understand the task format 
                 and calibrate to the subject's style. This mimics how humans might approach an unfamiliar test 
                 after seeing a few sample questions.
+            </p>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Insights</h2>
+            <p>
+                The MMLU benchmark was introduced in <a href="https://arxiv.org/abs/2009.03300" target="_blank">Hendrycks et al. (2020)</a> 
+                with the goal of creating a comprehensive test for multitask language understanding. Here are key findings and design 
+                decisions directly from the paper:
+            </p>
+
+            <div class="info-box">
+                <h3>Motivation for Multitask Evaluation</h3>
+                <blockquote>
+                    "We propose a new test to measure a text model's multitask accuracy. The test covers 57 tasks including 
+                    elementary mathematics, US history, computer science, law, and more. To attain high accuracy on this test, 
+                    models must possess extensive world knowledge and problem solving ability."
+                    <footer>— Section 1 (Introduction), <a href="https://arxiv.org/abs/2009.03300" target="_blank">arXiv:2009.03300</a></footer>
+                </blockquote>
+                <p>
+                    The authors argue that single-task benchmarks can be "gamed" through narrow specialization, and that 
+                    broad multitask evaluation better captures general intelligence and reduces the risk of overfitting 
+                    to specific domains.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Human Expert Baseline</h3>
+                <p>
+                    The paper establishes a human expert baseline of <strong>89.8% accuracy</strong> (Table 3, Section 4). 
+                    Experts were recruited with relevant subject backgrounds (e.g., law graduates for law questions, 
+                    PhD students for STEM subjects). This baseline provides crucial context:
+                </p>
+                <ul>
+                    <li>Models scoring above ~90% approach or exceed human expert performance</li>
+                    <li>Random guessing (4 choices) yields 25% baseline</li>
+                    <li>The gap between random (25%) and expert (89.8%) defines the "learnable range"</li>
+                </ul>
+                <p>
+                    At the time of publication (2020), GPT-3 (175B) achieved 43.9% average accuracy in the zero-shot setting 
+                    and 53.9% with 5-shot prompting (Table 5), showing substantial room for improvement.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Few-Shot Evaluation Setup</h3>
+                <blockquote>
+                    "We evaluate models in the few-shot setting where a model is given a few examples of the task before 
+                    making predictions on test examples. We use a 5-shot setting... This allows models to infer the task 
+                    format and adapt to the subject matter."
+                    <footer>— Section 3.2 (Experimental Setup), <a href="https://arxiv.org/abs/2009.03300" target="_blank">arXiv:2009.03300</a></footer>
+                </blockquote>
+                <p>
+                    The 5-shot format provides the model with 5 development set questions (with answers) as context, 
+                    followed by the test question. This approach tests in-context learning—the model's ability to 
+                    adapt to task format and subject style from examples alone, without gradient updates.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Contamination Discussion</h3>
+                <p>
+                    The original MMLU paper (Section 3.1) addresses data contamination briefly:
+                </p>
+                <blockquote>
+                    "To minimize train-test overlap, we source questions from recent materials published after most 
+                    large language models' training data cutoffs... We also manually verify that questions are not 
+                    easily found via web search."
+                    <footer>— Section 3.1 (Dataset Construction), <a href="https://arxiv.org/abs/2009.03300" target="_blank">arXiv:2009.03300</a></footer>
+                </blockquote>
+                <p>
+                    However, as web-scraped training corpora have grown (Common Crawl, C4, etc.), contamination has 
+                    become a larger concern. Later work—such as studies on memorization in large language models 
+                    and contamination detection methods—has shown that determining whether specific test instances 
+                    appeared in training data is non-trivial and requires careful analysis.
+                </p>
+                <p>
+                    <strong>Note:</strong> The original paper is relatively light on contamination measurement methodology. 
+                    Subsequent research (post-2020) developed systematic contamination detection techniques, which we 
+                    cover in the <a href="#contamination">Contamination Measurement</a> section below.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Key Takeaway</h3>
+                <p>
+                    MMLU was designed as a challenging, broad-spectrum test to evaluate whether models possess 
+                    genuine multitask understanding rather than narrow expertise. The 57-subject structure, human 
+                    baseline, and few-shot format remain influential design choices that many subsequent benchmarks 
+                    have adopted.
+                </p>
+            </div>
+        </section>
+
+        <section id="sft-training" class="content-section">
+            <h2>What SFT to Improve MMLU Looks Like</h2>
+            <p>
+                <strong>Supervised Fine-Tuning (SFT)</strong> can improve MMLU scores by training models on 
+                instruction-following and question-answering datasets. However, this introduces important trade-offs 
+                between legitimate capability improvements and benchmark-specific overfitting.
+            </p>
+
+            <h3>Plain-Language Overview</h3>
+            <p>
+                SFT involves taking a pretrained base model and continuing training on curated (input, target) pairs. 
+                When the training data includes instruction-style QA that overlaps with MMLU subjects (science, math, 
+                history, etc.), the model learns to:
+            </p>
+            <ul>
+                <li>Format answers in a multiple-choice style</li>
+                <li>Apply reasoning patterns relevant to exam-style questions</li>
+                <li>Surface factual knowledge in response to direct questions</li>
+            </ul>
+            <p>
+                This can yield measurable MMLU improvements—but the key question is: <em>are we improving the model's 
+                capabilities, or just teaching it to perform well on MMLU-style tests?</em>
+            </p>
+
+            <h3>Concrete Example: SFT Data Format</h3>
+            <p>An illustrative SFT training example might look like this (toy example for teaching purposes):</p>
+
+            <div class="info-box">
+                <h4>Input (Instruction + Question)</h4>
+                <pre><code>Answer the following multiple-choice question about physics.
+
+Question: A car accelerates from 0 to 60 km/h in 10 seconds. What is its average acceleration?
+A) 1.67 m/s²
+B) 6.0 m/s²
+C) 16.7 m/s²
+D) 60 m/s²</code></pre>
+                
+                <h4>Target (Expected Output)</h4>
+                <pre><code>To find acceleration, we use a = Δv / Δt.
+First, convert 60 km/h to m/s: 60 km/h = 60 × (1000/3600) = 16.67 m/s.
+Then, a = 16.67 m/s / 10 s = 1.67 m/s².
+Answer: A</code></pre>
+            </div>
+
+            <p>
+                <strong>Note:</strong> This is an illustrative toy example, not from a real published dataset. 
+                Real SFT datasets include instruction-following tasks (e.g., FLAN, Alpaca, OpenOrca) that mix 
+                diverse reasoning and QA tasks, some of which overlap topically with MMLU subjects.
+            </p>
+
+            <h3>What a Training Run Looks Like</h3>
+            <p>
+                A typical SFT run to improve MMLU involves:
+            </p>
+            <ol>
+                <li>
+                    <strong>Dataset:</strong> 10K–100K instruction/QA pairs covering math, science, reasoning, etc. 
+                    The dataset may include exam-style questions but should ideally <em>not</em> include actual MMLU 
+                    test questions (that would be contamination).
+                </li>
+                <li>
+                    <strong>Training:</strong> Fine-tune the base model for 1–3 epochs with a small learning rate 
+                    (e.g., 1e-5 to 5e-5). Monitor training loss to ensure the model is learning without overfitting.
+                </li>
+                <li>
+                    <strong>Evaluation:</strong> Run MMLU on a held-out dev set or test set at regular checkpoints. 
+                    Track accuracy by subject category to spot uneven improvements.
+                </li>
+                <li>
+                    <strong>Result:</strong> You might see MMLU accuracy improve from (e.g.) 65% → 70% if the SFT data 
+                    taught genuine reasoning patterns. Or, scores might jump artificially if the training data was too 
+                    similar to MMLU questions—this is "teaching to the test."
+                </li>
+            </ol>
+
+            <h3>Legitimate Capability vs Benchmark Hacking</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>✓ Legitimate SFT Improvements</h4>
+                    <ul>
+                        <li>Training on broad reasoning tasks (math word problems, science explanations, logical puzzles)</li>
+                        <li>Improvements generalize to other benchmarks (GSM8K, ARC, etc.)</li>
+                        <li>Model explanations become more coherent and accurate</li>
+                        <li>Chat/instruction-following quality improves alongside knowledge tasks</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>✗ Benchmark Hacking / Overfitting</h4>
+                    <ul>
+                        <li>Training data includes paraphrased or leaked MMLU test questions</li>
+                        <li>MMLU scores spike but other benchmarks stay flat or regress</li>
+                        <li>Model learns surface patterns (e.g., "B is often correct in science questions")</li>
+                        <li>Performance doesn't reflect genuine understanding—fails on novel question variants</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Failure Modes and Trade-offs</h3>
+            <div class="limitation-card">
+                <h4>1. Contamination Risk</h4>
+                <p>
+                    If SFT data contains actual MMLU test questions (or near-duplicates), you're no longer measuring 
+                    capability—you're measuring memorization. This inflates scores and makes comparisons unfair.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>2. Task Distribution Shift</h4>
+                <p>
+                    Training heavily on exam-style QA can bias the model toward factual recall, potentially hurting 
+                    open-ended generation, creativity, or conversational quality. This is an example of trading off 
+                    one capability dimension for another.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>3. Saturation Without Understanding</h4>
+                <p>
+                    A model might hit 85% MMLU through pattern recognition (learning answer formats, heuristics) 
+                    without deeply understanding the subject matter. The score looks impressive, but the model's 
+                    knowledge remains brittle.
+                </p>
+            </div>
+
+            <h3>Illustrative Before/After Example</h3>
+            <p>
+                Below is a <strong>toy example</strong> (not from a real published run) to illustrate how SFT might 
+                affect MMLU scores:
+            </p>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Model Stage</th>
+                        <th>MMLU (5-shot)</th>
+                        <th>GSM8K (Math)</th>
+                        <th>MT-Bench (Chat)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Base Model (Pretrain only)</strong></td>
+                        <td>62.3%</td>
+                        <td>48.1%</td>
+                        <td>5.2 / 10</td>
+                    </tr>
+                    <tr>
+                        <td><strong>After SFT (Instruction Data)</strong></td>
+                        <td>68.7% <span style="color: green;">(+6.4%)</span></td>
+                        <td>55.3% <span style="color: green;">(+7.2%)</span></td>
+                        <td>7.8 / 10 <span style="color: green;">(+2.6)</span></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <em>Interpretation:</em> SFT improved MMLU, math reasoning, and chat quality—suggesting the training 
+                data taught broadly useful instruction-following and reasoning patterns. If MMLU had spiked to 85% 
+                while other benchmarks stayed flat, we'd suspect contamination or overfitting.
+            </p>
+            <p>
+                <strong>Disclaimer:</strong> The numbers above are illustrative and not from a real experiment. 
+                Real results vary widely based on model size, SFT dataset, hyperparameters, and evaluation setup.
+            </p>
+
+            <h3>Key Takeaway</h3>
+            <p>
+                SFT can improve MMLU when done carefully with diverse reasoning tasks. The goal is to enhance 
+                genuine capabilities—not to teach the model how to pass MMLU specifically. Always evaluate on 
+                multiple benchmarks and inspect per-subject breakdowns to distinguish real improvement from 
+                benchmark gaming.
+            </p>
+        </section>
+
+        <section id="contamination" class="content-section">
+            <h2>Contamination Measurement for an LLM</h2>
+            <p>
+                <strong>Data contamination</strong> occurs when test set questions (or near-duplicates) appear in 
+                a model's training corpus. This inflates benchmark scores and undermines fair comparison. Detecting 
+                contamination is challenging but essential for interpreting LLM evaluations honestly.
+            </p>
+
+            <h3>Why Contamination Matters</h3>
+            <p>
+                Modern LLMs are trained on massive web scrapes (Common Crawl, Reddit, books, GitHub, etc.). If MMLU 
+                questions—originally sourced from textbooks, practice exams, and Wikipedia—were included in training 
+                data, the model might memorize answers rather than reasoning from first principles. This breaks the 
+                benchmark's intended purpose: measuring genuine understanding.
+            </p>
+
+            <h3>Practical Detection Methods</h3>
+
+            <div class="info-box">
+                <h4>1. N-gram / Token Overlap</h4>
+                <p>
+                    <strong>How it works:</strong> Search the training corpus for exact or near-exact matches of 
+                    test questions using n-gram (substring) or token-level matching.
+                </p>
+                <ul>
+                    <li>Extract unique n-grams (e.g., 10–20 consecutive words) from each MMLU question</li>
+                    <li>Build a search index over the training data (e.g., Elasticsearch, suffix arrays)</li>
+                    <li>Query the index for each n-gram; flag questions with high overlap</li>
+                </ul>
+                <p>
+                    <strong>Pros:</strong> Fast and scalable for large corpora.<br>
+                    <strong>Cons:</strong> Misses paraphrased or reformatted questions; requires access to training data.
+                </p>
+                <p>
+                    <strong>Example:</strong> OpenAI's GPT-3 paper (Brown et al., 2020) used n-gram overlap to check 
+                    whether benchmark test sets appeared in training data and reported contamination statistics for 
+                    various benchmarks.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Membership Inference Style Checks</h4>
+                <p>
+                    <strong>How it works:</strong> Compare the model's loss (or perplexity) on test questions vs. 
+                    held-out control questions. If test questions have suspiciously low loss, they may have been 
+                    memorized during training.
+                </p>
+                <ul>
+                    <li>Compute per-example loss on MMLU test set</li>
+                    <li>Compute loss on a clean, held-out control set (known to be unseen during training)</li>
+                    <li>Flag test examples with loss significantly lower than the control distribution</li>
+                </ul>
+                <p>
+                    <strong>Pros:</strong> Can detect memorization even for paraphrased questions.<br>
+                    <strong>Cons:</strong> Requires careful control set selection; noisy signal for small differences.
+                </p>
+                <p>
+                    <strong>Reference:</strong> Carlini et al., <em>"Quantifying Memorization Across Neural Language Models"</em> 
+                    (2022) explores similar techniques for detecting training data membership.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. Canary / Guided Completion</h4>
+                <p>
+                    <strong>How it works:</strong> Provide the model with a partial test question (e.g., the question 
+                    stem without answer choices) and check if it "autocompletes" the exact test format, including 
+                    correct answer labels.
+                </p>
+                <ul>
+                    <li>Prompt the model with the first half of an MMLU question</li>
+                    <li>See if the model generates the exact multiple-choice options and correct answer</li>
+                    <li>If it does, the question (or a close variant) was likely in training data</li>
+                </ul>
+                <p>
+                    <strong>Pros:</strong> Directly tests for memorization; doesn't require training corpus access.<br>
+                    <strong>Cons:</strong> False positives from common question formats; time-consuming to run at scale.
+                </p>
+                <p>
+                    <strong>Example:</strong> This technique has been used informally in contamination investigations, 
+                    especially when training data is not publicly available.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>4. Search-Index Overlap</h4>
+                <p>
+                    <strong>How it works:</strong> Use a search engine (like Google) or document index to check 
+                    whether MMLU questions appear verbatim on the public web.
+                </p>
+                <ul>
+                    <li>Submit each MMLU question as a search query</li>
+                    <li>Check if the question text appears in indexed web pages</li>
+                    <li>If found, note the publication date and source—was it available during model training?</li>
+                </ul>
+                <p>
+                    <strong>Pros:</strong> Simple; reveals publicly accessible sources.<br>
+                    <strong>Cons:</strong> Only catches questions indexed by search engines; search coverage is incomplete.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>5. Time-Split / Revised Benchmark Variants</h4>
+                <p>
+                    <strong>How it works:</strong> Create new versions of MMLU using questions published <em>after</em> 
+                    the model's training cutoff date, or use revised questions with different wording.
+                </p>
+                <ul>
+                    <li>Construct a "clean" MMLU variant with questions from 2023–2024 (if the model was trained on 2021 data)</li>
+                    <li>Evaluate the model on both original and time-split versions</li>
+                    <li>Large performance drops on the new version suggest contamination in the original</li>
+                </ul>
+                <p>
+                    <strong>Pros:</strong> Definitively avoids contamination for the new variant.<br>
+                    <strong>Cons:</strong> Requires creating new benchmarks; hard to ensure exact difficulty match.
+                </p>
+                <p>
+                    <strong>Example:</strong> Some research groups have proposed "dynamic benchmarks" or "time-locked" 
+                    test sets to mitigate contamination, though MMLU itself remains static.
+                </p>
+            </div>
+
+            <h3>Contamination in Practice: What to Watch For</h3>
+            <ul>
+                <li><strong>Unusually high scores:</strong> If a model scores 95% on MMLU but struggles on similar tasks (GSM8K, ARC), suspect contamination.</li>
+                <li><strong>Subject-level imbalance:</strong> Contamination often affects some subjects more than others (e.g., computer science questions on GitHub).</li>
+                <li><strong>Zero-shot vs few-shot gaps:</strong> Large gaps may indicate memorization (model "recognizes" questions in zero-shot).</li>
+                <li><strong>Training corpus disclosure:</strong> Models trained on filtered or deduplicated data (with contamination checks) are more trustworthy.</li>
+            </ul>
+
+            <h3>Best Practices for Fair Evaluation</h3>
+            <div class="info-box">
+                <ul>
+                    <li><strong>Report contamination checks:</strong> State whether n-gram overlap or other detection methods were applied.</li>
+                    <li><strong>Use multiple benchmarks:</strong> Don't rely on MMLU alone—corroborate with ARC, HellaSwag, GSM8K, etc.</li>
+                    <li><strong>Inspect per-subject scores:</strong> Aggregate numbers can hide contamination in specific domains.</li>
+                    <li><strong>Prefer held-out test sets:</strong> If possible, use benchmark versions with private test sets (not publicly released).</li>
+                    <li><strong>Document training data sources:</strong> Transparency about what went into pretraining helps others assess contamination risk.</li>
+                </ul>
+            </div>
+
+            <h3>Python Tutorial on Request</h3>
+            <div class="placeholder-box">
+                <p>
+                    Want to implement contamination detection yourself? Ask <strong>Main Guy in chat</strong> for 
+                    a guided Python tutorial covering:
+                </p>
+                <ul>
+                    <li>N-gram extraction and overlap calculation</li>
+                    <li>Loss-based membership inference</li>
+                    <li>Guided completion prompts for memorization checks</li>
+                    <li>Building a contamination report for your model</li>
+                </ul>
+            </div>
+
+            <h3>Key Takeaway</h3>
+            <p>
+                Contamination detection is not a solved problem, but careful measurement—using n-gram overlap, loss 
+                comparisons, guided completion, and time-split variants—can reveal whether a model's MMLU scores 
+                reflect genuine capability or training data leakage. Always evaluate models on multiple benchmarks 
+                and inspect contamination risks transparently.
             </p>
         </section>
 
@@ -178,6 +609,42 @@
                         <button class="quiz-option" data-answer="correct">MMLU and user preference capture different capabilities; MMLU doesn't measure helpfulness/safety</button>
                         <button class="quiz-option" data-answer="wrong">RLHF always degrades factual knowledge</button>
                         <button class="quiz-option" data-answer="wrong">The model memorized the chat benchmark during training</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: N-gram Contamination Detection</h3>
+                    <p>What is the most common technique for detecting whether MMLU test questions appeared in model training data?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Asking the model if it has seen the question before</button>
+                        <button class="quiz-option" data-answer="correct">Search training data for exact n-gram matches of test questions</button>
+                        <button class="quiz-option" data-answer="wrong">Running the model multiple times and checking for consistency</button>
+                        <button class="quiz-option" data-answer="wrong">Comparing zero-shot vs few-shot performance</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: Guided Completion Test</h3>
+                    <p>You give a model the first half of an MMLU question, and it generates the exact multiple-choice options and correct answer. What does this suggest?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The model has strong reasoning abilities</button>
+                        <button class="quiz-option" data-answer="wrong">The question is too easy</button>
+                        <button class="quiz-option" data-answer="correct">The model might have memorized the question during training, not reasoned through it</button>
+                        <button class="quiz-option" data-answer="wrong">The model is hallucinating plausible-sounding options</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="11">
+                    <h3>Question 11: Loss-Based Contamination Detection</h3>
+                    <p>Which technique can detect contamination even when test questions are paraphrased or reformatted?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Exact n-gram string matching</button>
+                        <button class="quiz-option" data-answer="correct">Compare model loss on test questions vs. a clean held-out control set</button>
+                        <button class="quiz-option" data-answer="wrong">Search for questions using Google</button>
+                        <button class="quiz-option" data-answer="wrong">Check publication dates of test materials</button>
                     </div>
                     <div class="feedback"></div>
                 </div>

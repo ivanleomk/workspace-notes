@@ -55,6 +55,27 @@ const quizData = {
             correct: "✓ Exactly! MMLU tests factual knowledge. Chat benchmarks (like MT-Bench or chatbot arena) test helpfulness, instruction-following, safety, and user satisfaction. RLHF primarily optimizes for preference—teaching the model to refuse harmful requests, format answers nicely, be helpful—not raw knowledge. That's why it's common for MMLU to stay flat while chat scores improve. Both matter!",
             wrong: "✗ Different benchmarks measure different things. MMLU focuses on knowledge and factual correctness. RLHF optimizes for user preferences—helpfulness, safety, refusal behavior, tone. A model can maintain its knowledge (MMLU unchanged) while becoming much better at conversational tasks (chat benchmarks improve). This is why post-training evaluations use multiple benchmarks to get the full picture."
         }
+    },
+    9: {
+        correct: "Search training data for exact n-gram matches of test questions",
+        feedback: {
+            correct: "✓ Correct! N-gram overlap is one of the most practical contamination detection methods. You extract unique substrings (e.g., 10-20 consecutive words) from test questions and search for them in the training corpus. If you find exact or near-exact matches, those questions were likely in training data. This is fast and scalable, though it can miss paraphrased questions.",
+            wrong: "✗ N-gram overlap detection involves extracting unique substrings from test questions and searching for them in training data. This catches exact or near-exact matches. Other methods like loss comparison and guided completion are also valuable, but n-gram search is the most commonly reported technique because it's fast and scales to large corpora."
+        }
+    },
+    10: {
+        correct: "The model might have memorized the question during training, not reasoned through it",
+        feedback: {
+            correct: "✓ Exactly right! Guided completion is a clever contamination test: give the model a partial question and see if it 'autocompletes' the exact test format. If the model generates the multiple-choice options and answer without being prompted, it likely saw that question during training. This tests for memorization directly, without needing access to the training corpus.",
+            wrong: "✗ Guided completion tests for contamination. If you give a model the first half of a test question and it generates the exact answer choices and correct label, that's evidence of memorization—the question (or a close variant) was probably in training data. This is different from the model reasoning through the problem, which would require the full question and thoughtful inference."
+        }
+    },
+    11: {
+        correct: "Compare model loss on test questions vs. a clean held-out control set",
+        feedback: {
+            correct: "✓ Correct! Membership inference style checks compare loss (or perplexity) distributions. If test questions have suspiciously low loss compared to a held-out control set, they may have been memorized during training. This technique can catch contamination even when questions are paraphrased, since memorization shows up as unusually confident predictions.",
+            wrong: "✗ Loss-based contamination detection works by comparing model loss on test data vs. clean control data. If test examples have significantly lower loss (the model is 'too confident'), that suggests memorization. This method doesn't require training corpus access and can detect paraphrased contamination, though it requires careful control set selection to avoid false positives."
+        }
     }
 };
 
