@@ -28,25 +28,28 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
 
 ## How to View Lessons
 
-### Option 1: GitHub Pages (Recommended)
-If GitHub Pages is enabled for this repository, lessons will be available at:
-```
-https://<username>.github.io/<repo-name>/lessons/01-mmlu-what-makes-a-benchmark/
-```
+### 🚨 GitHub Pages Not Available
+GitHub Pages for private repositories requires GitHub Pro, Team, or Enterprise. This private repo cannot publish to Pages without upgrading the account plan.
 
-### Option 2: Local Serving
+### ✅ Local Serving (Recommended)
 ```bash
 # From the repository root:
 cd lessons/01-mmlu-what-makes-a-benchmark/
-python -m http.server 8000
+python3 -m http.server 8000
 # Open http://localhost:8000 in your browser
-
-# Or using npx:
-npx serve lessons/01-mmlu-what-makes-a-benchmark/
 ```
 
-### Option 3: Direct File Open
-Open `lessons/01-mmlu-what-makes-a-benchmark/index.html` directly in a browser (most features will work).
+Alternative methods:
+```bash
+# Using Node.js:
+npx serve lessons/01-mmlu-what-makes-a-benchmark/
+
+# Using PHP:
+php -S localhost:8000 -t lessons/01-mmlu-what-makes-a-benchmark/
+```
+
+### Direct File Open
+Open `lessons/01-mmlu-what-makes-a-benchmark/index.html` directly in a browser (most features will work without a server).
 
 ## Curriculum Progress
 
