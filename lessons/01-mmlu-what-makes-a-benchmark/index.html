@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 01: MMLU - What Makes a Good Benchmark</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 01: MMLU - What Makes a Good Benchmark</h1>
+            <p class="subtitle">Track A: Foundations | Paper: Hendrycks et al. (2020)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#what-is-mmlu">What is MMLU?</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#data-explorer">Data Explorer</a>
+            <a href="#limitations">Limitations</a>
+            <a href="#post-training">Post-Training Bridge</a>
+            <a href="#python-tutorial">Python Tutorial</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Do We Need Benchmarks?</h2>
+            <p>
+                Before we can improve language models, we need to measure them. A <strong>benchmark</strong> 
+                is a standardized test that lets us compare different models fairly and track progress over time.
+            </p>
+            <p>
+                But not all benchmarks are created equal. A good benchmark needs to be:
+            </p>
+            <ul>
+                <li><strong>Comprehensive:</strong> Cover many different types of knowledge and reasoning</li>
+                <li><strong>Challenging:</strong> Not too easy that models max it out quickly</li>
+                <li><strong>Fair:</strong> Have a clear human baseline to compare against</li>
+                <li><strong>Clean:</strong> Minimize contamination risk (models seeing test data during training)</li>
+                <li><strong>Interpretable:</strong> Help us understand what models can and cannot do</li>
+            </ul>
+        </section>
+
+        <section id="what-is-mmlu" class="content-section">
+            <h2>What is MMLU?</h2>
+            <p>
+                <strong>MMLU</strong> (Massive Multitask Language Understanding) is a benchmark designed to 
+                measure a language model's knowledge across 57 different subjects, ranging from elementary 
+                mathematics to professional law to moral philosophy.
+            </p>
+
+            <div class="info-box">
+                <h3>Key Facts</h3>
+                <ul>
+                    <li><strong>57 subjects</strong> spanning STEM, humanities, social sciences, and more</li>
+                    <li><strong>15,908 questions</strong> total (development + test sets)</li>
+                    <li><strong>Multiple choice</strong> format with 4 options (A, B, C, D)</li>
+                    <li><strong>5-shot evaluation:</strong> Models see 5 example questions before each test question</li>
+                    <li><strong>Human expert baseline:</strong> 89.8% average accuracy across subjects</li>
+                </ul>
+            </div>
+
+            <h3>How MMLU is Built</h3>
+            <p>
+                The questions come from real practice exams, textbooks, and professional certification tests. 
+                Each question tests factual knowledge, reasoning ability, or both. The diversity of subjects 
+                means that doing well on MMLU requires broad, cross-domain understanding.
+            </p>
+
+            <h3>5-Shot vs Zero-Shot Evaluation</h3>
+            <p>
+                <strong>Zero-shot:</strong> The model answers questions with no examples.<br>
+                <strong>5-shot:</strong> The model sees 5 example questions (with correct answers) from the same 
+                subject before answering each test question.
+            </p>
+            <p>
+                MMLU typically uses 5-shot evaluation because it helps the model understand the task format 
+                and calibrate to the subject's style. This mimics how humans might approach an unfamiliar test 
+                after seeing a few sample questions.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Answer these questions to check if you understand what MMLU measures and why it matters.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: Benchmark Coverage</h3>
+                    <p>Why does MMLU test across 57 different subjects instead of focusing on just one domain?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">To make the benchmark harder to pass</button>
+                        <button class="quiz-option" data-answer="correct">To measure broad, multitask understanding rather than narrow expertise</button>
+                        <button class="quiz-option" data-answer="wrong">To increase the total number of questions</button>
+                        <button class="quiz-option" data-answer="wrong">To match the format of human school curricula</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: Human Baseline</h3>
+                    <p>The human expert baseline for MMLU is 89.8%. Why is having a human baseline important?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It sets a maximum score that models should not exceed</button>
+                        <button class="quiz-option" data-answer="correct">It provides context for interpreting model scores and understanding ceiling effects</button>
+                        <button class="quiz-option" data-answer="wrong">It proves that humans are better than all current AI models</button>
+                        <button class="quiz-option" data-answer="wrong">It's only used for marketing purposes</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Contamination Risk</h3>
+                    <p>What is "test set contamination" and why is it a concern for MMLU?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">When the test questions contain errors or ambiguities</button>
+                        <button class="quiz-option" data-answer="correct">When test questions appear in model training data, inflating scores unfairly</button>
+                        <button class="quiz-option" data-answer="wrong">When models give inconsistent answers across multiple runs</button>
+                        <button class="quiz-option" data-answer="wrong">When the benchmark becomes too easy over time</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: Multiple Choice Format</h3>
+                    <p>What is one limitation of MMLU's multiple choice format?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It's too difficult for current language models</button>
+                        <button class="quiz-option" data-answer="correct">Models might perform well by recognizing patterns without deep understanding</button>
+                        <button class="quiz-option" data-answer="wrong">It cannot test mathematical reasoning</button>
+                        <button class="quiz-option" data-answer="wrong">Human experts cannot take multiple choice tests</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: Knowledge vs Reasoning</h3>
+                    <p>MMLU primarily measures:</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Only factual knowledge recall</button>
+                        <button class="quiz-option" data-answer="wrong">Only reasoning and problem-solving ability</button>
+                        <button class="quiz-option" data-answer="correct">Both factual knowledge and some reasoning, but with a bias toward knowledge</button>
+                        <button class="quiz-option" data-answer="wrong">Creative generation capabilities</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: Post-Training Evaluation</h3>
+                    <p>Why do we evaluate models on MMLU both before and after supervised fine-tuning (SFT)?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">To waste compute resources</button>
+                        <button class="quiz-option" data-answer="correct">To measure if post-training improves task performance or causes capability regressions</button>
+                        <button class="quiz-option" data-answer="wrong">Because base models cannot take multiple choice tests</button>
+                        <button class="quiz-option" data-answer="wrong">MMLU scores always improve after SFT</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: Single Number Pitfall</h3>
+                    <p>A model scores 75% on MMLU. What important information might this single number hide?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The model's training compute budget</button>
+                        <button class="quiz-option" data-answer="correct">Per-subject performance variation (e.g., 90% on STEM, 60% on humanities)</button>
+                        <button class="quiz-option" data-answer="wrong">The model's parameter count</button>
+                        <button class="quiz-option" data-answer="wrong">Whether the model was trained on GPUs or TPUs</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: MMLU vs Chat Benchmarks</h3>
+                    <p>After RLHF alignment, a model's MMLU score stays the same but its chatbot arena score improves significantly. What does this tell us?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The MMLU benchmark is broken and should not be used</button>
+                        <button class="quiz-option" data-answer="correct">MMLU and user preference capture different capabilities; MMLU doesn't measure helpfulness/safety</button>
+                        <button class="quiz-option" data-answer="wrong">RLHF always degrades factual knowledge</button>
+                        <button class="quiz-option" data-answer="wrong">The model memorized the chat benchmark during training</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="data-explorer" class="content-section">
+            <h2>Data Explorer</h2>
+            <p>
+                Explore sample questions from MMLU's diverse subjects. Data sourced from the 
+                <a href="https://github.com/hendrycks/test" target="_blank">official MMLU repository</a>.
+            </p>
+
+            <div class="explorer-controls">
+                <label for="subject-select">Select Subject:</label>
+                <select id="subject-select">
+                    <option value="all">All Subjects</option>
+                </select>
+            </div>
+
+            <div id="question-display" class="question-display"></div>
+
+            <h3>Performance by Subject Category</h3>
+            <p class="chart-caption">
+                Average accuracy across subject categories for GPT-3 (175B) with 5-shot prompting.
+                Data from Table 3 in Hendrycks et al. (2020).
+            </p>
+            <div class="chart-container">
+                <canvas id="category-chart"></canvas>
+            </div>
+
+            <h3>Subject-Level Performance Distribution</h3>
+            <p class="chart-caption">
+                Performance variation across all 57 subjects shows where models excel and struggle.
+                Based on data from the MMLU paper.
+            </p>
+            <div class="chart-container">
+                <canvas id="subject-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="limitations" class="content-section">
+            <h2>Known Limitations</h2>
+            <p>
+                MMLU is a valuable benchmark, but it's not perfect. Understanding its limitations helps us 
+                interpret scores correctly and know when to use complementary benchmarks.
+            </p>
+
+            <div class="limitation-card">
+                <h3>1. Test Set Contamination</h3>
+                <p>
+                    Because MMLU questions come from publicly available exams and textbooks, there's a risk 
+                    that some questions appeared in model training data. This would artificially inflate scores. 
+                    The original paper tried to minimize this by using recent exams, but contamination remains 
+                    a persistent challenge as models are trained on larger web scrapes.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>2. Multiple Choice Artifacts</h3>
+                <p>
+                    Multiple choice format has pros (easy to score, clear correct answer) and cons. Models might 
+                    succeed by pattern matching or process of elimination rather than genuine understanding. 
+                    A model might pick the "most plausible sounding" answer without actually knowing the content.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>3. Knowledge Bias Over Reasoning</h3>
+                <p>
+                    MMLU heavily tests factual knowledge and recall. While some questions require reasoning, 
+                    the benchmark is less focused on complex multi-step reasoning, creativity, or problem-solving 
+                    compared to other benchmarks like GSM8K (math word problems) or BigBench Hard.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>4. Single Number Hides Distribution</h3>
+                <p>
+                    A model's overall MMLU score (e.g., "78%") averages across all 57 subjects. This can hide 
+                    significant performance variation. A model might score 95% on computer science but 60% on 
+                    moral philosophy. Looking at per-subject or per-category breakdowns gives a more honest picture.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>5. Static Benchmark Saturation</h3>
+                <p>
+                    As models improve, they approach or exceed the human expert baseline (89.8%). When a benchmark 
+                    saturates, it becomes less useful for comparing state-of-the-art models. This is why the field 
+                    continually develops new, harder benchmarks.
+                </p>
+            </div>
+        </section>
+
+        <section id="post-training" class="content-section">
+            <h2>Post-Training Bridge: Why MMLU Matters for Aligned Models</h2>
+            <p>
+                MMLU connects to <strong>post-training</strong> (supervised fine-tuning and RLHF) in important ways. 
+                Here's the bridge to later lessons:
+            </p>
+
+            <h3>Evaluating Before and After Post-Training</h3>
+            <p>
+                When we fine-tune a base model to be a helpful assistant, we want to make sure we're improving 
+                conversational ability <em>without</em> degrading core knowledge and reasoning. That's why we run 
+                MMLU evals at multiple stages:
+            </p>
+            <ul>
+                <li><strong>Base model:</strong> Measures the raw knowledge learned during pretraining</li>
+                <li><strong>After SFT:</strong> Check if instruction-following training maintained or improved knowledge</li>
+                <li><strong>After RLHF:</strong> Ensure reward model optimization didn't cause capability regression</li>
+            </ul>
+
+            <h3>What MMLU Measures vs What It Doesn't</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>✓ MMLU Captures</h4>
+                    <ul>
+                        <li>Factual knowledge retention</li>
+                        <li>Domain expertise (STEM, law, medicine, etc.)</li>
+                        <li>Basic reasoning within bounded tasks</li>
+                        <li>Pre-training effectiveness</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>✗ MMLU Doesn't Capture</h4>
+                    <ul>
+                        <li>Helpfulness and user satisfaction</li>
+                        <li>Safety, refusals, and value alignment</li>
+                        <li>Instruction-following quality</li>
+                        <li>Conversation coherence</li>
+                        <li>Creative or open-ended generation</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>The Multi-Benchmark Strategy</h3>
+            <p>
+                Because no single benchmark captures everything, post-training pipelines evaluate on multiple axes:
+            </p>
+            <ul>
+                <li><strong>Knowledge:</strong> MMLU, TriviaQA</li>
+                <li><strong>Reasoning:</strong> GSM8K (math), BigBench</li>
+                <li><strong>Instruction following:</strong> IFEval</li>
+                <li><strong>Preference/alignment:</strong> MT-Bench, chatbot arena ratings</li>
+            </ul>
+            <p>
+                A successful post-training run maintains strong MMLU scores while improving on preference benchmarks. 
+                If MMLU drops significantly, it signals that alignment training may have hurt capabilities—a problem 
+                known as <strong>alignment tax</strong>.
+            </p>
+
+            <div class="info-box">
+                <h4>Next Lessons Preview</h4>
+                <p>
+                    <strong>Track B (SOTA):</strong> We'll explore how RLHF works, why reward models are trained, 
+                    and how to balance helpfulness vs knowledge preservation.<br>
+                    <strong>Track A:</strong> Next we'll dive into a reasoning-focused benchmark (like GSM8K) to 
+                    contrast with MMLU's knowledge-heavy design.
+                </p>
+            </div>
+        </section>
+
+        <section id="python-tutorial" class="content-section">
+            <h2>Python Tutorial</h2>
+            <div class="placeholder-box">
+                <p>
+                    Want to run MMLU evaluations yourself? Ask <strong>Main Guy in chat</strong> for a guided 
+                    Python tutorial and code samples, and it will be added here.
+                </p>
+                <p>
+                    Topics will include:
+                </p>
+                <ul>
+                    <li>Loading MMLU from HuggingFace datasets</li>
+                    <li>Building a 5-shot prompt template</li>
+                    <li>Running inference with an API or local model</li>
+                    <li>Scoring and analyzing per-subject results</li>
+                    <li>Comparing models and spotting subject-level strengths/weaknesses</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 Original Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2009.03300" target="_blank">Measuring Massive Multitask Language Understanding</a></p>
+                    <p>Hendrycks, Burns, Basart, Zou, Mazeika, Song, Steinhardt (2020)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 Official Code & Data</h3>
+                    <p><a href="https://github.com/hendrycks/test" target="_blank">github.com/hendrycks/test</a></p>
+                    <p>Original repository with test sets and evaluation scripts</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🤗 HuggingFace Dataset</h3>
+                    <p><a href="https://huggingface.co/datasets/cais/mmlu" target="_blank">cais/mmlu</a></p>
+                    <p>Easy-to-use dataset loader for Python evaluation</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 Leaderboards</h3>
+                    <p><a href="https://paperswithcode.com/sota/multi-task-language-understanding-on-mmlu" target="_blank">Papers with Code - MMLU</a></p>
+                    <p>Track state-of-the-art model performance</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>Lesson 01 - Track A (Foundations) | <a href="../README.md">Return to Curriculum Index</a></p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>
