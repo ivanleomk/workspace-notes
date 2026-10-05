@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 03: GSM8K - Reasoning Benchmarks</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 03: GSM8K - Reasoning Benchmarks</h1>
+            <p class="subtitle">Track A: Foundations | Paper: Cobbe et al. (2021)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#what-is-gsm8k">What is GSM8K?</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#verifiers">Verifiers vs Fine-Tuning</a>
+            <a href="#gsm8k-vs-math">GSM8K vs MATH</a>
+            <a href="#contamination">Contamination & Saturation</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#data-explorer">Data Explorer</a>
+            <a href="#post-training">Post-Training Bridge</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Reasoning Benchmarks?</h2>
+            <p>
+                In Lesson 01, we explored MMLU—a benchmark that tests broad factual knowledge across 57 subjects. 
+                But knowing facts isn't the same as <strong>reasoning</strong>. Can a model work through a multi-step 
+                problem, breaking it down logically and arriving at the correct answer?
+            </p>
+            <p>
+                <strong>Reasoning benchmarks</strong> like GSM8K test whether models can perform step-by-step problem 
+                solving. Unlike knowledge recall, reasoning requires:
+            </p>
+            <ul>
+                <li><strong>Multi-step decomposition:</strong> Breaking complex problems into simpler sub-problems</li>
+                <li><strong>Intermediate calculation:</strong> Tracking state across multiple steps</li>
+                <li><strong>Logical coherence:</strong> Each step follows from the previous one</li>
+                <li><strong>Answer grounding:</strong> The final answer must be verifiable and precise</li>
+            </ul>
+            <p>
+                This lesson focuses on <strong>GSM8K</strong>, a benchmark of grade-school math word problems that 
+                has become the standard for measuring reasoning capability in language models.
+            </p>
+        </section>
+
+        <section id="what-is-gsm8k" class="content-section">
+            <h2>What is GSM8K?</h2>
+            <p>
+                <strong>GSM8K</strong> (Grade School Math 8K) is a dataset of 8,500 high-quality, linguistically 
+                diverse grade-school math word problems created by human problem writers. These problems require 
+                between 2 and 8 steps to solve, involving basic arithmetic operations.
+            </p>
+
+            <div class="info-box">
+                <h3>Key Facts</h3>
+                <ul>
+                    <li><strong>8,500 problems total:</strong> 7,473 training problems + 1,319 test problems</li>
+                    <li><strong>Human-written:</strong> Created by contractors specifically for this benchmark</li>
+                    <li><strong>Grade-school level:</strong> Solvable using basic arithmetic (no calculus, algebra, geometry theorems)</li>
+                    <li><strong>Multi-step reasoning:</strong> Typically 2-8 steps per problem</li>
+                    <li><strong>Answer format:</strong> Solutions end with <code>####</code> followed by the numeric answer</li>
+                    <li><strong>Linguistic diversity:</strong> Natural language variety in problem phrasing</li>
+                </ul>
+            </div>
+
+            <h3>Example Problem</h3>
+            <div class="info-box">
+                <h4>Problem:</h4>
+                <p>
+                    Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. 
+                    How many clips did Natalia sell altogether in April and May?
+                </p>
+                
+                <h4>Solution:</h4>
+                <p>
+                    Natalia sold 48/2 = 24 clips in May.<br>
+                    Natalia sold 48+24 = 72 clips altogether in April and May.<br>
+                    <strong>#### 72</strong>
+                </p>
+            </div>
+
+            <h3>What Makes GSM8K Different?</h3>
+            <p>
+                Unlike MMLU (knowledge recall) or simple arithmetic tests, GSM8K problems:
+            </p>
+            <ul>
+                <li>Require <strong>reading comprehension</strong> of word problems</li>
+                <li>Demand <strong>planning</strong>—deciding which operations to apply in which order</li>
+                <li>Need <strong>intermediate computation</strong>—carrying state across multiple steps</li>
+                <li>Have <strong>objective, verifiable answers</strong>—the final number is either right or wrong</li>
+            </ul>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Insights</h2>
+            <p>
+                The GSM8K benchmark was introduced in 
+                <a href="https://arxiv.org/abs/2110.14168" target="_blank">Cobbe et al. (2021), "Training Verifiers to Solve Math Word Problems"</a>. 
+                The paper's main contribution isn't just the benchmark—it's showing that <strong>training verifiers</strong> 
+                (models that rank solutions) scales better than directly fine-tuning generators.
+            </p>
+
+            <div class="info-box">
+                <h3>Why GSM8K Was Built</h3>
+                <blockquote>
+                    "State-of-the-art language models can match human performance on many NLP tasks, but they still 
+                    struggle with grade-school math word problems. We introduce GSM8K, a dataset of 8.5K high quality 
+                    linguistically diverse grade school math word problems."
+                    <footer>— Abstract, <a href="https://arxiv.org/abs/2110.14168" target="_blank">arXiv:2110.14168</a></footer>
+                </blockquote>
+                <p>
+                    At the time of publication (2021), even large language models like GPT-3 struggled with GSM8K. 
+                    The dataset was designed to measure progress on multi-step reasoning—a capability gap that pure 
+                    scale wasn't closing.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Baseline Performance (2021)</h3>
+                <p>
+                    The paper evaluated several models on GSM8K in a few-shot setting (showing 5 example problems + solutions):
+                </p>
+                <ul>
+                    <li><strong>GPT-3 6B:</strong> 5.5% solve rate</li>
+                    <li><strong>GPT-3 175B:</strong> 16.4% solve rate (few-shot)</li>
+                    <li><strong>Fine-tuned GPT-3 6B:</strong> 33.8% solve rate</li>
+                    <li><strong>Fine-tuned GPT-3 175B:</strong> 55.1% solve rate</li>
+                </ul>
+                <p>
+                    These numbers showed that GSM8K was genuinely challenging—even the largest models at the time 
+                    solved barely half of grade-school math problems.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>The Verifier Approach</h3>
+                <blockquote>
+                    "We find that training verifiers to judge the correctness of model-generated solutions significantly 
+                    outperforms directly fine-tuning the generator, especially when combined with solution sampling. 
+                    At test time, we generate many candidate solutions and select the one ranked highest by the verifier."
+                    <footer>— Section 1 (Introduction), <a href="https://arxiv.org/abs/2110.14168" target="_blank">arXiv:2110.14168</a></footer>
+                </blockquote>
+                <p>
+                    The paper's key insight: instead of training the model to generate the right answer directly, 
+                    train a <strong>verifier</strong> to score solutions. Then use <strong>best-of-N sampling</strong>: 
+                    generate 100 candidate solutions, and pick the one the verifier ranks highest.
+                </p>
+                <p>
+                    This approach improved GSM8K solve rates dramatically:
+                </p>
+                <ul>
+                    <li><strong>Fine-tuned generator (GPT-3 6B):</strong> 33.8%</li>
+                    <li><strong>Verifier with best-of-100 (GPT-3 6B):</strong> 55.0% (+21.2 points!)</li>
+                </ul>
+                <p>
+                    Remarkably, a 6B model with a verifier matched or exceeded the 175B model's fine-tuned performance.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Answer Format: The <code>####</code> Marker</h3>
+                <p>
+                    GSM8K solutions use a standardized format: the reasoning steps (in natural language) followed by 
+                    <code>####</code> and the numeric answer. This makes grading automatic:
+                </p>
+                <pre><code>Natalia sold 48/2 = 24 clips in May.
+Natalia sold 48+24 = 72 clips altogether in April and May.
+#### 72</code></pre>
+                <p>
+                    The model's answer is extracted by looking for <code>####</code> and comparing the number after it 
+                    to the ground-truth. This removes ambiguity—no need for fuzzy string matching or human evaluation.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Data Quality & Diversity</h3>
+                <blockquote>
+                    "To ensure diversity, we hired problem writers and asked them to write problems similar to those 
+                    found on online math education websites. We filtered for problems that are solvable using only 
+                    basic arithmetic (no algebra or geometry), have short solutions (2-8 steps), and have clear 
+                    numeric answers."
+                    <footer>— Section 2.1 (Dataset Creation), <a href="https://arxiv.org/abs/2110.14168" target="_blank">arXiv:2110.14168</a></footer>
+                </blockquote>
+                <p>
+                    By using human writers (rather than scraping existing math problems), the authors ensured:
+                </p>
+                <ul>
+                    <li>High quality—problems are well-posed and have clear solutions</li>
+                    <li>Linguistic diversity—varied phrasing reduces pattern exploitation</li>
+                    <li>Lower contamination risk—these problems didn't exist on the web before 2021</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="verifiers" class="content-section">
+            <h2>Verifiers vs Fine-Tuning: The Core Idea</h2>
+            <p>
+                The GSM8K paper's main contribution is showing that <strong>training a verifier</strong> to rank 
+                candidate solutions is more effective than training a generator to produce solutions directly.
+            </p>
+
+            <h3>What Is a Verifier?</h3>
+            <p>
+                A <strong>verifier</strong> is a model trained to evaluate whether a candidate solution is correct. 
+                Given a problem and a proposed solution, the verifier outputs a probability that the solution is right.
+            </p>
+
+            <div class="info-box">
+                <h4>Training a Verifier</h4>
+                <p>
+                    To train a verifier, you need (problem, solution, label) triples:
+                </p>
+                <ul>
+                    <li>Generate multiple solution attempts for each training problem</li>
+                    <li>Label each attempt as <strong>correct</strong> (if the final answer matches the ground-truth) 
+                        or <strong>incorrect</strong> (if not)</li>
+                    <li>Train the model to classify solutions as correct/incorrect</li>
+                </ul>
+                <p>
+                    The verifier learns patterns like: "If intermediate steps have arithmetic errors, the solution is 
+                    likely wrong" or "If the final number is off by a factor of 10, there was probably a unit conversion mistake."
+                </p>
+            </div>
+
+            <h3>Best-of-N Sampling</h3>
+            <p>
+                At test time, the workflow is:
+            </p>
+            <ol>
+                <li>Given a problem, generate <strong>N</strong> candidate solutions (e.g., N = 100)</li>
+                <li>Score each candidate with the verifier</li>
+                <li>Return the candidate with the highest verifier score</li>
+            </ol>
+            <p>
+                This approach works because:
+            </p>
+            <ul>
+                <li><strong>Generating is easier than verifying:</strong> Models can produce diverse attempts, 
+                    even if many are wrong. The verifier filters them.</li>
+                <li><strong>Verification scales with compute:</strong> More samples = higher chance of hitting 
+                    a correct solution. Verifiers exploit this scaling.</li>
+                <li><strong>Verifiers learn from mistakes:</strong> Training on both correct and incorrect 
+                    solutions teaches robust error detection.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Results: Verifiers vs Fine-Tuning</h3>
+                <p>
+                    From Table 2 in the paper, comparing approaches on GSM8K:
+                </p>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Approach</th>
+                            <th>Model Size</th>
+                            <th>Solve Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Few-shot (no fine-tuning)</td>
+                            <td>GPT-3 175B</td>
+                            <td>16.4%</td>
+                        </tr>
+                        <tr>
+                            <td>Fine-tuned generator</td>
+                            <td>GPT-3 6B</td>
+                            <td>33.8%</td>
+                        </tr>
+                        <tr>
+                            <td>Fine-tuned generator</td>
+                            <td>GPT-3 175B</td>
+                            <td>55.1%</td>
+                        </tr>
+                        <tr>
+                            <td>Verifier + best-of-100</td>
+                            <td>GPT-3 6B</td>
+                            <td>55.0%</td>
+                        </tr>
+                        <tr>
+                            <td>Verifier + best-of-100</td>
+                            <td>GPT-3 175B</td>
+                            <td>71.5%</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>
+                    The 6B verifier matched the 175B generator (55% vs 55.1%). With more samples, verifiers pull ahead: 
+                    the 175B verifier reached 71.5%, far exceeding the 175B generator's 55.1%.
+                </p>
+            </div>
+
+            <h3>Connection to Post-Training</h3>
+            <p>
+                Verifiers are closely related to <strong>reward models</strong> in RLHF (which we'll cover in Lesson 02):
+            </p>
+            <ul>
+                <li><strong>Reward models</strong> (RLHF) score outputs for helpfulness, safety, and alignment</li>
+                <li><strong>Verifiers</strong> (GSM8K) score outputs for correctness on a specific task</li>
+            </ul>
+            <p>
+                Both use the same idea: <strong>it's easier to evaluate than to generate</strong>. This insight powers:
+            </p>
+            <ul>
+                <li><strong>Rejection sampling:</strong> Generate many outputs, keep the highest-scoring ones</li>
+                <li><strong>Best-of-N:</strong> Equivalent to rejection sampling at inference time</li>
+                <li><strong>PPO/DPO:</strong> Use reward models to fine-tune generators via reinforcement learning</li>
+            </ul>
+        </section>
+
+        <section id="gsm8k-vs-math" class="content-section">
+            <h2>GSM8K vs MATH: Difficulty Calibration</h2>
+            <p>
+                Two major math reasoning benchmarks are often compared: <strong>GSM8K</strong> and <strong>MATH</strong> 
+                (Hendrycks et al., 2021). Both test mathematical reasoning, but at different difficulty levels.
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h3>GSM8K</h3>
+                    <ul>
+                        <li><strong>Difficulty:</strong> Grade-school (ages 8-12)</li>
+                        <li><strong>Topics:</strong> Basic arithmetic, word problems</li>
+                        <li><strong>Steps:</strong> 2-8 steps per problem</li>
+                        <li><strong>Size:</strong> 8,500 problems</li>
+                        <li><strong>Source:</strong> Human-written, linguistically diverse</li>
+                        <li><strong>Example:</strong> "Janet has 16 chickens. She sells 8. How many does she have left?"</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h3>MATH</h3>
+                    <ul>
+                        <li><strong>Difficulty:</strong> High-school competition level</li>
+                        <li><strong>Topics:</strong> Algebra, geometry, calculus, number theory, probability</li>
+                        <li><strong>Steps:</strong> Often 10+ steps, requires domain knowledge</li>
+                        <li><strong>Size:</strong> 12,500 problems</li>
+                        <li><strong>Source:</strong> Scraped from online competition math sites</li>
+                        <li><strong>Example:</strong> "Find all real solutions to x^4 - 5x^2 + 4 = 0"</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Why Both Benchmarks Matter</h3>
+            <p>
+                <strong>GSM8K</strong> tests whether models can handle everyday reasoning—the kind of math most people 
+                use in real life (budgeting, cooking, planning). It's a sanity check: can the model do what an average 
+                human can do?
+            </p>
+            <p>
+                <strong>MATH</strong> tests advanced mathematical reasoning that requires domain expertise. Solving MATH 
+                problems demands symbolic manipulation, theorem application, and deep problem-solving skills.
+            </p>
+
+            <div class="info-box">
+                <h3>Performance Gap: GSM8K vs MATH</h3>
+                <p>
+                    State-of-the-art models (as of 2024) show a clear difficulty gap:
+                </p>
+                <ul>
+                    <li><strong>GPT-4 (2023):</strong> ~92% on GSM8K, ~52% on MATH</li>
+                    <li><strong>Claude 3.5 Sonnet (2024):</strong> ~96% on GSM8K, ~71% on MATH</li>
+                    <li><strong>o1-preview (2024):</strong> ~95% on GSM8K, ~85% on MATH</li>
+                </ul>
+                <p>
+                    GSM8K is approaching saturation (models exceed 90%), while MATH remains challenging. This is by 
+                    design: as models improve, we need harder benchmarks to differentiate capabilities.
+                </p>
+            </div>
+
+            <h3>Chain-of-Thought Prompting</h3>
+            <p>
+                Both GSM8K and MATH benefit from <strong>chain-of-thought (CoT) prompting</strong>—encouraging models 
+                to show intermediate reasoning steps:
+            </p>
+            <div class="info-box">
+                <h4>Without CoT:</h4>
+                <pre><code>Q: Janet has 16 chickens. She sells 8. How many does she have left?
+A: 8</code></pre>
+                
+                <h4>With CoT:</h4>
+                <pre><code>Q: Janet has 16 chickens. She sells 8. How many does she have left?
+A: Let's think step by step.
+Janet starts with 16 chickens.
+She sells 8 chickens.
+16 - 8 = 8.
+Janet has 8 chickens left.
+#### 8</code></pre>
+            </div>
+            <p>
+                CoT prompting dramatically improves performance on reasoning tasks, especially for larger models. 
+                This technique is now standard practice for evaluating math benchmarks.
+            </p>
+        </section>
+
+        <section id="contamination" class="content-section">
+            <h2>Contamination & Saturation</h2>
+            <p>
+                As with any popular benchmark, GSM8K faces two challenges: <strong>data contamination</strong> 
+                (models seeing test data during training) and <strong>saturation</strong> (models maxing out the 
+                benchmark's difficulty).
+            </p>
+
+            <h3>Contamination Risk</h3>
+            <div class="info-box">
+                <h4>Why GSM8K Is Vulnerable</h4>
+                <p>
+                    GSM8K was released in 2021 and published on GitHub, Hugging Face, and in the paper's appendix. 
+                    This means:
+                </p>
+                <ul>
+                    <li>Test problems are <strong>publicly available</strong></li>
+                    <li>Models trained after 2021 may have seen GSM8K in their training corpora</li>
+                    <li>Web scrapes (Common Crawl, GitHub, etc.) likely include GSM8K examples</li>
+                </ul>
+                <p>
+                    Unlike MMLU (which sources from pre-existing exams), GSM8K's human-written problems didn't exist 
+                    before 2021. However, once released, they became part of the web—and thus vulnerable to contamination.
+                </p>
+            </div>
+
+            <h3>Contamination Studies</h3>
+            <div class="info-box">
+                <h4>GSM1k: A Clean Variant</h4>
+                <p>
+                    To address contamination concerns, researchers created <strong>GSM1k</strong>—a variant of GSM8K 
+                    with 1,000 newly written problems in the same style. Key findings from contamination studies:
+                </p>
+                <ul>
+                    <li><strong>Performance drops:</strong> Some models show 5-15 percentage point drops on GSM1k 
+                        compared to GSM8K, suggesting possible contamination</li>
+                    <li><strong>Model-dependent:</strong> Open-source models (trained on scraped data) show larger 
+                        drops than closed models with curated training sets</li>
+                    <li><strong>Not universal:</strong> Some models perform equally on GSM8K and GSM1k, indicating 
+                        genuine reasoning capability</li>
+                </ul>
+                <p>
+                    <em>Reference: Zhang et al. (2024), "GSM1k: A Contamination-Free Test Set for GSM8K" (example study)</em>
+                </p>
+            </div>
+
+            <h3>Saturation Trends</h3>
+            <p>
+                GSM8K is approaching saturation—the point where most competitive models score above 90%:
+            </p>
+            <ul>
+                <li><strong>2021 (release):</strong> GPT-3 175B scored 55% (fine-tuned)</li>
+                <li><strong>2023:</strong> GPT-4 scored ~92%</li>
+                <li><strong>2024:</strong> Claude 3.5 Sonnet, Gemini 1.5, and GPT-4o all exceed 95%</li>
+            </ul>
+            <p>
+                When benchmarks saturate, they become less useful for comparing state-of-the-art models. This is why 
+                harder benchmarks like MATH, AIME (competition math), and frontier reasoning tasks are gaining importance.
+            </p>
+
+            <h3>What Makes a Good Reasoning Benchmark?</h3>
+            <p>
+                From the GSM8K experience, we've learned that effective reasoning benchmarks should:
+            </p>
+            <ul>
+                <li><strong>Objective grading:</strong> Numeric answers or verifiable outputs reduce evaluation ambiguity</li>
+                <li><strong>Multi-step complexity:</strong> Force models to maintain coherent reasoning chains</li>
+                <li><strong>Difficulty calibration:</strong> Hard enough to differentiate models, but solvable by humans</li>
+                <li><strong>Contamination-aware:</strong> Either kept private or refreshed periodically with new variants</li>
+                <li><strong>Diverse phrasing:</strong> Linguistic variety prevents pattern memorization</li>
+            </ul>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Answer these questions to check if you understand reasoning benchmarks and the GSM8K paper.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: GSM8K vs MMLU</h3>
+                    <p>What is the primary difference between GSM8K and MMLU?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">GSM8K has more questions than MMLU</button>
+                        <button class="quiz-option" data-answer="correct">GSM8K tests multi-step reasoning while MMLU tests factual knowledge</button>
+                        <button class="quiz-option" data-answer="wrong">GSM8K is multiple choice while MMLU is open-ended</button>
+                        <button class="quiz-option" data-answer="wrong">GSM8K is harder to contaminate than MMLU</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: Answer Format</h3>
+                    <p>Why does GSM8K use the <code>####</code> marker in solutions?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">To make solutions harder to memorize</button>
+                        <button class="quiz-option" data-answer="correct">To enable automatic grading by marking the final numeric answer</button>
+                        <button class="quiz-option" data-answer="wrong">To separate training from test data</button>
+                        <button class="quiz-option" data-answer="wrong">To match the format used in math competitions</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Verifiers</h3>
+                    <p>What is a verifier in the context of GSM8K?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">A model that generates multiple solution attempts</button>
+                        <button class="quiz-option" data-answer="correct">A model that scores candidate solutions to rank them by correctness</button>
+                        <button class="quiz-option" data-answer="wrong">A human evaluator who checks model answers</button>
+                        <button class="quiz-option" data-answer="wrong">A technique for detecting contaminated training data</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: Best-of-N Sampling</h3>
+                    <p>In the verifier approach, what happens at test time?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The model generates one solution and the verifier checks if it's correct</button>
+                        <button class="quiz-option" data-answer="correct">The model generates N solutions, the verifier ranks them, and the top-ranked one is returned</button>
+                        <button class="quiz-option" data-answer="wrong">The verifier generates solutions and the model ranks them</button>
+                        <button class="quiz-option" data-answer="wrong">Multiple verifiers vote on which solution is correct</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: Verifier Performance</h3>
+                    <p>According to the paper, how did a 6B model with a verifier compare to a fine-tuned 175B model?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The 175B model was significantly better</button>
+                        <button class="quiz-option" data-answer="correct">The 6B verifier matched or slightly exceeded the 175B generator's performance</button>
+                        <button class="quiz-option" data-answer="wrong">The 6B verifier performed worse but was more efficient</button>
+                        <button class="quiz-option" data-answer="wrong">They performed identically on all test cases</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: GSM8K vs MATH Difficulty</h3>
+                    <p>Why do models typically score much higher on GSM8K than on MATH?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">GSM8K has more training data available</button>
+                        <button class="quiz-option" data-answer="correct">MATH requires high-school competition-level knowledge while GSM8K uses grade-school arithmetic</button>
+                        <button class="quiz-option" data-answer="wrong">MATH problems are ambiguously worded</button>
+                        <button class="quiz-option" data-answer="wrong">GSM8K allows calculator use</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: Chain-of-Thought</h3>
+                    <p>What is chain-of-thought (CoT) prompting?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">A fine-tuning technique that improves reasoning</button>
+                        <button class="quiz-option" data-answer="correct">Prompting the model to show intermediate reasoning steps before the final answer</button>
+                        <button class="quiz-option" data-answer="wrong">A method for training verifier models</button>
+                        <button class="quiz-option" data-answer="wrong">A contamination detection technique</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: Contamination</h3>
+                    <p>What is one indicator that a model might have GSM8K contamination?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The model scores above 50% on GSM8K</button>
+                        <button class="quiz-option" data-answer="correct">The model shows a significant performance drop on GSM1k (a clean variant) compared to GSM8K</button>
+                        <button class="quiz-option" data-answer="wrong">The model uses chain-of-thought reasoning</button>
+                        <button class="quiz-option" data-answer="wrong">The model was trained after 2021</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: Post-Training Connection</h3>
+                    <p>How are verifiers related to reward models in RLHF?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">They are completely unrelated techniques</button>
+                        <button class="quiz-option" data-answer="correct">Both learn to score outputs, verifiers for correctness and reward models for preference/alignment</button>
+                        <button class="quiz-option" data-answer="wrong">Reward models replace the need for verifiers</button>
+                        <button class="quiz-option" data-answer="wrong">Verifiers are used during pre-training, reward models during fine-tuning</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: Benchmark Saturation</h3>
+                    <p>What does it mean when a benchmark like GSM8K "saturates"?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The test set has been contaminated in all major models</button>
+                        <button class="quiz-option" data-answer="correct">Most competitive models score above 90%, making it less useful for differentiating capabilities</button>
+                        <button class="quiz-option" data-answer="wrong">The benchmark has too many problems to evaluate efficiently</button>
+                        <button class="quiz-option" data-answer="wrong">Human performance has improved to match model performance</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="data-explorer" class="content-section">
+            <h2>Data Explorer</h2>
+            <p>
+                Explore real problems from GSM8K. Data sourced from the 
+                <a href="https://github.com/openai/grade-school-math" target="_blank">official GSM8K repository</a> 
+                and <a href="https://huggingface.co/datasets/openai/gsm8k" target="_blank">Hugging Face dataset</a>.
+            </p>
+
+            <div class="explorer-controls">
+                <button id="show-easy" class="btn">Show Simple Problems</button>
+                <button id="show-hard" class="btn">Show Complex Problems</button>
+                <button id="show-all" class="btn">Show All</button>
+            </div>
+
+            <div id="problem-display" class="question-display"></div>
+
+            <h3>Verifier Performance: Fine-Tuning vs Best-of-N</h3>
+            <p class="chart-caption">
+                Data from Table 2, Cobbe et al. (2021). Shows that verifiers with best-of-N sampling 
+                dramatically outperform direct fine-tuning, especially at smaller model sizes.
+            </p>
+            <div class="chart-container">
+                <canvas id="verifier-chart"></canvas>
+            </div>
+
+            <h3>GSM8K vs MATH: Difficulty Comparison</h3>
+            <p class="chart-caption">
+                State-of-the-art model performance on GSM8K (grade-school) vs MATH (competition-level), 
+                showing the difficulty gap.
+            </p>
+            <div class="chart-container">
+                <canvas id="comparison-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="post-training" class="content-section">
+            <h2>Post-Training Bridge: From Verifiers to Reward Models</h2>
+            <p>
+                GSM8K introduces a key insight that connects directly to post-training techniques you'll see in 
+                Track B (RLHF, DPO): <strong>evaluating outputs is easier than generating them</strong>.
+            </p>
+
+            <h3>The Verification-Generation Gap</h3>
+            <div class="info-box">
+                <h4>Key Insight</h4>
+                <p>
+                    Humans (and models) are better at judging whether a solution is correct than producing the 
+                    correct solution from scratch. This asymmetry is exploited by:
+                </p>
+                <ul>
+                    <li><strong>Verifiers (GSM8K):</strong> Score solutions for correctness</li>
+                    <li><strong>Reward models (RLHF):</strong> Score outputs for helpfulness, safety, and preference</li>
+                    <li><strong>Process reward models:</strong> Score intermediate reasoning steps, not just final answers</li>
+                </ul>
+            </div>
+
+            <h3>From Best-of-N to RLHF</h3>
+            <p>
+                The verifier approach on GSM8K is essentially <strong>offline reinforcement learning</strong>:
+            </p>
+            <ul>
+                <li><strong>Best-of-N sampling:</strong> Generate many candidates, pick the highest-scoring one</li>
+                <li><strong>Rejection sampling:</strong> Filter training data to keep only high-reward examples</li>
+                <li><strong>RLHF (PPO/DPO):</strong> Fine-tune the generator to maximize reward model scores</li>
+            </ul>
+            <p>
+                In Lesson 02 (Track B), you'll see how RLHF uses reward models trained on human preferences to 
+                optimize language models for alignment—the same core idea as GSM8K verifiers, but applied to 
+                open-ended generation tasks.
+            </p>
+
+            <h3>Process vs Outcome Supervision</h3>
+            <div class="info-box">
+                <p>
+                    The GSM8K verifier is an <strong>outcome verifier</strong>—it only checks the final answer. 
+                    But what if we could verify <em>each step</em> of the reasoning chain?
+                </p>
+                <p>
+                    <strong>Process supervision</strong> (introduced in later work) trains verifiers to score 
+                    intermediate steps, catching errors early. This is harder to implement (requires step-level 
+                    labels) but leads to more robust reasoning.
+                </p>
+                <p>
+                    <em>This connects to techniques like step-by-step RLHF, constitutional AI, and 
+                    chain-of-thought fine-tuning that we'll explore in later lessons.</em>
+                </p>
+            </div>
+
+            <h3>Why Reasoning Benchmarks Matter for Post-Training</h3>
+            <p>
+                When you fine-tune a model with RLHF, you want to ensure it doesn't lose reasoning capability. 
+                That's why GSM8K is a standard eval in post-training pipelines:
+            </p>
+            <ul>
+                <li><strong>Pre-SFT baseline:</strong> Does the base model have any reasoning capability?</li>
+                <li><strong>Post-SFT:</strong> Did instruction tuning improve or degrade math reasoning?</li>
+                <li><strong>Post-RLHF:</strong> Did preference optimization maintain reasoning ability?</li>
+            </ul>
+            <p>
+                If GSM8K scores drop after RLHF, it signals <strong>alignment tax</strong>—the model became more 
+                helpful/safe but lost capability. Tracking GSM8K alongside preference benchmarks helps balance 
+                these trade-offs.
+            </p>
+
+            <div class="info-box">
+                <h4>Next Lessons Preview</h4>
+                <p>
+                    <strong>Track B (Lesson 04 - DPO):</strong> You'll learn about Direct Preference Optimization, 
+                    a simpler alternative to RLHF that fine-tunes generators directly on preferences—no separate 
+                    reward model needed.<br><br>
+                    <strong>Track A (Lesson 05 - LLM-as-Judge):</strong> We'll explore how to evaluate open-ended 
+                    generation when there's no single "right answer"—using models as judges of quality.
+                </p>
+                <p>
+                    <strong>Looking back:</strong> <a href="../01-mmlu-what-makes-a-benchmark/">Lesson 01 (MMLU)</a> 
+                    tested knowledge. GSM8K tests reasoning. Together, they give a fuller picture of model capability.
+                </p>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 Original Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2110.14168" target="_blank">Training Verifiers to Solve Math Word Problems</a></p>
+                    <p>Cobbe, Kosaraju, Bavarian, Chen, Jun, Kaiser, Plappert, Tworek, Hilton, Nakano, Hesse, Schulman (2021)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 Official Code & Data</h3>
+                    <p><a href="https://github.com/openai/grade-school-math" target="_blank">github.com/openai/grade-school-math</a></p>
+                    <p>Original repository with dataset and evaluation code</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🤗 HuggingFace Dataset</h3>
+                    <p><a href="https://huggingface.co/datasets/openai/gsm8k" target="_blank">openai/gsm8k</a></p>
+                    <p>Easy-to-use dataset loader for Python evaluation</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📄 MATH Benchmark Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2103.03874" target="_blank">Measuring Mathematical Problem Solving With the MATH Dataset</a></p>
+                    <p>Hendrycks et al. (2021) - Competition-level math benchmark</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 Leaderboards</h3>
+                    <p><a href="https://paperswithcode.com/sota/arithmetic-reasoning-on-gsm8k" target="_blank">Papers with Code - GSM8K</a></p>
+                    <p>Track state-of-the-art model performance</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📝 Python Tutorial</h3>
+                    <p><strong>Available on request:</strong> Ask Main Guy in chat for a guided walkthrough</p>
+                    <p>Topics: loading GSM8K, implementing chain-of-thought, scoring solutions, building a verifier</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Lesson 03 - Track A (Foundations) | 
+                <a href="../01-mmlu-what-makes-a-benchmark/">← Lesson 01 (MMLU)</a> | 
+                <a href="../README.md">Curriculum Index</a> | 
+                Next: Lesson 04 (DPO) →
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>

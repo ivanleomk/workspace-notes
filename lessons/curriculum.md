@@ -15,7 +15,7 @@ Lessons alternate tracks to interleave theory with practice.
 |---|-------|--------|-------|----------------|
 | 01 | A | ✅ Complete | MMLU: What Makes a Good Benchmark | Hendrycks et al. (2020) |
 | 02 | B | 📋 Planned | RLHF & Reward Modeling | InstructGPT (Ouyang et al., 2022) |
-| 03 | A | 📋 Planned | Reasoning Benchmarks (GSM8K, MATH) | Cobbe et al. (2021) |
+| 03 | A | ✅ Complete | Reasoning Benchmarks (GSM8K, MATH) | Cobbe et al. (2021) |
 | 04 | B | 📋 Planned | Direct Preference Optimization (DPO) | Rafailov et al. (2023) |
 | 05 | A | 📋 Planned | LLM-as-Judge & Preference Evals | Zheng et al. (2023) - MT-Bench |
 | 06 | B | 📋 Planned | RLHF at Scale & Instability | TBD |
@@ -52,9 +52,11 @@ Each lesson includes:
 
 **Completed:**
 - ✅ Lesson 01 (Track A): MMLU benchmark fundamentals
+- ✅ Lesson 03 (Track A): GSM8K reasoning benchmarks
 
 **Next Up:**
-- 📋 Lesson 02 (Track B): InstructGPT/RLHF intro
+- 📋 Lesson 02 (Track B): InstructGPT/RLHF intro (in progress, PR #3)
+- 📋 Lesson 04 (Track B): Direct Preference Optimization
 
 ## How to Request a Lesson
 
