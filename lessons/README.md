@@ -22,9 +22,27 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Limitations: contamination, multiple choice artifacts, knowledge vs reasoning
   - Connection to post-training: eval before/after SFT/RLHF
 - **Interactive Elements:**
-  - 8-question quiz with detailed feedback
+  - 11-question quiz with detailed feedback
   - Sample question explorer across 10 subjects
   - Performance visualization charts
+- **Status:** Complete
+
+### Lesson 02 - InstructGPT: RLHF & Reward Modeling ✅
+- **Track:** B (SOTA)
+- **Paper:** Training language models to follow instructions with human feedback (Ouyang et al., 2022)
+- **Path:** [`02-instructgpt-rlhf-reward-modeling/`](02-instructgpt-rlhf-reward-modeling/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/02-instructgpt-rlhf-reward-modeling/](https://ivanleomk.github.io/workspace-notes/02-instructgpt-rlhf-reward-modeling/)
+- **Topics:**
+  - Why SFT alone isn't enough for alignment
+  - RLHF three-stage pipeline: SFT → Reward Model → PPO
+  - Reward model training on preference comparisons
+  - InstructGPT results: 1.3B beats 175B GPT-3 in human evals
+  - Failure modes: reward hacking, over-optimization, alignment tax
+  - Bridge to Track A: evaluating post-RLHF models with benchmarks
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Preference ranking examples (3 scenarios)
+  - Win rate and dataset size visualizations
 - **Status:** Complete
 
 ### Lesson 03 - GSM8K: Reasoning Benchmarks ✅
@@ -52,12 +70,13 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
 Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 
 - [Lesson 01: MMLU](https://ivanleomk.github.io/workspace-notes/01-mmlu-what-makes-a-benchmark/)
+- [Lesson 02: InstructGPT/RLHF](https://ivanleomk.github.io/workspace-notes/02-instructgpt-rlhf-reward-modeling/)
 - [Lesson 03: GSM8K](https://ivanleomk.github.io/workspace-notes/03-gsm8k-reasoning-benchmarks/)
 
 ### 💻 Local Serving (for development)
 ```bash
 # From the repository root:
-cd lessons/03-gsm8k-reasoning-benchmarks/
+cd lessons/02-instructgpt-rlhf-reward-modeling/
 python3 -m http.server 8000
 # Open http://localhost:8000 in your browser
 ```
@@ -65,10 +84,10 @@ python3 -m http.server 8000
 Alternative methods:
 ```bash
 # Using Node.js:
-npx serve lessons/03-gsm8k-reasoning-benchmarks/
+npx serve lessons/02-instructgpt-rlhf-reward-modeling/
 
 # Using PHP:
-php -S localhost:8000 -t lessons/03-gsm8k-reasoning-benchmarks/
+php -S localhost:8000 -t lessons/02-instructgpt-rlhf-reward-modeling/
 ```
 
 ### Direct File Open
