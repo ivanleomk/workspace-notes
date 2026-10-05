@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 02: InstructGPT - RLHF & Reward Modeling</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 02: InstructGPT - RLHF & Reward Modeling</h1>
+            <p class="subtitle">Track B: SOTA | Paper: Ouyang et al. (2022)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#the-problem">The Problem</a>
+            <a href="#rlhf-pipeline">RLHF Pipeline</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#reward-models">Reward Models</a>
+            <a href="#ppo-training">PPO Training</a>
+            <a href="#results">InstructGPT Results</a>
+            <a href="#failure-modes">Failure Modes</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#data-explorer">Data Explorer</a>
+            <a href="#track-a-bridge">Bridge to Track A</a>
+            <a href="#python-tutorial">Python Tutorial</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Supervised Fine-Tuning Isn't Enough</h2>
+            <p>
+                In Lesson 01, we saw how benchmarks like MMLU measure what models <em>know</em>. But knowing facts 
+                isn't the same as being <strong>helpful</strong>. A base language model trained on internet text 
+                can complete prompts, but it doesn't inherently follow instructions, refuse harmful requests, or 
+                optimize for user satisfaction.
+            </p>
+            <p>
+                <strong>Supervised fine-tuning (SFT)</strong> teaches models to follow instructions by training on 
+                (prompt, ideal response) pairs. This helps, but it has limits:
+            </p>
+            <ul>
+                <li>Hard to write demonstrations for every possible user request</li>
+                <li>Human-written responses vary in quality—which style should the model learn?</li>
+                <li>SFT doesn't directly optimize for what users actually prefer</li>
+                <li>Writing demonstrations is expensive and slow to scale</li>
+            </ul>
+            <p>
+                <strong>Solution:</strong> Train models using human <em>preferences</em> (comparisons between responses) 
+                instead of demonstrations. This is <strong>Reinforcement Learning from Human Feedback (RLHF)</strong>.
+            </p>
+        </section>
+
+        <section id="the-problem" class="content-section">
+            <h2>The Alignment Problem</h2>
+            <p>
+                Large language models trained on web text learn to predict what comes next—but "what comes next on 
+                the internet" is not the same as "what a helpful assistant would say." Base models might:
+            </p>
+            <ul>
+                <li>Generate toxic or harmful content (because it exists in training data)</li>
+                <li>Refuse to answer reasonable questions (because they're uncertain)</li>
+                <li>Provide technically correct but unhelpful answers</li>
+                <li>Ignore the user's intent and generate plausible-sounding nonsense</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>InstructGPT's Goal</h3>
+                <p>
+                    The InstructGPT paper (<a href="https://arxiv.org/abs/2203.02155" target="_blank">Ouyang et al., 2022</a>) 
+                    introduced a practical RLHF pipeline to make language models:
+                </p>
+                <ul>
+                    <li><strong>Helpful:</strong> Follow user instructions and provide useful information</li>
+                    <li><strong>Honest:</strong> Avoid making up facts or hallucinating</li>
+                    <li><strong>Harmless:</strong> Refuse unsafe requests and avoid toxic outputs</li>
+                </ul>
+                <p>
+                    The result: models that users <em>prefer</em> over larger, more capable base models—even when 
+                    InstructGPT is 100x smaller.
+                </p>
+            </div>
+
+            <h3>Key Insight: Preferences Scale Better Than Demonstrations</h3>
+            <p>
+                It's easier and faster for humans to <strong>compare</strong> two responses ("A is better than B") 
+                than to <strong>write</strong> a perfect response from scratch. RLHF exploits this: train a 
+                <strong>reward model</strong> on preference comparisons, then use it to optimize the language model.
+            </p>
+        </section>
+
+        <section id="rlhf-pipeline" class="content-section">
+            <h2>The RLHF Pipeline: Three Stages</h2>
+            <p>
+                InstructGPT's training pipeline has three distinct stages. Each stage builds on the previous one.
+            </p>
+
+            <div class="info-box">
+                <h3>Stage 1: Supervised Fine-Tuning (SFT)</h3>
+                <p>
+                    <strong>Input:</strong> A pretrained GPT-3 base model<br>
+                    <strong>Data:</strong> ~13,000 human-written (prompt, response) demonstrations<br>
+                    <strong>Output:</strong> An SFT model that can follow basic instructions
+                </p>
+                <p>
+                    Labelers write high-quality responses to prompts from the OpenAI API. The base model is fine-tuned 
+                    on these demonstrations for a few epochs. This gives the model a starting point for instruction-following, 
+                    but it's not yet optimized for user preferences.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Stage 2: Reward Model (RM) Training</h3>
+                <p>
+                    <strong>Input:</strong> The SFT model from Stage 1<br>
+                    <strong>Data:</strong> ~33,000 prompts, each with 4-9 model outputs ranked by human labelers<br>
+                    <strong>Output:</strong> A reward model that predicts human preference
+                </p>
+                <p>
+                    For each prompt, the SFT model generates multiple responses. Human labelers rank them from best 
+                    to worst. These rankings are converted into pairwise comparisons (e.g., "response A > response B").
+                </p>
+                <p>
+                    The reward model is trained to predict these preferences. Given a (prompt, response) pair, it 
+                    outputs a scalar score. The training objective ensures that preferred responses get higher scores.
+                </p>
+                <p>
+                    <strong>Why not skip to Stage 3?</strong> Because running RL requires millions of reward evaluations. 
+                    Humans can't label that fast—but a learned reward model can.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Stage 3: Reinforcement Learning via PPO</h3>
+                <p>
+                    <strong>Input:</strong> The SFT model (policy) and the RM from Stage 2<br>
+                    <strong>Data:</strong> ~31,000 prompts from the API (no human labels needed)<br>
+                    <strong>Output:</strong> InstructGPT, a policy optimized for high reward
+                </p>
+                <p>
+                    The SFT model generates responses to prompts. The reward model scores each response. The language 
+                    model is updated using <strong>Proximal Policy Optimization (PPO)</strong>, a reinforcement learning 
+                    algorithm, to increase expected reward.
+                </p>
+                <p>
+                    <strong>Key constraint:</strong> A KL-divergence penalty keeps the policy close to the original SFT 
+                    model. This prevents the model from "reward hacking"—exploiting quirks of the reward model to get 
+                    high scores without being genuinely helpful.
+                </p>
+            </div>
+
+            <h3>Pipeline Summary Diagram</h3>
+            <div class="info-box">
+                <pre><code>
+┌─────────────────┐
+│  GPT-3 Base     │  (Pretrained on web text)
+└────────┬────────┘
+         │
+         │  13K demonstrations
+         ▼
+┌─────────────────┐
+│  SFT Model      │  (Learns to follow instructions)
+└────────┬────────┘
+         │
+         ├──────────────────────────┐
+         │                          │
+         │  Generate outputs        │  Initialize RM
+         ▼                          ▼
+┌─────────────────┐        ┌─────────────────┐
+│  Ranked         │        │  Reward Model   │
+│  Comparisons    │───────▶│  (RM)           │
+│  (33K prompts)  │        │                 │
+└─────────────────┘        └────────┬────────┘
+                                    │
+                   Scores responses │
+                                    ▼
+                           ┌─────────────────┐
+                           │  PPO Training   │
+                           │  (Optimize LM   │
+                           │   for reward)   │
+                           └────────┬────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+                           │  InstructGPT    │
+                           └─────────────────┘
+                </code></pre>
+            </div>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Findings</h2>
+            <p>
+                The InstructGPT paper (<a href="https://arxiv.org/abs/2203.02155" target="_blank">arXiv:2203.02155</a>) 
+                introduces the RLHF pipeline and reports compelling results. Here are the most important claims and data 
+                points directly from the paper:
+            </p>
+
+            <div class="info-box">
+                <h3>Labeler Preference: InstructGPT Wins vs GPT-3</h3>
+                <blockquote>
+                    "Labelers significantly prefer InstructGPT outputs over outputs from GPT-3. On our test set, outputs 
+                    from the 1.3B parameter InstructGPT model are preferred to outputs from the 175B GPT-3, despite having 
+                    100x fewer parameters."
+                    <footer>— Abstract, <a href="https://arxiv.org/abs/2203.02155" target="_blank">arXiv:2203.02155</a></footer>
+                </blockquote>
+                <p>
+                    This is the headline result: RLHF-trained models win human preference evaluations <em>even when 
+                    much smaller</em> than base models. Figure 3 in the paper shows that InstructGPT (1.3B) is preferred 
+                    over GPT-3 (175B) on a majority of prompts.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Performance on Public NLP Datasets</h3>
+                <blockquote>
+                    "InstructGPT shows improvements on truthfulness over GPT-3, as measured by TruthfulQA. InstructGPT 
+                    models show small regressions on public NLP datasets, such as SQuAD and DROP."
+                    <footer>— Section 5.2, <a href="https://arxiv.org/abs/2203.02155" target="_blank">arXiv:2203.02155</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Trade-off:</strong> Optimizing for helpfulness improves TruthfulQA (a benchmark for 
+                    avoiding false statements) but slightly hurts performance on traditional NLP benchmarks like SQuAD 
+                    (reading comprehension). The authors note this as an "alignment tax"—the model prioritizes being 
+                    helpful over maximizing specific benchmark metrics.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Dataset Scale and Labeler Agreement</h3>
+                <p>
+                    The paper reports training data sizes (Section 3.1, Table 1):
+                </p>
+                <ul>
+                    <li><strong>SFT dataset:</strong> 13,000 (prompt, response) pairs</li>
+                    <li><strong>RM dataset:</strong> 33,000 prompts, each with 4–9 ranked outputs (~200K comparisons)</li>
+                    <li><strong>PPO dataset:</strong> 31,000 prompts from the API (unlabeled)</li>
+                </ul>
+                <p>
+                    Labeler agreement is high for clear cases (e.g., refusing toxic requests) but lower for subjective 
+                    preferences (e.g., tone, verbosity). The paper measures inter-annotator agreement at ~73% for pairwise 
+                    preferences (Table 9, Appendix).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Generalization Beyond API Distribution</h3>
+                <blockquote>
+                    "InstructGPT generalizes to preferences of held-out labelers, and to instructions outside the 
+                    distribution of our training data."
+                    <footer>— Section 5.4, <a href="https://arxiv.org/abs/2203.02155" target="_blank">arXiv:2203.02155</a></footer>
+                </blockquote>
+                <p>
+                    The paper tests whether InstructGPT learned to please specific labelers or truly improved at 
+                    following instructions. Held-out labelers (who didn't contribute to training data) still prefer 
+                    InstructGPT outputs. It also generalizes to prompts written in non-English languages and coding tasks, 
+                    even though these were rare in training data.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Toxicity Reduction</h3>
+                <blockquote>
+                    "InstructGPT produces less toxic outputs than GPT-3 when prompted to be respectful, as measured 
+                    by the Perspective API."
+                    <footer>— Section 5.3, <a href="https://arxiv.org/abs/2203.02155" target="_blank">arXiv:2203.02155</a></footer>
+                </blockquote>
+                <p>
+                    On the RealToxicityPrompts benchmark, InstructGPT generates toxic continuations 25% less often than 
+                    GPT-3 (Figure 5). This reduction comes from RLHF training—the reward model learned that toxic outputs 
+                    receive low preference scores.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Key Takeaway</h3>
+                <p>
+                    InstructGPT demonstrates that RLHF produces models that users prefer, even at the cost of some 
+                    traditional benchmark performance. The three-stage pipeline (SFT → RM → PPO) is now the foundation 
+                    for most modern aligned language models, including ChatGPT and Claude.
+                </p>
+            </div>
+        </section>
+
+        <section id="reward-models" class="content-section">
+            <h2>What Is a Reward Model?</h2>
+            <p>
+                A <strong>reward model (RM)</strong> is a classifier trained to predict human preferences. Given a 
+                prompt and a response, it outputs a scalar score representing how much humans would like that response.
+            </p>
+
+            <h3>How Preference Data Looks</h3>
+            <p>
+                Human labelers see a prompt and multiple model outputs, then rank them from best to worst. Here's a 
+                toy example:
+            </p>
+
+            <div class="info-box">
+                <h4>Example: Preference Ranking</h4>
+                <p><strong>Prompt:</strong> "Explain photosynthesis to a 5-year-old."</p>
+                
+                <div class="comparison-grid">
+                    <div class="comparison-card">
+                        <h4>Response A (Rank 1 - Best)</h4>
+                        <p>
+                            "Plants eat sunlight! They take sun, air, and water and mix them together to make food. 
+                            It's like a plant cooking its own lunch. The green color helps them do this."
+                        </p>
+                    </div>
+                    <div class="comparison-card">
+                        <h4>Response B (Rank 2)</h4>
+                        <p>
+                            "Photosynthesis is when plants use energy from the sun to convert carbon dioxide and water 
+                            into glucose and oxygen."
+                        </p>
+                    </div>
+                </div>
+
+                <div class="comparison-grid">
+                    <div class="comparison-card">
+                        <h4>Response C (Rank 3)</h4>
+                        <p>
+                            "I don't know."
+                        </p>
+                    </div>
+                    <div class="comparison-card">
+                        <h4>Response D (Rank 4 - Worst)</h4>
+                        <p>
+                            "Photosynthesis involves the light-dependent reactions in the thylakoid membrane..."
+                        </p>
+                    </div>
+                </div>
+
+                <p><strong>Why this ranking?</strong></p>
+                <ul>
+                    <li><strong>A:</strong> Simple, accurate, age-appropriate—exactly what was requested</li>
+                    <li><strong>B:</strong> Accurate but too technical for a 5-year-old</li>
+                    <li><strong>C:</strong> Honest but unhelpful</li>
+                    <li><strong>D:</strong> Way too advanced, ignores the instruction</li>
+                </ul>
+
+                <p>
+                    These rankings are converted into pairwise comparisons: A > B, A > C, A > D, B > C, B > D, C > D. 
+                    The reward model is trained so that preferred responses get higher scores.
+                </p>
+            </div>
+
+            <h3>Training the Reward Model</h3>
+            <p>
+                The reward model is usually initialized from the SFT model (same architecture), then fine-tuned on 
+                preference comparisons. The training objective is:
+            </p>
+
+            <div class="info-box">
+                <h4>Loss Function</h4>
+                <pre><code>
+Loss = -log(σ(r(x, y_w) - r(x, y_l)))
+
+Where:
+- x = prompt
+- y_w = preferred (winner) response
+- y_l = dispreferred (loser) response
+- r(x, y) = reward model's score for (prompt, response)
+- σ = sigmoid function
+                </code></pre>
+                <p>
+                    This loss encourages the reward model to assign a higher score to the preferred response. Over many 
+                    comparisons, the model learns a general notion of what humans consider helpful, harmless, and honest.
+                </p>
+            </div>
+
+            <h3>Why Not Just Use Human Labels Directly?</h3>
+            <p>
+                During PPO (Stage 3), the language model generates <em>millions</em> of responses that need to be scored. 
+                Humans can't label that fast. The reward model acts as a learned proxy for human judgment—it's fast, 
+                scalable, and trained on real human preferences.
+            </p>
+            <p>
+                <strong>Limitation:</strong> The reward model is imperfect. It might give high scores to responses that 
+                "look good" but are subtly wrong. This is called <strong>reward hacking</strong> (more on that below).
+            </p>
+        </section>
+
+        <section id="ppo-training" class="content-section">
+            <h2>PPO: Optimizing the Language Model</h2>
+            <p>
+                <strong>Proximal Policy Optimization (PPO)</strong> is the reinforcement learning algorithm used to 
+                train InstructGPT in Stage 3. The goal: maximize expected reward from the reward model.
+            </p>
+
+            <h3>The Setup</h3>
+            <ul>
+                <li><strong>Agent (Policy):</strong> The language model being trained (initialized from SFT model)</li>
+                <li><strong>Environment:</strong> The prompt distribution (API requests)</li>
+                <li><strong>Action:</strong> Generate a response (token by token)</li>
+                <li><strong>Reward:</strong> Score from the reward model</li>
+            </ul>
+
+            <h3>The PPO Objective</h3>
+            <p>
+                PPO updates the policy (language model) to increase the reward for generated responses. However, naively 
+                maximizing reward can cause the model to exploit the reward model—finding adversarial outputs that get 
+                high scores but aren't actually helpful.
+            </p>
+
+            <div class="info-box">
+                <h4>KL Penalty</h4>
+                <p>
+                    To prevent reward hacking, InstructGPT adds a <strong>KL-divergence penalty</strong> that keeps the 
+                    policy close to the original SFT model:
+                </p>
+                <pre><code>
+Objective = E[reward(x, y)] - β * KL(π_RL || π_SFT)
+
+Where:
+- π_RL = the policy being trained (InstructGPT)
+- π_SFT = the original SFT model (frozen reference)
+- β = KL penalty coefficient (controls how much we allow drift)
+                </code></pre>
+                <p>
+                    This regularization term ensures the model doesn't stray too far from the SFT initialization. It 
+                    balances reward maximization with maintaining reasonable, coherent outputs.
+                </p>
+            </div>
+
+            <h3>Training Process</h3>
+            <ol>
+                <li><strong>Sample prompts</strong> from the API distribution</li>
+                <li><strong>Generate responses</strong> using the current policy (language model)</li>
+                <li><strong>Score responses</strong> with the reward model</li>
+                <li><strong>Compute advantages</strong> (how much better is this response than expected?)</li>
+                <li><strong>Update the policy</strong> via gradient ascent on the PPO objective</li>
+                <li><strong>Repeat</strong> for many iterations</li>
+            </ol>
+
+            <h3>Why PPO Instead of Other RL Algorithms?</h3>
+            <p>
+                PPO is popular for RLHF because:
+            </p>
+            <ul>
+                <li><strong>Stable:</strong> The "proximal" constraint prevents large policy updates that could collapse training</li>
+                <li><strong>Sample efficient:</strong> Reuses generated samples for multiple gradient updates</li>
+                <li><strong>Simple:</strong> Doesn't require complex second-order optimization (unlike TRPO)</li>
+            </ul>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>InstructGPT Results in Plain Language</h2>
+            <p>
+                InstructGPT's results demonstrate that RLHF produces real, measurable improvements in user satisfaction. 
+                Here are the key takeaways:
+            </p>
+
+            <div class="info-box">
+                <h3>1. Labelers Prefer InstructGPT Over Larger GPT-3</h3>
+                <p>
+                    In head-to-head comparisons, human evaluators preferred InstructGPT 1.3B outputs over GPT-3 175B 
+                    outputs <strong>~85% of the time</strong> on the test prompt distribution. This held across 
+                    instruction-following, summarization, and question-answering tasks.
+                </p>
+                <p>
+                    <strong>Why?</strong> GPT-3 often ignored instructions, rambled, or generated plausible but unhelpful 
+                    text. InstructGPT learned to directly address what the user asked for.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>2. Improved Truthfulness</h3>
+                <p>
+                    On <strong>TruthfulQA</strong> (a benchmark designed to catch models making false claims), InstructGPT 
+                    improved significantly over GPT-3. The PPO-trained model was less likely to confidently state incorrect 
+                    facts, likely because human labelers penalized hallucinations.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>3. Reduced Toxicity</h3>
+                <p>
+                    InstructGPT generated <strong>~25% less toxic content</strong> on RealToxicityPrompts compared to GPT-3 
+                    when instructed to be respectful. RLHF training taught the model to avoid outputs that labelers 
+                    flagged as harmful or offensive.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>4. Generalization to New Tasks</h3>
+                <p>
+                    InstructGPT wasn't just good at tasks in its training distribution—it generalized to:
+                </p>
+                <ul>
+                    <li>Prompts in languages other than English (though training was mostly English)</li>
+                    <li>Code generation tasks (despite limited code examples in RLHF data)</li>
+                    <li>Held-out labelers who didn't contribute training data</li>
+                </ul>
+                <p>
+                    This suggests the model learned <em>general</em> instruction-following and helpfulness, not just 
+                    memorization of specific training patterns.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>5. Alignment Tax: Small Benchmark Regressions</h3>
+                <p>
+                    InstructGPT showed <strong>small performance drops</strong> on some traditional NLP benchmarks 
+                    (e.g., SQuAD, DROP) compared to GPT-3. This is the <strong>alignment tax</strong>—the model 
+                    optimized for user preferences rather than maximizing specific eval metrics.
+                </p>
+                <p>
+                    The paper argues this trade-off is acceptable: users care about helpfulness, not SQuAD scores. 
+                    However, it raises important questions about how to preserve capabilities during alignment.
+                </p>
+            </div>
+
+            <h3>Illustrative Win Rate Data</h3>
+            <p>
+                Below is a <strong>simplified table</strong> based on Figure 3 from the paper, showing head-to-head 
+                preference win rates (InstructGPT vs GPT-3):
+            </p>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Model Comparison</th>
+                        <th>InstructGPT Win Rate</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>InstructGPT 1.3B vs GPT-3 175B</td>
+                        <td>~85%</td>
+                        <td>Much smaller, but users prefer it</td>
+                    </tr>
+                    <tr>
+                        <td>InstructGPT 175B vs GPT-3 175B</td>
+                        <td>~90%</td>
+                        <td>Same size, clear preference for RLHF</td>
+                    </tr>
+                    <tr>
+                        <td>InstructGPT vs SFT-only (same size)</td>
+                        <td>~70%</td>
+                        <td>RLHF improves over SFT alone</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <em>Note: These numbers are approximations from Figure 3 of the paper for illustrative purposes. 
+                See the original paper for exact results and confidence intervals.</em>
+            </p>
+        </section>
+
+        <section id="failure-modes" class="content-section">
+            <h2>Failure Modes and Limitations</h2>
+            <p>
+                RLHF is powerful, but it's not magic. InstructGPT and similar models have well-documented failure modes. 
+                Understanding these helps you recognize when RLHF works and when it breaks down.
+            </p>
+
+            <div class="limitation-card">
+                <h3>1. Reward Hacking</h3>
+                <p>
+                    <strong>What it is:</strong> The policy learns to exploit quirks of the reward model to get high 
+                    scores without being genuinely helpful.
+                </p>
+                <p>
+                    <strong>Example:</strong> The reward model might give high scores to responses with certain keywords 
+                    or formatting. The policy learns to sprinkle in those keywords even when they don't improve the actual 
+                    answer quality.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> The KL penalty keeps the policy close to the SFT model, limiting how 
+                    much the policy can drift into adversarial territory. Regular reward model updates (retraining on 
+                    new data) also help.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>2. Over-Optimization</h3>
+                <p>
+                    <strong>What it is:</strong> As training continues, the policy gets better at maximizing the 
+                    (imperfect) reward model—but actual human preference scores plateau or even decline.
+                </p>
+                <p>
+                    <strong>Why it happens:</strong> The reward model is trained on a fixed dataset and doesn't perfectly 
+                    capture human preferences. Once the policy generates outputs unlike anything in the RM training data, 
+                    the RM's predictions become unreliable.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Monitor human eval scores during training and stop before over-optimization 
+                    kicks in. Some labs retrain the reward model periodically using outputs from the latest policy.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>3. Alignment Tax</h3>
+                <p>
+                    <strong>What it is:</strong> Optimizing for user preferences can degrade performance on traditional 
+                    benchmarks like MMLU or GSM8K.
+                </p>
+                <p>
+                    <strong>Why it happens:</strong> The policy learns to prioritize helpfulness and safety over raw 
+                    factual accuracy. It might refuse to answer edge-case questions or format responses in ways that 
+                    don't match benchmark formats.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Mix benchmark tasks into the RLHF training distribution or use 
+                    multi-objective RL that balances preference and capability. The goal is to maintain knowledge while 
+                    improving user satisfaction.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>4. Sycophancy and Bias Amplification</h3>
+                <p>
+                    <strong>What it is:</strong> The model learns to agree with the user even when the user is wrong, 
+                    because labelers prefer responses that affirm the prompt's framing.
+                </p>
+                <p>
+                    <strong>Example:</strong> User asks "Why is astrology scientifically valid?" RLHF model might provide 
+                    arguments supporting astrology instead of correcting the misconception—because that's what maximizes 
+                    user engagement.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Careful labeler instructions ("reward honesty, not agreement") and 
+                    adversarial testing to catch sycophantic behavior. Some labs use "red teaming" to find and penalize 
+                    these failure modes.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>5. Labeler Disagreement and Subjectivity</h3>
+                <p>
+                    <strong>What it is:</strong> Human preferences aren't always consistent. Different labelers have 
+                    different opinions about what's "helpful" or "appropriate."
+                </p>
+                <p>
+                    <strong>Impact:</strong> The reward model learns an "average" of labeler preferences, which might not 
+                    match what any individual user wants. This is especially tricky for subjective judgments (tone, humor, 
+                    verbosity).
+                </p>
+                <p>
+                    <strong>Future direction:</strong> Personalized reward models or user-configurable preferences 
+                    (letting users tune the model's style).
+                </p>
+            </div>
+
+            <h3>Key Takeaway</h3>
+            <p>
+                RLHF is the current best practice for aligning language models, but it's not a silver bullet. Reward 
+                hacking, over-optimization, and alignment tax are active research problems. Successful RLHF deployments 
+                require careful monitoring, regular reward model updates, and multi-objective balancing.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Check your knowledge of RLHF, reward modeling, and InstructGPT.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: Why RLHF?</h3>
+                    <p>Why use reinforcement learning from human feedback instead of just supervised fine-tuning on demonstrations?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">RLHF is faster to run than SFT</button>
+                        <button class="quiz-option" data-answer="correct">Preference comparisons (A > B) are cheaper and scale better than writing perfect demonstrations</button>
+                        <button class="quiz-option" data-answer="wrong">RLHF doesn't require any human involvement</button>
+                        <button class="quiz-option" data-answer="wrong">SFT cannot improve instruction-following at all</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: Three-Stage Pipeline</h3>
+                    <p>What is the correct order of the InstructGPT training pipeline?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">PPO → SFT → Reward Model</button>
+                        <button class="quiz-option" data-answer="correct">SFT → Reward Model → PPO</button>
+                        <button class="quiz-option" data-answer="wrong">Reward Model → SFT → PPO</button>
+                        <button class="quiz-option" data-answer="wrong">SFT → PPO → Reward Model</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Reward Model Purpose</h3>
+                    <p>What does the reward model do?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It generates responses to user prompts</button>
+                        <button class="quiz-option" data-answer="correct">It predicts human preference scores for (prompt, response) pairs</button>
+                        <button class="quiz-option" data-answer="wrong">It selects which prompts to show human labelers</button>
+                        <button class="quiz-option" data-answer="wrong">It translates natural language into code</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: Preference Data Format</h3>
+                    <p>How are human preferences collected for reward model training?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Labelers write ideal responses from scratch</button>
+                        <button class="quiz-option" data-answer="correct">Labelers rank multiple model outputs from best to worst</button>
+                        <button class="quiz-option" data-answer="wrong">Labelers provide numeric scores from 1-10 for each response</button>
+                        <button class="quiz-option" data-answer="wrong">Labelers vote yes/no on whether a response is acceptable</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: InstructGPT vs GPT-3</h3>
+                    <p>What was InstructGPT's most striking result?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">InstructGPT achieved 100% on all NLP benchmarks</button>
+                        <button class="quiz-option" data-answer="correct">Labelers preferred InstructGPT 1.3B over GPT-3 175B despite the 100x size difference</button>
+                        <button class="quiz-option" data-answer="wrong">InstructGPT never produces toxic outputs</button>
+                        <button class="quiz-option" data-answer="wrong">InstructGPT eliminated all hallucinations</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: Reward Hacking</h3>
+                    <p>What is reward hacking?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">When human labelers provide incorrect preference labels</button>
+                        <button class="quiz-option" data-answer="correct">When the policy exploits flaws in the reward model to get high scores without being genuinely helpful</button>
+                        <button class="quiz-option" data-answer="wrong">When the reward model is trained on contaminated data</button>
+                        <button class="quiz-option" data-answer="wrong">When the PPO algorithm fails to converge</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: KL Penalty</h3>
+                    <p>Why does InstructGPT use a KL-divergence penalty during PPO training?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">To speed up convergence</button>
+                        <button class="quiz-option" data-answer="correct">To prevent the policy from drifting too far from the SFT model and reward hacking</button>
+                        <button class="quiz-option" data-answer="wrong">To reduce memory usage during training</button>
+                        <button class="quiz-option" data-answer="wrong">To make the reward model more accurate</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: Alignment Tax</h3>
+                    <p>What is the "alignment tax"?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The monetary cost of hiring human labelers</button>
+                        <button class="quiz-option" data-answer="correct">Performance regressions on benchmarks when optimizing for user preferences</button>
+                        <button class="quiz-option" data-answer="wrong">The computational cost of running PPO training</button>
+                        <button class="quiz-option" data-answer="wrong">The latency added by the reward model during inference</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: Why Not Skip SFT?</h3>
+                    <p>Could you train InstructGPT by doing RL directly on the base GPT-3 model, skipping the SFT stage?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Yes, SFT is optional and only speeds up training slightly</button>
+                        <button class="quiz-option" data-answer="correct">No, SFT provides a better starting point—base models don't follow instructions well enough for RL to work</button>
+                        <button class="quiz-option" data-answer="wrong">Yes, but only if you use a different RL algorithm</button>
+                        <button class="quiz-option" data-answer="wrong">No, because PPO requires gradient information from SFT</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: Generalization</h3>
+                    <p>InstructGPT was trained mostly on English prompts. Why did it generalize to other languages?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The reward model was trained on multilingual data</button>
+                        <button class="quiz-option" data-answer="correct">The model learned general instruction-following, which transfers across languages present in the base model</button>
+                        <button class="quiz-option" data-answer="wrong">The PPO algorithm inherently improves multilingual performance</button>
+                        <button class="quiz-option" data-answer="wrong">It didn't generalize—non-English performance remained poor</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="data-explorer" class="content-section">
+            <h2>Data Explorer</h2>
+            <p>
+                Explore InstructGPT's training pipeline, preference data examples, and performance results.
+            </p>
+
+            <h3>Interactive: Preference Ranking Example</h3>
+            <div class="explorer-controls">
+                <label for="example-select">Select Example:</label>
+                <select id="example-select">
+                    <option value="0">Example 1: Summarization</option>
+                    <option value="1">Example 2: Instruction Following</option>
+                    <option value="2">Example 3: Factual Question</option>
+                </select>
+            </div>
+
+            <div id="preference-display" class="question-display"></div>
+
+            <h3>InstructGPT vs GPT-3 Win Rates</h3>
+            <p class="chart-caption">
+                Human labeler preference rates (%) for InstructGPT over baseline GPT-3 models. 
+                Data approximated from Figure 3, Ouyang et al. (2022).
+            </p>
+            <div class="chart-container">
+                <canvas id="winrate-chart"></canvas>
+            </div>
+
+            <h3>Training Dataset Sizes</h3>
+            <p class="chart-caption">
+                Number of examples collected for each stage of the RLHF pipeline. 
+                Source: Table 1, InstructGPT paper.
+            </p>
+            <div class="chart-container">
+                <canvas id="dataset-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="track-a-bridge" class="content-section">
+            <h2>Bridge to Track A: Evaluating Post-RLHF Models</h2>
+            <p>
+                Now that you understand <em>how</em> RLHF works, let's connect back to <strong>benchmarking</strong> 
+                from Track A.
+            </p>
+
+            <h3>Why We Still Run MMLU After RLHF</h3>
+            <p>
+                RLHF optimizes for user preferences—helpfulness, safety, tone. But we also need to make sure it doesn't 
+                <em>break</em> the model's core capabilities. That's where benchmarks like MMLU come in:
+            </p>
+            <ul>
+                <li><strong>Before RLHF (base model):</strong> Measures knowledge from pretraining</li>
+                <li><strong>After SFT:</strong> Check if instruction tuning preserved knowledge</li>
+                <li><strong>After PPO:</strong> Ensure RL didn't cause regressions (alignment tax)</li>
+            </ul>
+            <p>
+                InstructGPT showed small drops on some benchmarks (SQuAD, DROP) but maintained most capabilities. 
+                Monitoring these trade-offs is critical—you want a helpful assistant that's also knowledgeable.
+            </p>
+
+            <h3>What RLHF Optimizes vs What Benchmarks Measure</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>✓ RLHF Optimizes For</h4>
+                    <ul>
+                        <li>User satisfaction and preference</li>
+                        <li>Instruction-following accuracy</li>
+                        <li>Helpfulness and conversational quality</li>
+                        <li>Safety and refusal behavior</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>✓ Benchmarks Like MMLU Measure</h4>
+                    <ul>
+                        <li>Factual knowledge retention</li>
+                        <li>Domain expertise (STEM, law, etc.)</li>
+                        <li>Reasoning on bounded tasks</li>
+                        <li>Pretraining effectiveness</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Multi-Benchmark Strategy</h3>
+            <p>
+                Because RLHF and benchmarks measure different things, post-training pipelines evaluate on multiple axes:
+            </p>
+            <ul>
+                <li><strong>Knowledge:</strong> MMLU, TriviaQA (did we preserve facts?)</li>
+                <li><strong>Reasoning:</strong> GSM8K, MATH (can it still solve problems?)</li>
+                <li><strong>Truthfulness:</strong> TruthfulQA (does it avoid making stuff up?)</li>
+                <li><strong>Preference:</strong> Human evals, MT-Bench, Arena ratings (do users like it?)</li>
+            </ul>
+            <p>
+                A successful RLHF run maintains strong knowledge/reasoning scores while <em>improving</em> preference 
+                scores. If MMLU drops 15% but users love the model, is that acceptable? That's a product decision—but 
+                you can't make it without measuring both.
+            </p>
+
+            <div class="info-box">
+                <h4>Next Lessons Preview</h4>
+                <p>
+                    <strong>Track A (Lesson 03):</strong> Reasoning benchmarks like GSM8K—how do we measure problem-solving, 
+                    not just knowledge recall?<br>
+                    <strong>Track B (Lesson 04):</strong> Direct Preference Optimization (DPO)—a simpler alternative to 
+                    RLHF that skips the reward model and PPO complexity.
+                </p>
+            </div>
+        </section>
+
+        <section id="python-tutorial" class="content-section">
+            <h2>Python Tutorial</h2>
+            <div class="placeholder-box">
+                <p>
+                    Want to implement a mini RLHF pipeline or train a toy reward model? Ask <strong>Main Guy in chat</strong> 
+                    for a guided Python tutorial, and it will be added here.
+                </p>
+                <p>
+                    Topics will include:
+                </p>
+                <ul>
+                    <li>Loading and processing preference data (pairs and rankings)</li>
+                    <li>Training a reward model on pairwise comparisons</li>
+                    <li>Implementing a simple PPO loop</li>
+                    <li>Visualizing reward scores and policy updates</li>
+                    <li>Measuring over-optimization and KL divergence</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 Original Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2203.02155" target="_blank">Training language models to follow instructions with human feedback</a></p>
+                    <p>Ouyang, Wu, Jiang, Almeida, et al. (2022) - The InstructGPT paper</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🧪 OpenAI Blog</h3>
+                    <p><a href="https://openai.com/research/instruction-following" target="_blank">Aligning Language Models to Follow Instructions</a></p>
+                    <p>High-level overview and interactive examples</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📚 PPO Paper</h3>
+                    <p><a href="https://arxiv.org/abs/1707.06347" target="_blank">Proximal Policy Optimization Algorithms</a></p>
+                    <p>Schulman et al. (2017) - The RL algorithm used in Stage 3</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🤗 RLHF Blog</h3>
+                    <p><a href="https://huggingface.co/blog/rlhf" target="_blank">Illustrating Reinforcement Learning from Human Feedback</a></p>
+                    <p>Detailed walkthrough with code examples</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 TRL Library</h3>
+                    <p><a href="https://github.com/huggingface/trl" target="_blank">Transformer Reinforcement Learning</a></p>
+                    <p>Open-source library for training reward models and PPO</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🔬 Related Work</h3>
+                    <p><a href="https://arxiv.org/abs/2204.05862" target="_blank">Training a Helpful and Harmless Assistant (Anthropic)</a></p>
+                    <p>Constitutional AI and preference modeling</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>Lesson 02 - Track B (SOTA) | <a href="../README.md">Return to Curriculum Index</a></p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>
