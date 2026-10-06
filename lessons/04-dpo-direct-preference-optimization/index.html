@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 04: Direct Preference Optimization (DPO)</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 04: Direct Preference Optimization (DPO)</h1>
+            <p class="subtitle">Track B: SOTA | Paper: Rafailov et al. (2023)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#the-problem">The RLHF Problem</a>
+            <a href="#key-insight">Key Insight</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#dpo-loss">DPO Loss</a>
+            <a href="#beta-parameter">Beta Parameter</a>
+            <a href="#gradient">Understanding the Gradient</a>
+            <a href="#practical">Practical Requirements</a>
+            <a href="#results">DPO Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#loss-explorer">Loss Explorer</a>
+            <a href="#data-explorer">Data & Charts</a>
+            <a href="#evaluation">Evaluation & Failure Modes</a>
+            <a href="#python-tutorial">Python Tutorial</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From RLHF to DPO: A Simpler Path</h2>
+            <p>
+                In Lesson 02, you learned how <strong>Reinforcement Learning from Human Feedback (RLHF)</strong> 
+                transforms language models using a three-stage pipeline: SFT → Reward Model → PPO. This approach 
+                works—InstructGPT and ChatGPT prove that—but it's <em>complex</em>.
+            </p>
+
+            <div class="info-box">
+                <h3>What Makes RLHF Hard?</h3>
+                <ul>
+                    <li><strong>Three separate training stages:</strong> Each stage requires careful tuning and monitoring</li>
+                    <li><strong>Reward model training:</strong> A separate model that must generalize well but often doesn't</li>
+                    <li><strong>PPO complexity:</strong> Value functions, advantage estimation, clipping, multiple hyperparameters</li>
+                    <li><strong>Training instability:</strong> PPO can diverge, mode collapse, or reward hack</li>
+                    <li><strong>Reward model errors compound:</strong> The RL policy amplifies any mistakes the reward model makes</li>
+                    <li><strong>Computational cost:</strong> Training two large models (policy + reward model) and running RL loops</li>
+                </ul>
+            </div>
+
+            <p>
+                <strong>Direct Preference Optimization (DPO)</strong> asks a radical question: what if we could 
+                <em>skip</em> the reward model and PPO entirely, and optimize the policy <em>directly</em> on 
+                preference data?
+            </p>
+
+            <div class="info-box">
+                <h3>The DPO Promise</h3>
+                <p>
+                    DPO (<a href="https://arxiv.org/abs/2305.18290" target="_blank">Rafailov et al., 2023</a>) 
+                    delivers RLHF-quality results with:
+                </p>
+                <ul>
+                    <li><strong>No reward model:</strong> Train directly on preference pairs</li>
+                    <li><strong>No reinforcement learning:</strong> Just supervised learning with a clever loss function</li>
+                    <li><strong>Simpler pipeline:</strong> SFT → DPO (two stages instead of three)</li>
+                    <li><strong>More stable:</strong> Standard gradient descent, no PPO instabilities</li>
+                    <li><strong>Faster training:</strong> One model instead of two, no RL sampling overhead</li>
+                </ul>
+                <p>
+                    In controlled experiments, DPO matches or beats PPO-based RLHF on summarization and dialogue tasks, 
+                    while being dramatically simpler to implement and tune.
+                </p>
+            </div>
+
+            <h3>What You'll Learn</h3>
+            <p>This lesson covers:</p>
+            <ul>
+                <li>Why RLHF with PPO is complex and unstable</li>
+                <li>The mathematical insight that makes DPO possible (closed-form optimal policy)</li>
+                <li>How DPO reparameterizes reward as a function of policy ratios</li>
+                <li>The Bradley-Terry preference model and DPO loss function</li>
+                <li>What the \(\beta\) parameter does and how to tune it</li>
+                <li>How DPO's gradient automatically weights by "how wrong" the implicit reward is</li>
+                <li>Practical training requirements (reference model, preference pairs)</li>
+                <li>Real results from the paper: DPO vs PPO vs PPO-GT on sentiment and summarization</li>
+                <li>How DPO models are evaluated (GPT-4 as judge) and known failure modes</li>
+            </ul>
+
+            <p>
+                By the end, you'll understand why DPO has become a leading post-training method and what trade-offs 
+                it makes compared to RLHF.
+            </p>
+        </section>
+
+        <section id="the-problem" class="content-section">
+            <h2>The RLHF Complexity Problem</h2>
+            <p>
+                Let's revisit the RLHF pipeline from Lesson 02 and examine why each stage adds complexity.
+            </p>
+
+            <h3>Stage 1: Supervised Fine-Tuning (SFT)</h3>
+            <p>
+                <strong>What happens:</strong> Train a base model on (prompt, response) demonstrations.<br>
+                <strong>Complexity:</strong> Low—this is standard supervised learning.<br>
+                <strong>DPO verdict:</strong> Keep this stage. DPO still needs an SFT model as a starting point.
+            </p>
+
+            <h3>Stage 2: Reward Model Training</h3>
+            <p>
+                <strong>What happens:</strong> Train a separate model to predict human preferences on (prompt, response) pairs.<br>
+                <strong>Complexity:</strong> High. The reward model:
+            </p>
+            <ul>
+                <li>Requires careful training to generalize beyond its training distribution</li>
+                <li>Can develop biases (e.g., preferring longer responses regardless of quality)</li>
+                <li>Adds a second large model to train and maintain</li>
+                <li>Becomes a bottleneck: if it's bad, the final policy will be bad</li>
+            </ul>
+            <p>
+                <strong>DPO verdict:</strong> <em>Eliminate this stage.</em> The reward model is a proxy for preferences—why 
+                not optimize preferences directly?
+            </p>
+
+            <h3>Stage 3: PPO Training</h3>
+            <p>
+                <strong>What happens:</strong> Use Proximal Policy Optimization to maximize reward model scores while 
+                staying close to the SFT model (KL penalty).<br>
+                <strong>Complexity:</strong> Very high. PPO requires:
+            </p>
+            <ul>
+                <li><strong>Value function training:</strong> A critic network that estimates expected rewards</li>
+                <li><strong>Advantage estimation:</strong> Comparing actual returns to value estimates</li>
+                <li><strong>Multiple rollouts:</strong> Sampling many responses per prompt for variance reduction</li>
+                <li><strong>Clipping and trust regions:</strong> Preventing policy updates that are too large</li>
+                <li><strong>Hyperparameter tuning:</strong> Learning rates, clip ratios, GAE lambda, KL coefficients</li>
+            </ul>
+            <p>
+                <strong>PPO instabilities:</strong>
+            </p>
+            <div class="limitation-card">
+                <h4>1. Reward Hacking</h4>
+                <p>
+                    The policy exploits reward model mistakes. Example: if the reward model spuriously likes 
+                    responses starting with "Certainly!", the policy learns to always start with that word.
+                </p>
+            </div>
+            <div class="limitation-card">
+                <h4>2. Mode Collapse</h4>
+                <p>
+                    The policy converges to a narrow set of "safe" responses that get decent rewards, losing 
+                    diversity and creativity.
+                </p>
+            </div>
+            <div class="limitation-card">
+                <h4>3. KL Penalty Tuning Nightmare</h4>
+                <p>
+                    Too little KL penalty → policy drifts into gibberish or reward hacking. Too much KL penalty → 
+                    policy barely improves beyond SFT. Finding the right balance requires extensive hyperparameter 
+                    sweeps.
+                </p>
+            </div>
+
+            <p>
+                <strong>DPO verdict:</strong> <em>Eliminate this stage too.</em> Replace RL with a simpler supervised 
+                learning objective that directly optimizes preferences.
+            </p>
+
+            <div class="info-box">
+                <h3>The Core Question DPO Answers</h3>
+                <p>
+                    <strong>Can we optimize preferences without explicitly learning a reward function?</strong>
+                </p>
+                <p>
+                    The answer is yes—if you derive the <em>optimal policy</em> under the RLHF objective 
+                    (maximize reward + KL constraint), you can reparameterize it to express reward in terms of 
+                    policy probabilities. Then you can optimize that closed-form expression directly on preference 
+                    data, skipping both the reward model and PPO.
+                </p>
+            </div>
+        </section>
+
+        <section id="key-insight" class="content-section">
+            <h2>The Key Mathematical Insight</h2>
+            <p>
+                DPO's elegance comes from a mathematical reparameterization. Let's build up the intuition step by step.
+            </p>
+
+            <h3>Step 1: The RLHF Objective</h3>
+            <p>
+                In RLHF, we want to find a policy \(\pi\) that maximizes expected reward while staying close to 
+                a reference policy \(\pi_{\text{ref}}\) (usually the SFT model):
+            </p>
+            <div class="math-block">
+                $$
+                \max_{\pi} \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi(y|x)} [r(x, y)] - \beta \, D_{\text{KL}}(\pi(y|x) \,||\, \pi_{\text{ref}}(y|x))
+                $$
+            </div>
+            <p>Where:</p>
+            <ul>
+                <li>\(x\) = prompt from dataset \(\mathcal{D}\)</li>
+                <li>\(y\) = response sampled from policy \(\pi\)</li>
+                <li>\(r(x, y)\) = reward function (typically learned by a reward model)</li>
+                <li>\(\beta\) = KL penalty coefficient (controls how much we allow \(\pi\) to drift from \(\pi_{\text{ref}}\))</li>
+                <li>\(D_{\text{KL}}\) = Kullback-Leibler divergence (measures distribution mismatch)</li>
+            </ul>
+
+            <h3>Step 2: The Optimal Policy (Closed Form)</h3>
+            <p>
+                It turns out this constrained optimization problem has a <strong>closed-form solution</strong>. 
+                Using the method of Lagrange multipliers or dynamic programming, you can show that the optimal 
+                policy \(\pi^*\) is:
+            </p>
+            <div class="math-block">
+                $$
+                \pi^*(y|x) = \frac{1}{Z(x)} \pi_{\text{ref}}(y|x) \exp\left(\frac{1}{\beta} r(x, y)\right)
+                $$
+            </div>
+            <p>Where \(Z(x)\) is a partition function (normalizing constant) to ensure probabilities sum to 1:</p>
+            <div class="math-block">
+                $$
+                Z(x) = \sum_y \pi_{\text{ref}}(y|x) \exp\left(\frac{1}{\beta} r(x, y)\right)
+                $$
+            </div>
+            <p>
+                <strong>Intuition:</strong> The optimal policy is the reference policy, reweighted by 
+                \(\exp(r(x,y)/\beta)\). High-reward responses get exponentially more probability; low-reward 
+                responses get exponentially less. The \(\beta\) parameter controls how "sharp" this reweighting is.
+            </p>
+
+            <h3>Step 3: Reparameterizing Reward</h3>
+            <p>
+                Here's the magic trick: take the optimal policy equation and solve for \(r(x, y)\):
+            </p>
+            <div class="math-block">
+                $$
+                r(x, y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
+                $$
+            </div>
+            <p>
+                Since \(Z(x)\) doesn't depend on \(y\), it's just a per-prompt constant. For <em>comparing</em> 
+                two responses \(y_1\) and \(y_2\) to the same prompt \(x\), the \(\log Z(x)\) term cancels:
+            </p>
+            <div class="math-block">
+                $$
+                r(x, y_1) - r(x, y_2) = \beta \log \frac{\pi^*(y_1|x)}{\pi_{\text{ref}}(y_1|x)} - \beta \log \frac{\pi^*(y_2|x)}{\pi_{\text{ref}}(y_2|x)}
+                $$
+            </div>
+            <p>
+                <strong>Key insight:</strong> The reward <em>difference</em> between two responses can be expressed 
+                purely in terms of policy log-probability ratios. We never need to learn \(r(x, y)\) explicitly—we 
+                can work with policy probabilities instead!
+            </p>
+
+            <h3>Step 4: The Bradley-Terry Preference Model</h3>
+            <p>
+                Human preferences are typically modeled with the <strong>Bradley-Terry model</strong>: the 
+                probability that response \(y_w\) (winner/chosen) is preferred over \(y_l\) (loser/rejected) is:
+            </p>
+            <div class="math-block">
+                $$
+                p(y_w \succ y_l \mid x) = \frac{\exp(r(x, y_w))}{\exp(r(x, y_w)) + \exp(r(x, y_l))} = \sigma(r(x, y_w) - r(x, y_l))
+                $$
+            </div>
+            <p>
+                Where \(\sigma\) is the sigmoid function. This is the same model used to train RLHF reward models.
+            </p>
+
+            <h3>Step 5: Combining the Pieces (The DPO Loss)</h3>
+            <p>
+                Substitute the reparameterized reward from Step 3 into the Bradley-Terry model:
+            </p>
+            <div class="math-block">
+                $$
+                p(y_w \succ y_l \mid x) = \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)
+                $$
+            </div>
+            <p>
+                Where \(\pi_\theta\) is the policy we're training (parameterized by \(\theta\)). To maximize the 
+                likelihood of observed preferences, we minimize the negative log-likelihood:
+            </p>
+            <div class="math-block">
+                $$
+                \mathcal{L}_{\text{DPO}}(\pi_\theta) = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \log \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right) \right]
+                $$
+            </div>
+            <p>
+                <strong>This is the DPO loss.</strong> It looks like standard binary cross-entropy, but the "logit" 
+                is a scaled log-probability ratio. You can optimize it with standard supervised learning—no reward 
+                model, no RL, just gradient descent.
+            </p>
+
+            <div class="info-box">
+                <h3>Why This Works</h3>
+                <p>
+                    By deriving the optimal policy under the RLHF objective and reparameterizing reward in terms of 
+                    policy probabilities, DPO converts a two-stage RL problem (train reward model, then optimize 
+                    policy with RL) into a <strong>single-stage supervised learning problem</strong>. The preference 
+                    data directly teaches the policy which responses humans prefer, with the same theoretical 
+                    guarantees as RLHF—but without the complexity.
+                </p>
+            </div>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Claims and Results</h2>
+            <p>
+                The DPO paper (<a href="https://arxiv.org/abs/2305.18290" target="_blank">Rafailov et al., 2023</a>) 
+                introduces the method and demonstrates its effectiveness on multiple tasks. Here are the most 
+                important findings:
+            </p>
+
+            <div class="info-box">
+                <h3>Controlled Sentiment Generation</h3>
+                <blockquote>
+                    "DPO achieves comparable or superior performance to existing RLHF methods on controlled sentiment 
+                    generation while being significantly simpler to implement and more stable during training."
+                    <footer>— Section 5.1, <a href="https://arxiv.org/abs/2305.18290" target="_blank">arXiv:2305.18290</a></footer>
+                </blockquote>
+                <p>
+                    On the task of generating positive movie reviews (starting from negative prompts), DPO matches 
+                    PPO's performance while maintaining better KL-reward trade-offs. Figure 3 in the paper shows 
+                    reward vs KL divergence curves: DPO achieves higher rewards for the same KL budget compared to 
+                    PPO and comes close to PPO-GT (PPO with ground-truth reward oracle).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Summarization (TL;DR Dataset)</h3>
+                <blockquote>
+                    "On the TL;DR summarization task, DPO trained for a single epoch on the preference dataset 
+                    achieves win rates of 61% against the SFT baseline and 58% against PPO-trained models when 
+                    evaluated by GPT-4."
+                    <footer>— Section 5.2, <a href="https://arxiv.org/abs/2305.18290" target="_blank">arXiv:2305.18290</a></footer>
+                </blockquote>
+                <p>
+                    DPO was trained on the same preference data used for RLHF baselines (Reddit TL;DR summaries 
+                    with human rankings). GPT-4 was used as a judge to compare outputs. DPO summaries were preferred 
+                    over PPO summaries 58% of the time, despite DPO's simpler training procedure.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Anthropic Helpful-Harmless (HH) Dialogue</h3>
+                <blockquote>
+                    "On the Anthropic HH dataset, DPO achieves win rates of 55-60% against the SFT model across 
+                    different temperatures, demonstrating effective alignment with human preferences on safety-critical 
+                    dialogues."
+                    <footer>— Section 5.3, <a href="https://arxiv.org/abs/2305.18290" target="_blank">arXiv:2305.18290</a></footer>
+                </blockquote>
+                <p>
+                    The Anthropic HH dataset contains preference labels for helpfulness and harmlessness. DPO-trained 
+                    models consistently beat the SFT baseline in GPT-4 win rates, showing that the method works for 
+                    safety-critical alignment, not just stylistic preferences.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Training Stability</h3>
+                <p>
+                    The paper reports that DPO training is <strong>significantly more stable</strong> than PPO:
+                </p>
+                <ul>
+                    <li>No reward model divergence issues (because there's no reward model)</li>
+                    <li>No PPO clipping or value function instabilities</li>
+                    <li>Standard supervised learning convergence behavior</li>
+                    <li>Less sensitive to hyperparameter choices (fewer hyperparameters to tune)</li>
+                </ul>
+                <p>
+                    Anecdotally, practitioners report that DPO is much easier to get working than PPO-based RLHF, 
+                    requiring less babysitting and fewer hyperparameter sweeps.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Implicit Reward Modeling</h3>
+                <blockquote>
+                    "Although DPO does not explicitly train a reward model, we can extract an implicit reward function 
+                    from the trained policy. Analysis shows this implicit reward correlates well with human preferences 
+                    and matches explicit reward models on test data."
+                    <footer>— Section 6, <a href="https://arxiv.org/abs/2305.18290" target="_blank">arXiv:2305.18290</a></footer>
+                </blockquote>
+                <p>
+                    Even without training a separate reward model, you can compute an "implicit reward" for any 
+                    response using the policy log-probability ratios. This implicit reward is just as predictive of 
+                    human preferences as an explicit reward model, but it's "free"—you get it from the policy itself.
+                </p>
+            </div>
+        </section>
+
+        <section id="dpo-loss" class="content-section">
+            <h2>Understanding the DPO Loss Function</h2>
+            <p>
+                Let's break down the DPO loss term by term and understand what it's doing.
+            </p>
+
+            <h3>The Loss, Again</h3>
+            <div class="math-block">
+                $$
+                \mathcal{L}_{\text{DPO}}(\pi_\theta) = -\mathbb{E}_{(x, y_w, y_l)} \left[ \log \sigma\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right) \right]
+                $$
+            </div>
+
+            <h3>Components</h3>
+            <div class="info-box">
+                <h4>1. Log-Probability Ratios</h4>
+                <div class="math-block">
+                    $$
+                    \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}
+                    $$
+                </div>
+                <p>
+                    This measures how much more likely response \(y\) is under the current policy \(\pi_\theta\) 
+                    compared to the reference policy \(\pi_{\text{ref}}\). 
+                </p>
+                <ul>
+                    <li>If \(\log \frac{\pi_\theta}{\pi_{\text{ref}}} > 0\): \(\pi_\theta\) assigns higher probability to \(y\) than \(\pi_{\text{ref}}\)</li>
+                    <li>If \(\log \frac{\pi_\theta}{\pi_{\text{ref}}} < 0\): \(\pi_\theta\) assigns lower probability to \(y\) than \(\pi_{\text{ref}}\)</li>
+                    <li>If \(\log \frac{\pi_\theta}{\pi_{\text{ref}}} = 0\): Both policies assign the same probability (no change)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>2. The Implicit Reward</h4>
+                <div class="math-block">
+                    $$
+                    r_\theta(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}
+                    $$
+                </div>
+                <p>
+                    This is the <strong>implicit reward</strong> induced by the policy. Even though we never train 
+                    a reward model, the policy learns to implicitly score responses through its probability 
+                    assignments. A higher log-ratio means a higher implicit reward.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. The Preference Logit</h4>
+                <div class="math-block">
+                    $$
+                    \text{logit} = \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} = r_\theta(x, y_w) - r_\theta(x, y_l)
+                    $$
+                </div>
+                <p>
+                    This is the implicit reward <em>difference</em> between the chosen response \(y_w\) and the 
+                    rejected response \(y_l\). If this difference is large and positive, the model strongly prefers 
+                    \(y_w\). If it's near zero, the model is uncertain. If it's negative, the model prefers \(y_l\) 
+                    (which is wrong according to the label).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>4. The Sigmoid and Cross-Entropy</h4>
+                <div class="math-block">
+                    $$
+                    \sigma(\text{logit}) = \frac{1}{1 + \exp(-\text{logit})}
+                    $$
+                </div>
+                <p>
+                    The sigmoid converts the logit into a probability: "What's the probability that \(y_w\) is 
+                    preferred over \(y_l\)?" The loss \(-\log \sigma(\text{logit})\) is minimized when this 
+                    probability is 1 (model is confident that \(y_w\) is better).
+                </p>
+            </div>
+
+            <h3>What the Loss Does</h3>
+            <p>
+                The DPO loss has two effects:
+            </p>
+            <ul>
+                <li>
+                    <strong>Increase \(\pi_\theta(y_w|x)\) relative to \(\pi_{\text{ref}}(y_w|x)\):</strong> 
+                    Make the policy assign higher probability to chosen responses compared to the reference model.
+                </li>
+                <li>
+                    <strong>Decrease \(\pi_\theta(y_l|x)\) relative to \(\pi_{\text{ref}}(y_l|x)\):</strong> 
+                    Make the policy assign lower probability to rejected responses compared to the reference model.
+                </li>
+            </ul>
+            <p>
+                The \(\beta\) parameter scales these effects. Larger \(\beta\) means larger gradients and faster 
+                learning, but also more risk of overfitting or drifting too far from \(\pi_{\text{ref}}\).
+            </p>
+        </section>
+
+        <section id="beta-parameter" class="content-section">
+            <h2>The \(\beta\) Parameter: Controlling the KL Budget</h2>
+            <p>
+                The \(\beta\) hyperparameter is the most important knob in DPO. It controls the trade-off between 
+                fitting preferences and staying close to the reference policy.
+            </p>
+
+            <h3>What \(\beta\) Does</h3>
+            <div class="math-block">
+                $$
+                \beta = \text{inverse temperature of the optimal policy distribution}
+                $$
+            </div>
+            <p>
+                Recall the optimal policy from the RLHF objective:
+            </p>
+            <div class="math-block">
+                $$
+                \pi^*(y|x) \propto \pi_{\text{ref}}(y|x) \exp\left(\frac{1}{\beta} r(x, y)\right)
+                $$
+            </div>
+            <p>
+                \(\beta\) appears as the inverse temperature in the exponent. This means:
+            </p>
+            <ul>
+                <li>
+                    <strong>Small \(\beta\) (e.g., 0.1):</strong> High temperature, "soft" policy. The exponential 
+                    reweighting is strong—high-reward responses get massively upweighted. The policy moves far from 
+                    \(\pi_{\text{ref}}\), accepting high KL divergence to maximize reward.
+                </li>
+                <li>
+                    <strong>Large \(\beta\) (e.g., 1.0):</strong> Low temperature, "stiff" policy. The exponential 
+                    reweighting is weak—rewards have less influence. The policy stays closer to \(\pi_{\text{ref}}\), 
+                    limiting KL divergence at the cost of smaller reward gains.
+                </li>
+            </ul>
+
+            <h3>Typical \(\beta\) Values</h3>
+            <p>
+                The DPO paper uses \(\beta \in \{0.1, 0.2, 0.5\}\) depending on the task:
+            </p>
+            <ul>
+                <li><strong>\(\beta = 0.1\):</strong> Controlled sentiment generation (aggressive optimization)</li>
+                <li><strong>\(\beta = 0.2\):</strong> Summarization (moderate optimization)</li>
+                <li><strong>\(\beta = 0.5\):</strong> Dialogue (conservative, prioritize safety)</li>
+            </ul>
+            <p>
+                Smaller datasets or more noisy preferences benefit from larger \(\beta\) (more regularization). 
+                Larger, cleaner datasets can use smaller \(\beta\) (more aggressive learning).
+            </p>
+
+            <h3>Effect on Gradients</h3>
+            <p>
+                The \(\beta\) parameter scales the DPO loss gradients. Smaller \(\beta\) → larger gradients → 
+                faster learning but more risk of instability. Tuning \(\beta\) is analogous to tuning the learning 
+                rate, but it also encodes a prior about how much KL divergence is acceptable.
+            </p>
+
+            <div class="info-box">
+                <h4>Rule of Thumb</h4>
+                <p>
+                    Start with \(\beta = 0.1\) for tasks where you want aggressive optimization (e.g., style 
+                    control). Use \(\beta = 0.5\) for safety-critical tasks (e.g., reducing toxicity). If training 
+                    is unstable or the policy diverges, increase \(\beta\).
+                </p>
+            </div>
+        </section>
+
+        <section id="gradient" class="content-section">
+            <h2>Understanding the DPO Gradient</h2>
+            <p>
+                One of DPO's elegant properties is that its gradient automatically <strong>weights examples by 
+                how wrong the implicit reward is</strong>. Let's derive this and see why it matters.
+            </p>
+
+            <h3>The Gradient</h3>
+            <p>
+                Taking the gradient of the DPO loss with respect to the policy parameters \(\theta\):
+            </p>
+            <div class="math-block">
+                $$
+                \nabla_\theta \mathcal{L}_{\text{DPO}} = -\beta \mathbb{E}_{(x, y_w, y_l)} \left[ \sigma(r_{\text{implicit}}(y_l) - r_{\text{implicit}}(y_w)) \left( \nabla_\theta \log \pi_\theta(y_w|x) - \nabla_\theta \log \pi_\theta(y_l|x) \right) \right]
+                $$
+            </div>
+            <p>Where:</p>
+            <ul>
+                <li>\(r_{\text{implicit}}(y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}\) is the implicit reward</li>
+                <li>\(\sigma(r_{\text{implicit}}(y_l) - r_{\text{implicit}}(y_w))\) is the <strong>weight</strong></li>
+            </ul>
+
+            <h3>What This Weight Means</h3>
+            <p>
+                The term \(\sigma(r_{\text{implicit}}(y_l) - r_{\text{implicit}}(y_w))\) is the probability that 
+                the model currently assigns to the <em>wrong</em> preference (preferring \(y_l\) over \(y_w\)).
+            </p>
+            <ul>
+                <li>
+                    <strong>If the model is very confident and correct:</strong> \(r_{\text{implicit}}(y_w) \gg r_{\text{implicit}}(y_l)\), 
+                    so \(\sigma(\cdot) \approx 0\). The gradient is near zero—no update needed.
+                </li>
+                <li>
+                    <strong>If the model is uncertain:</strong> \(r_{\text{implicit}}(y_w) \approx r_{\text{implicit}}(y_l)\), 
+                    so \(\sigma(\cdot) \approx 0.5\). The gradient has moderate magnitude—learn to distinguish.
+                </li>
+                <li>
+                    <strong>If the model is confident but wrong:</strong> \(r_{\text{implicit}}(y_l) > r_{\text{implicit}}(y_w)\), 
+                    so \(\sigma(\cdot) \to 1\). The gradient is large—aggressively correct the mistake.
+                </li>
+            </ul>
+
+            <h3>Comparison to Reward Model Training</h3>
+            <p>
+                Reward models in RLHF are trained with the same Bradley-Terry loss, so they also weight examples 
+                by model confidence. The difference is:
+            </p>
+            <ul>
+                <li>
+                    <strong>Reward model:</strong> Learns a separate function \(r(x, y)\) that estimates preferences. 
+                    Errors in \(r\) are later amplified by PPO.
+                </li>
+                <li>
+                    <strong>DPO:</strong> Learns preference-aligned behavior directly in the policy. There's no 
+                    separate reward model to make mistakes, so no error amplification.
+                </li>
+            </ul>
+
+            <div class="info-box">
+                <h4>Why This Matters</h4>
+                <p>
+                    The gradient weighting means DPO <strong>focuses on hard examples</strong> where the model 
+                    disagrees with human preferences. Easy examples (where the model already agrees) contribute 
+                    little to the loss. This is efficient: training effort goes where it's needed most.
+                </p>
+            </div>
+        </section>
+
+        <section id="practical" class="content-section">
+            <h2>Practical Requirements and Training Recipe</h2>
+            <p>
+                Here's what you need to train a DPO model in practice.
+            </p>
+
+            <h3>1. Preference Dataset</h3>
+            <p>
+                You need a dataset of preference pairs: \((x, y_w, y_l)\) where \(x\) is a prompt, \(y_w\) is the 
+                chosen (preferred) response, and \(y_l\) is the rejected (dispreferred) response.
+            </p>
+            <p><strong>Sources:</strong></p>
+            <ul>
+                <li><strong>Human labels:</strong> Same data you'd use for RLHF reward model training</li>
+                <li><strong>AI feedback:</strong> Generate multiple responses, rank with GPT-4 or another strong model</li>
+                <li><strong>Existing datasets:</strong> Anthropic HH-RLHF, Stanford SHP, OpenAssistant</li>
+            </ul>
+            <p>
+                <strong>Scale:</strong> The DPO paper uses 10K-60K preference pairs depending on the task. More data 
+                generally helps, but DPO is fairly data-efficient.
+            </p>
+
+            <h3>2. Reference Model (\(\pi_{\text{ref}}\))</h3>
+            <p>
+                The reference model is typically the <strong>SFT model</strong>—the starting point before preference 
+                optimization. You need to:
+            </p>
+            <ul>
+                <li>Freeze \(\pi_{\text{ref}}\) (no gradients)</li>
+                <li>Keep it in memory during training to compute log-probability ratios</li>
+                <li>Use the same tokenization and architecture as \(\pi_\theta\) (the policy being trained)</li>
+            </ul>
+            <p>
+                <strong>Memory cost:</strong> You're effectively training two models simultaneously (policy + reference), 
+                so memory usage is ~2x a standard fine-tuning run. However, \(\pi_{\text{ref}}\) never updates, so 
+                you can use memory optimizations like gradient checkpointing only on \(\pi_\theta\).
+            </p>
+
+            <h3>3. Training Hyperparameters</h3>
+            <p>Key hyperparameters:</p>
+            <ul>
+                <li><strong>\(\beta\):</strong> Start with 0.1-0.5 depending on task (see above)</li>
+                <li><strong>Learning rate:</strong> Typically 1e-6 to 1e-5 (lower than standard fine-tuning)</li>
+                <li><strong>Batch size:</strong> 32-128 preference pairs per batch</li>
+                <li><strong>Epochs:</strong> 1-3 epochs over the preference dataset (more can overfit)</li>
+                <li><strong>Warmup:</strong> Use learning rate warmup (10-20% of training)</li>
+            </ul>
+
+            <h3>4. Training Loop</h3>
+            <p>Pseudocode for DPO training:</p>
+            <pre><code>for each batch (x, y_w, y_l) in preference_dataset:
+    # Compute log probabilities under policy and reference
+    log_pi_theta_w = policy.log_prob(y_w | x)
+    log_pi_theta_l = policy.log_prob(y_l | x)
+    log_pi_ref_w = reference.log_prob(y_w | x)  # frozen, no grad
+    log_pi_ref_l = reference.log_prob(y_l | x)  # frozen, no grad
+    
+    # Compute implicit reward differences
+    logit = beta * (log_pi_theta_w - log_pi_ref_w) - beta * (log_pi_theta_l - log_pi_ref_l)
+    
+    # DPO loss (negative log-likelihood)
+    loss = -log_sigmoid(logit).mean()
+    
+    # Standard gradient descent
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+</code></pre>
+
+            <h3>5. Evaluation</h3>
+            <p>
+                Unlike RLHF, you don't have a reward model to track during training. Instead, monitor:
+            </p>
+            <ul>
+                <li><strong>DPO loss:</strong> Should decrease consistently</li>
+                <li><strong>Preference accuracy:</strong> % of validation pairs where \(r_{\text{implicit}}(y_w) > r_{\text{implicit}}(y_l)\)</li>
+                <li><strong>KL divergence:</strong> \(D_{\text{KL}}(\pi_\theta \,||\, \pi_{\text{ref}})\) on validation prompts</li>
+                <li><strong>Generation quality:</strong> Sample responses and inspect them manually or with GPT-4</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>Stopping Criterion</h4>
+                <p>
+                    Stop training when preference accuracy on a held-out validation set plateaus. If KL divergence 
+                    grows too large (e.g., > 10), the policy is drifting too far—reduce \(\beta\) or stop early.
+                </p>
+            </div>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>DPO Results: How It Compares to RLHF</h2>
+            <p>
+                Let's look at concrete numbers from the DPO paper across different tasks.
+            </p>
+
+            <h3>Task 1: Controlled Sentiment Generation</h3>
+            <p>
+                <strong>Setup:</strong> Train models to generate positive movie reviews from negative prompts. 
+                Preferences are generated using a sentiment classifier (positive = chosen, negative = rejected).
+            </p>
+            <p>
+                <strong>Baselines:</strong>
+            </p>
+            <ul>
+                <li><strong>SFT:</strong> Fine-tuned on positive reviews only</li>
+                <li><strong>PPO:</strong> RLHF with learned reward model</li>
+                <li><strong>PPO-GT:</strong> RLHF with ground-truth sentiment classifier as reward (upper bound)</li>
+                <li><strong>DPO:</strong> Direct preference optimization</li>
+            </ul>
+            <p>
+                <strong>Results (Figure 3 of the paper):</strong> Reward vs KL divergence frontier. At equivalent 
+                KL budgets:
+            </p>
+            <ul>
+                <li>DPO achieves <strong>~90-95%</strong> of PPO-GT's reward (very close to upper bound)</li>
+                <li>DPO outperforms PPO with learned reward model at all KL levels</li>
+                <li>DPO's curve is smoother—no instabilities or reward hacking artifacts</li>
+            </ul>
+            <p class="chart-caption">
+                <em>Approximate values from Figure 3: At KL ≈ 0.3, PPO-GT reward ≈ 2.0, DPO reward ≈ 1.9, 
+                PPO reward ≈ 1.6. DPO is consistently better than standard PPO.</em>
+            </p>
+
+            <h3>Task 2: Summarization (TL;DR)</h3>
+            <p>
+                <strong>Setup:</strong> Reddit post summarization using the TL;DR dataset with human preference labels. 
+                Models generate summaries; GPT-4 judges which is better.
+            </p>
+            <p>
+                <strong>Results (Table 1 of the paper):</strong> GPT-4 win rates against baselines:
+            </p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Win Rate vs SFT</th>
+                        <th>Win Rate vs PPO</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>SFT Baseline</td>
+                        <td>50%</td>
+                        <td>42%</td>
+                    </tr>
+                    <tr>
+                        <td>PPO (RLHF)</td>
+                        <td>58%</td>
+                        <td>50%</td>
+                    </tr>
+                    <tr>
+                        <td>DPO (\(\beta = 0.2\))</td>
+                        <td><strong>61%</strong></td>
+                        <td><strong>58%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <strong>Interpretation:</strong> DPO summaries are preferred over PPO summaries 58% of the time 
+                (8 percentage points above random). Both methods beat the SFT baseline, but DPO has a slight edge 
+                with much simpler training.
+            </p>
+
+            <h3>Task 3: Dialogue (Anthropic HH)</h3>
+            <p>
+                <strong>Setup:</strong> Anthropic Helpful and Harmless dialogue dataset. Models respond to 
+                user queries; GPT-4 judges helpfulness and safety.
+            </p>
+            <p>
+                <strong>Results (Table 2 of the paper):</strong> GPT-4 win rates at different sampling temperatures:
+            </p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Sampling Temperature</th>
+                        <th>DPO Win Rate vs SFT</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0.0 (greedy)</td>
+                        <td>55%</td>
+                    </tr>
+                    <tr>
+                        <td>0.5</td>
+                        <td>58%</td>
+                    </tr>
+                    <tr>
+                        <td>1.0</td>
+                        <td>60%</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <strong>Interpretation:</strong> DPO improves over the SFT baseline across all temperatures. 
+                Higher temperatures (more diverse sampling) show bigger gains, suggesting DPO teaches the model 
+                to avoid low-quality or unsafe responses that might appear in the tail of the SFT distribution.
+            </p>
+
+            <h3>Summary: DPO vs PPO</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>DPO Advantages</h4>
+                    <ul>
+                        <li>Matches or beats PPO performance</li>
+                        <li>Much simpler to implement and debug</li>
+                        <li>More stable training (no RL instabilities)</li>
+                        <li>Fewer hyperparameters to tune</li>
+                        <li>Faster training (no RL sampling overhead)</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>When RLHF Might Still Win</h4>
+                    <ul>
+                        <li>Very complex reward functions with multiple objectives</li>
+                        <li>Tasks requiring fine-grained credit assignment</li>
+                        <li>Extremely large-scale training (where reward model amortizes cost)</li>
+                        <li>Settings with iterated reward model updates</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p>
+                <strong>Bottom line:</strong> For most practitioners, DPO is the better default. It's simpler, 
+                more stable, and performs just as well as RLHF on standard benchmarks.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Check your knowledge of DPO concepts, the loss function, and practical training.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: Why DPO Over RLHF?</h3>
+                    <p>What is the main advantage of DPO over RLHF with PPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">DPO trains faster because it uses a smaller model</button>
+                        <button class="quiz-option" data-answer="correct">DPO eliminates the reward model and RL complexity, optimizing preferences directly with supervised learning</button>
+                        <button class="quiz-option" data-answer="wrong">DPO requires less preference data than RLHF</button>
+                        <button class="quiz-option" data-answer="wrong">DPO can train without a reference model</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: The Key Insight</h3>
+                    <p>What mathematical trick makes DPO possible?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Approximating the reward function with a neural network</button>
+                        <button class="quiz-option" data-answer="correct">Deriving the optimal policy in closed form and reparameterizing reward in terms of policy probabilities</button>
+                        <button class="quiz-option" data-answer="wrong">Using a different RL algorithm that's more stable than PPO</button>
+                        <button class="quiz-option" data-answer="wrong">Training on demonstrations instead of preferences</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Implicit Reward</h3>
+                    <p>What is the implicit reward in DPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The score from a pre-trained reward model</button>
+                        <button class="quiz-option" data-answer="correct">\(\beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}\) – the scaled log-probability ratio</button>
+                        <button class="quiz-option" data-answer="wrong">The negative DPO loss value</button>
+                        <button class="quiz-option" data-answer="wrong">The KL divergence between policy and reference</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: The \(\beta\) Parameter</h3>
+                    <p>What does a smaller \(\beta\) (e.g., 0.1) mean?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="correct">More aggressive optimization—higher KL divergence, policy drifts further from reference</button>
+                        <button class="quiz-option" data-answer="wrong">Slower learning with smaller gradient updates</button>
+                        <button class="quiz-option" data-answer="wrong">The policy stays closer to the reference model</button>
+                        <button class="quiz-option" data-answer="wrong">\(\beta\) doesn't affect KL divergence, only learning rate</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: Reference Model</h3>
+                    <p>What is the reference model \(\pi_{\text{ref}}\) in DPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">A pre-trained reward model from RLHF</button>
+                        <button class="quiz-option" data-answer="correct">The SFT model (frozen) used as a starting point to compute log-probability ratios</button>
+                        <button class="quiz-option" data-answer="wrong">A randomly initialized model for comparison</button>
+                        <button class="quiz-option" data-answer="wrong">The base model before any fine-tuning</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: DPO Loss Interpretation</h3>
+                    <p>What does the DPO loss function minimize?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The KL divergence between policy and reference</button>
+                        <button class="quiz-option" data-answer="correct">The negative log-likelihood of observed preferences under the Bradley-Terry model</button>
+                        <button class="quiz-option" data-answer="wrong">The mean squared error between predicted and true rewards</button>
+                        <button class="quiz-option" data-answer="wrong">The cross-entropy loss on next-token prediction</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: Gradient Weighting</h3>
+                    <p>How does DPO weight training examples in its gradient?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">All examples are weighted equally</button>
+                        <button class="quiz-option" data-answer="correct">Examples where the model is more wrong (higher probability of incorrect preference) get larger gradients</button>
+                        <button class="quiz-option" data-answer="wrong">Examples with longer responses get higher weight</button>
+                        <button class="quiz-option" data-answer="wrong">Examples are weighted by their timestamp in the dataset</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: Training Data</h3>
+                    <p>What kind of data does DPO training require?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Only (prompt, response) pairs like SFT</button>
+                        <button class="quiz-option" data-answer="correct">Preference pairs: (prompt, chosen response, rejected response)</button>
+                        <button class="quiz-option" data-answer="wrong">Scalar reward scores for each (prompt, response) pair</button>
+                        <button class="quiz-option" data-answer="wrong">Unlabeled prompts for self-supervised learning</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: DPO vs PPO Performance</h3>
+                    <p>On summarization and dialogue tasks, how does DPO compare to PPO-based RLHF?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">DPO significantly underperforms PPO in GPT-4 win rates</button>
+                        <button class="quiz-option" data-answer="correct">DPO matches or slightly beats PPO while being much simpler to train</button>
+                        <button class="quiz-option" data-answer="wrong">DPO only works on sentiment tasks, not summarization or dialogue</button>
+                        <button class="quiz-option" data-answer="wrong">DPO performs the same as the SFT baseline with no improvement</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: When to Stop Training</h3>
+                    <p>What's a good stopping criterion for DPO training?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Train until the DPO loss reaches exactly zero</button>
+                        <button class="quiz-option" data-answer="correct">Stop when preference accuracy on validation data plateaus and KL divergence is reasonable</button>
+                        <button class="quiz-option" data-answer="wrong">Always train for exactly 3 epochs regardless of validation metrics</button>
+                        <button class="quiz-option" data-answer="wrong">Stop when the policy matches the reference model exactly</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="loss-explorer" class="content-section">
+            <h2>Interactive: DPO Loss Explorer</h2>
+            <p>
+                Explore how the DPO loss and gradient change with different log-probability ratios and \(\beta\) values.
+            </p>
+
+            <div class="explorer-controls">
+                <div class="control-group">
+                    <label for="beta-slider">Beta (\(\beta\)): <span id="beta-value">0.2</span></label>
+                    <input type="range" id="beta-slider" min="0.05" max="1.0" step="0.05" value="0.2">
+                </div>
+                <div class="control-group">
+                    <label for="logprob-ratio-w-slider">Log-prob ratio (chosen): <span id="logprob-ratio-w-value">0.5</span></label>
+                    <input type="range" id="logprob-ratio-w-slider" min="-2.0" max="2.0" step="0.1" value="0.5">
+                    <p class="slider-caption">log(π<sub>θ</sub>(y<sub>w</sub>|x) / π<sub>ref</sub>(y<sub>w</sub>|x))</p>
+                </div>
+                <div class="control-group">
+                    <label for="logprob-ratio-l-slider">Log-prob ratio (rejected): <span id="logprob-ratio-l-value">-0.5</span></label>
+                    <input type="range" id="logprob-ratio-l-slider" min="-2.0" max="2.0" step="0.1" value="-0.5">
+                    <p class="slider-caption">log(π<sub>θ</sub>(y<sub>l</sub>|x) / π<sub>ref</sub>(y<sub>l</sub>|x))</p>
+                </div>
+            </div>
+
+            <div id="loss-display" class="info-box">
+                <!-- Dynamically filled by JavaScript -->
+            </div>
+
+            <h3>Explanation</h3>
+            <p>
+                The DPO loss is \(-\log \sigma(\beta \cdot (\text{chosen ratio} - \text{rejected ratio}))\). 
+                When the chosen response has higher log-prob ratio than rejected (model is correct), loss is low. 
+                When rejected has higher log-prob ratio (model is wrong), loss is high.
+            </p>
+            <p>
+                The <strong>gradient weight</strong> is \(\sigma(\text{rejected ratio} - \text{chosen ratio})\)—it's 
+                highest when the model is most wrong. This means DPO automatically focuses on hard examples.
+            </p>
+        </section>
+
+        <section id="data-explorer" class="content-section">
+            <h2>Data & Visualizations</h2>
+            <p>
+                Explore sample preference data and results from the DPO paper.
+            </p>
+
+            <h3>Sample Preference Data</h3>
+            <p>
+                Below are examples of preference pairs from the Anthropic HH-RLHF dataset, showing chosen vs 
+                rejected responses.
+            </p>
+            <div class="explorer-controls">
+                <label for="preference-select">Select Example:</label>
+                <select id="preference-select">
+                    <option value="0">Example 1: Helpfulness</option>
+                    <option value="1">Example 2: Harmlessness</option>
+                    <option value="2">Example 3: Instruction Following</option>
+                </select>
+            </div>
+
+            <div id="preference-display" class="question-display"></div>
+
+            <h3>DPO vs PPO: Reward vs KL Divergence</h3>
+            <p class="chart-caption">
+                Controlled sentiment generation results from Figure 3 of Rafailov et al. (2023). 
+                DPO achieves comparable reward to PPO-GT (PPO with ground-truth reward oracle) while 
+                significantly outperforming standard PPO.
+            </p>
+            <div class="chart-container">
+                <canvas id="reward-kl-chart"></canvas>
+            </div>
+
+            <h3>DPO Win Rates on TL;DR Summarization</h3>
+            <p class="chart-caption">
+                GPT-4 evaluations on TL;DR summarization. Win rates show how often each model is preferred 
+                over the SFT baseline. Data from Table 1, Rafailov et al. (2023).
+            </p>
+            <div class="chart-container">
+                <canvas id="winrate-chart"></canvas>
+            </div>
+
+            <h3>DPO Performance Across Temperatures</h3>
+            <p class="chart-caption">
+                GPT-4 win rates for DPO vs SFT on Anthropic HH dialogue at different sampling temperatures. 
+                Higher temperatures show bigger improvements. Data from Table 2, Rafailov et al. (2023).
+            </p>
+            <div class="chart-container">
+                <canvas id="temperature-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="evaluation" class="content-section">
+            <h2>Evaluation, Failure Modes, and What's Next</h2>
+            <p>
+                DPO is powerful, but no method is perfect. Let's discuss how DPO models are evaluated and where 
+                they can fail.
+            </p>
+
+            <h3>How DPO Models Are Evaluated</h3>
+            <p>
+                Unlike RLHF, DPO doesn't produce a reward model you can query. So how do we know if it's working?
+            </p>
+
+            <h4>1. GPT-4 as Judge (LLM-as-Judge)</h4>
+            <p>
+                The DPO paper uses <strong>GPT-4 win-rate evaluations</strong>: generate outputs from multiple 
+                models for the same prompt, then ask GPT-4 which one is better. This is scalable (no human labelers 
+                needed) but has caveats:
+            </p>
+            <ul>
+                <li><strong>Bias:</strong> GPT-4 may prefer outputs that match its own style or length</li>
+                <li><strong>Lack of ground truth:</strong> GPT-4's preferences aren't perfect proxies for human judgment</li>
+                <li><strong>Positional bias:</strong> Order of presentation can affect GPT-4's choice</li>
+            </ul>
+            <p>
+                Despite these issues, GPT-4 evaluations correlate well with human preferences on most tasks, making 
+                them a practical evaluation tool. This approach is formalized in <strong>MT-Bench</strong> and 
+                related benchmarks (covered in Lesson 05).
+            </p>
+
+            <h4>2. Human Evaluation</h4>
+            <p>
+                Gold standard but expensive: show human evaluators outputs from DPO-trained models and baselines, 
+                ask which they prefer. The DPO paper validates GPT-4 judgments with human spot-checks.
+            </p>
+
+            <h4>3. Implicit Reward Accuracy</h4>
+            <p>
+                Compute the implicit reward difference \(r_\theta(x, y_w) - r_\theta(x, y_l)\) on held-out 
+                preference pairs. If this is positive (model prefers chosen over rejected), that's correct. 
+                Track accuracy over training to ensure the policy is learning the right preferences.
+            </p>
+
+            <h3>Known Failure Modes</h3>
+            <div class="limitation-card">
+                <h4>1. Length Exploitation</h4>
+                <p>
+                    <strong>What it is:</strong> The model learns that longer responses are often preferred 
+                    (humans like detailed answers), so it generates excessively long outputs.
+                </p>
+                <p>
+                    <strong>Evidence:</strong> OpenAI and Anthropic have reported this in both RLHF and DPO. 
+                    The policy learns to pad responses with filler to increase length.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Include length-normalized preference labels, or penalize 
+                    response length explicitly in the preference data.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>2. Overoptimization of Proxy Preferences</h4>
+                <p>
+                    <strong>What it is:</strong> The preference dataset captures <em>some</em> aspects of quality 
+                    (e.g., helpfulness, factuality) but not all. The model optimizes what's measured, ignoring 
+                    unmeasured dimensions.
+                </p>
+                <p>
+                    <strong>Example:</strong> Preference labels might not penalize subtle factual errors. DPO 
+                    learns to sound confident and helpful, even when making mistakes.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Multi-objective preference data (separate labels for helpfulness, 
+                    factuality, safety) or iterative data collection with adversarial testing.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>3. Chosen Response Likelihood Decrease</h4>
+                <p>
+                    <strong>What it is:</strong> During training, \(\pi_\theta(y_w|x)\) can sometimes <em>decrease</em> 
+                    even though \(y_w\) is the chosen response. This happens when the model finds it easier to 
+                    suppress \(y_l\) than to boost \(y_w\).
+                </p>
+                <p>
+                    <strong>Impact:</strong> The model still learns the right preference ranking, but absolute 
+                    likelihoods drift. This can hurt generation quality if \(\pi_\theta\) moves far from natural 
+                    language.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Monitor KL divergence and likelihood trends during training. 
+                    Use larger \(\beta\) if this becomes an issue.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>4. Distribution Shift from Preference Data</h4>
+                <p>
+                    <strong>What it is:</strong> DPO trains on <em>static</em> preference pairs, typically 
+                    generated by the SFT model. If the policy improves significantly, it enters regions of 
+                    response space not covered by the training data.
+                </p>
+                <p>
+                    <strong>Impact:</strong> The learned preferences may not generalize to novel responses. 
+                    The model might generate high-quality outputs that weren't in the preference dataset but 
+                    weren't optimized for either.
+                </p>
+                <p>
+                    <strong>Solution:</strong> Iterative DPO—retrain with new preference pairs generated by 
+                    the improved policy (similar to iterated RLHF).
+                </p>
+            </div>
+
+            <h3>Follow-Up Methods: Beyond DPO</h3>
+            <p>
+                DPO sparked a wave of follow-up work refining the approach. Some notable methods:
+            </p>
+            <ul>
+                <li>
+                    <strong>IPO (Identity Preference Optimization):</strong> Replaces the Bradley-Terry model 
+                    with an identity mapping, simplifying the loss and reducing length exploitation.
+                </li>
+                <li>
+                    <strong>KTO (Kahneman-Tversky Optimization):</strong> Uses only binary labels (good/bad) 
+                    instead of pairwise comparisons, making data collection easier.
+                </li>
+                <li>
+                    <strong>SimPO (Simple Preference Optimization):</strong> Removes the reference model from 
+                    the loss, further simplifying training.
+                </li>
+                <li>
+                    <strong>Iterative DPO:</strong> Collect new preference data from the DPO-trained model, 
+                    retrain, repeat. Improves performance but adds complexity.
+                </li>
+            </ul>
+            <p>
+                These methods are research-stage refinements—DPO itself remains the most widely adopted alternative 
+                to RLHF in production systems.
+            </p>
+
+            <h3>Bridge to Lesson 05: LLM-as-Judge</h3>
+            <div class="info-box">
+                <p>
+                    DPO's evaluation relies heavily on <strong>GPT-4 as a judge</strong> to measure win rates 
+                    and preference alignment. But how reliable is this? What biases does it introduce? How do 
+                    we benchmark the benchmark?
+                </p>
+                <p>
+                    <strong>Next lesson (Track A):</strong> We'll dive into <strong>MT-Bench</strong> and 
+                    LLM-as-judge evaluation frameworks, exploring when automated judging works, when it fails, 
+                    and how to design robust preference evaluations. This connects directly to DPO's evaluation 
+                    strategy and helps you understand the trade-offs between human evals and automated metrics.
+                </p>
+            </div>
+        </section>
+
+        <section id="python-tutorial" class="content-section">
+            <h2>Python Tutorial</h2>
+            <div class="placeholder-box">
+                <p>
+                    Want to implement DPO from scratch, train a toy model on preference data, or visualize the 
+                    loss landscape? Ask <strong>Main Guy in chat</strong> for a guided Python tutorial, and it 
+                    will be added here.
+                </p>
+                <p>
+                    Topics will include:
+                </p>
+                <ul>
+                    <li>Loading and preprocessing preference datasets (Anthropic HH, Stanford SHP)</li>
+                    <li>Implementing the DPO loss in PyTorch</li>
+                    <li>Training a small language model with DPO</li>
+                    <li>Computing implicit rewards and KL divergence</li>
+                    <li>Comparing DPO vs SFT outputs with GPT-4 as judge</li>
+                    <li>Visualizing reward vs KL trade-offs</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 DPO Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2305.18290" target="_blank">Direct Preference Optimization: Your Language Model is Secretly a Reward Model</a></p>
+                    <p>Rafailov, Sharma, Mitchell, Ermon, Manning, Finn (2023)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 Reference Implementation</h3>
+                    <p><a href="https://github.com/eric-mitchell/direct-preference-optimization" target="_blank">Official DPO Code (PyTorch)</a></p>
+                    <p>Training scripts and example configs from the paper authors</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📚 TRL Library</h3>
+                    <p><a href="https://github.com/huggingface/trl" target="_blank">Hugging Face TRL: DPO Trainer</a></p>
+                    <p>Production-ready DPO implementation with distributed training support</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 Datasets</h3>
+                    <p><a href="https://huggingface.co/datasets/Anthropic/hh-rlhf" target="_blank">Anthropic HH-RLHF</a></p>
+                    <p>Helpful-Harmless preference dataset (160K+ comparisons)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 More Datasets</h3>
+                    <p><a href="https://huggingface.co/datasets/stanfordnlp/SHP" target="_blank">Stanford Human Preferences (SHP)</a></p>
+                    <p>385K preferences across 18 domains from Reddit</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🔬 Follow-Up Work</h3>
+                    <p><a href="https://arxiv.org/abs/2310.12036" target="_blank">IPO: Identity Preference Optimization</a></p>
+                    <p>Azar et al. (2023) - Addresses length exploitation</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🔬 Follow-Up Work</h3>
+                    <p><a href="https://arxiv.org/abs/2402.01306" target="_blank">KTO: Kahneman-Tversky Optimization</a></p>
+                    <p>Ethayarajh et al. (2024) - Uses binary labels instead of pairs</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🎓 Blog Post</h3>
+                    <p><a href="https://huggingface.co/blog/dpo-trl" target="_blank">Fine-tune Llama with DPO</a></p>
+                    <p>Practical tutorial with code examples and best practices</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Lesson 04 - Track B (SOTA) | 
+                <a href="../03-gsm8k-reasoning-benchmarks/">← Previous: GSM8K</a> | 
+                <a href="../README.md">Return to Curriculum Index</a> |
+                Next: Lesson 05 (LLM-as-Judge) →
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // Render KaTeX math after DOM loads
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+    <script src="loss-explorer.js"></script>
+</body>
+</html>
