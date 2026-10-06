@@ -64,6 +64,29 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - GSM8K vs MATH comparison chart
 - **Status:** Complete
 
+### Lesson 04 - Direct Preference Optimization (DPO) ✅
+- **Track:** B (SOTA)
+- **Paper:** Direct Preference Optimization: Your Language Model is Secretly a Reward Model (Rafailov et al., 2023)
+- **Path:** [`04-dpo-direct-preference-optimization/`](04-dpo-direct-preference-optimization/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/](https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/)
+- **Topics:**
+  - Why RLHF with PPO is complex and unstable
+  - The key mathematical insight: closed-form optimal policy and reward reparameterization
+  - Bradley-Terry preference model and DPO loss function
+  - The beta parameter and KL-reward trade-offs
+  - Gradient weighting by model confidence
+  - Practical training requirements (reference model, preference pairs)
+  - DPO vs PPO results on sentiment, summarization, and dialogue
+  - Evaluation with GPT-4 as judge and known failure modes
+  - Bridge to LLM-as-judge evaluation (Lesson 05)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - DPO loss explorer with parameter sliders
+  - Browsable preference data examples (Anthropic HH-RLHF)
+  - Reward vs KL divergence visualization
+  - Win rate comparisons across tasks and temperatures
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -72,6 +95,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 01: MMLU](https://ivanleomk.github.io/workspace-notes/01-mmlu-what-makes-a-benchmark/)
 - [Lesson 02: InstructGPT/RLHF](https://ivanleomk.github.io/workspace-notes/02-instructgpt-rlhf-reward-modeling/)
 - [Lesson 03: GSM8K](https://ivanleomk.github.io/workspace-notes/03-gsm8k-reasoning-benchmarks/)
+- [Lesson 04: DPO](https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/)
 
 ### 💻 Local Serving (for development)
 ```bash
