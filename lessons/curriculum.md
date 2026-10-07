@@ -17,8 +17,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 02 | B | ✅ Complete | RLHF & Reward Modeling | InstructGPT (Ouyang et al., 2022) |
 | 03 | A | ✅ Complete | Reasoning Benchmarks (GSM8K, MATH) | Cobbe et al. (2021) |
 | 04 | B | ✅ Complete | Direct Preference Optimization (DPO) | Rafailov et al. (2023) |
-| 05 | A | 📋 Planned | LLM-as-Judge & Preference Evals | Zheng et al. (2023) - MT-Bench |
-| 06 | B | 📋 Planned | RLHF at Scale & Instability | TBD |
+| 05 | A | ✅ Complete | LLM-as-Judge & Preference Evals | Zheng et al. (2023) - MT-Bench |
+| 06 | B | 📋 Planned | RL from Verifiable Rewards at Scale | DeepSeekMath (Shao et al., 2024) |
 | 07 | A | 📋 Planned | Safety Benchmarks & Red Teaming | TBD |
 | 08 | B | 📋 Planned | Constitutional AI | Bai et al. (2022) |
 
@@ -55,9 +55,10 @@ Each lesson includes:
 - ✅ Lesson 02 (Track B): InstructGPT, RLHF, and reward modeling
 - ✅ Lesson 03 (Track A): GSM8K reasoning benchmarks
 - ✅ Lesson 04 (Track B): Direct Preference Optimization (DPO)
+- ✅ Lesson 05 (Track A): LLM-as-Judge & MT-Bench
 
 **Next Up:**
-- 📋 Lesson 05 (Track A): LLM-as-Judge & MT-Bench
+- 📋 Lesson 06 (Track B): RL from Verifiable Rewards at Scale (DeepSeekMath)
 
 ## How to Request a Lesson
 

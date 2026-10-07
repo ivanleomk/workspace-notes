@@ -87,6 +87,29 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Win rate comparisons across tasks and temperatures
 - **Status:** Complete
 
+### Lesson 05 - LLM-as-a-Judge & MT-Bench ✅
+- **Track:** A (Foundations)
+- **Paper:** Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (Zheng et al., 2023)
+- **Path:** [`05-llm-as-judge-mt-bench/`](05-llm-as-judge-mt-bench/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/](https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/)
+- **Topics:**
+  - Why open-ended chat quality can't be measured with multiple-choice benchmarks
+  - MT-Bench design: 80 multi-turn questions across 8 categories, two-turn structure
+  - Chatbot Arena: crowdsourced pairwise votes, Elo ratings, Bradley-Terry model
+  - Three LLM judging modes: pairwise comparison, single-answer grading, reference-guided grading
+  - Judge biases: position bias, verbosity bias, self-enhancement bias
+  - Mitigation strategies: swap positions, few-shot prompting, chain-of-thought, reference answers
+  - Agreement results: GPT-4 vs human ~80-85%, comparable to human-human agreement
+  - Connection to post-training: LLM judges for preference data (RLAIF), Bradley-Terry model in RLHF/DPO, reward hacking pitfalls (length exploitation, AlpacaEval)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - MT-Bench question explorer by category (writing, roleplay, reasoning, math, coding, extraction, STEM, humanities)
+  - Judge-human agreement comparison chart
+  - Position bias demonstration
+  - Interactive Elo/Bradley-Terry simulator (add votes, watch ratings update)
+  - Agreement by task type visualization
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -96,6 +119,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 02: InstructGPT/RLHF](https://ivanleomk.github.io/workspace-notes/02-instructgpt-rlhf-reward-modeling/)
 - [Lesson 03: GSM8K](https://ivanleomk.github.io/workspace-notes/03-gsm8k-reasoning-benchmarks/)
 - [Lesson 04: DPO](https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/)
+- [Lesson 05: LLM-as-Judge & MT-Bench](https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/)
 
 ### 💻 Local Serving (for development)
 ```bash
