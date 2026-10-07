@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 05: LLM-as-a-Judge & MT-Bench</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 05: LLM-as-a-Judge & MT-Bench</h1>
+            <p class="subtitle">Track A: Foundations | Paper: Zheng et al. (2023)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#the-problem">The Evaluation Problem</a>
+            <a href="#mt-bench">MT-Bench Design</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#chatbot-arena">Chatbot Arena</a>
+            <a href="#judging-modes">Three Judging Modes</a>
+            <a href="#judge-biases">Judge Biases</a>
+            <a href="#agreement">Agreement Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#mtbench-explorer">MT-Bench Explorer</a>
+            <a href="#data-charts">Data & Charts</a>
+            <a href="#bridge-to-training">Bridge to Post-Training</a>
+            <a href="#python-tutorial">Python Tutorial</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Beyond Multiple Choice: Judging Open-Ended Chat Quality</h2>
+            <p>
+                In Lessons 01 and 03, you learned how benchmarks like <strong>MMLU</strong> and <strong>GSM8K</strong> 
+                evaluate models using multiple-choice questions or verifiable answers. These formats have clear advantages: 
+                automatic scoring, objective correctness, large-scale testing. But they have a critical limitation—they 
+                don't capture what matters most for <em>chat assistants</em>.
+            </p>
+
+            <div class="info-box">
+                <h3>What Multiple Choice Can't Measure</h3>
+                <ul>
+                    <li><strong>Helpfulness:</strong> Is the response actually useful to the user?</li>
+                    <li><strong>Instruction-following:</strong> Does the model do what the user asked?</li>
+                    <li><strong>Conversational quality:</strong> Is the response natural, clear, and appropriately detailed?</li>
+                    <li><strong>Multi-turn coherence:</strong> Can the model maintain context across a conversation?</li>
+                    <li><strong>Safety and harmlessness:</strong> Does the model avoid harmful or toxic outputs?</li>
+                </ul>
+                <p>
+                    These dimensions require <em>subjective human judgment</em>, not just right/wrong answers. 
+                    But human evaluation is expensive, slow, and doesn't scale to rapid model iteration.
+                </p>
+            </div>
+
+            <p>
+                <strong>LLM-as-a-Judge</strong> asks a provocative question: what if we use a <em>powerful language model</em> 
+                (like GPT-4) to evaluate other models' outputs? Can automated LLM judges approximate human preferences at scale?
+            </p>
+
+            <div class="info-box">
+                <h3>The MT-Bench & Chatbot Arena Framework</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2306.05685" target="_blank">Zheng et al. (2023)</a> introduced two 
+                    complementary evaluation systems:
+                </p>
+                <ul>
+                    <li>
+                        <strong>MT-Bench:</strong> A curated benchmark of 80 multi-turn conversation prompts across 
+                        8 categories (writing, roleplay, reasoning, math, coding, STEM, humanities, extraction). 
+                        GPT-4 judges model responses on a 1-10 scale.
+                    </li>
+                    <li>
+                        <strong>Chatbot Arena:</strong> A crowdsourced platform where users chat with two anonymous 
+                        models side-by-side and vote for which is better. Elo ratings emerge from thousands of pairwise 
+                        comparisons.
+                    </li>
+                </ul>
+                <p>
+                    Together, these systems enabled the first rigorous study of <strong>LLM judges</strong>: their agreement 
+                    with humans, their biases (position, verbosity, self-preference), and how to mitigate those biases.
+                </p>
+            </div>
+
+            <h3>What You'll Learn</h3>
+            <p>This lesson covers:</p>
+            <ul>
+                <li>Why open-ended chat quality is hard to benchmark with multiple-choice tests</li>
+                <li>MT-Bench design: 80 multi-turn questions across 8 categories, two-turn structure</li>
+                <li>Chatbot Arena: crowdsourced pairwise votes, Elo ratings, Bradley-Terry model</li>
+                <li>Three LLM judging modes: pairwise comparison, single-answer grading, reference-guided grading</li>
+                <li>Judge biases: position bias, verbosity bias, self-enhancement bias</li>
+                <li>Mitigation strategies: swap positions, few-shot prompting, chain-of-thought, reference answers for math</li>
+                <li>Agreement results: GPT-4 vs human agreement (~80-85%), comparable to human-human agreement</li>
+                <li>Connection to post-training: how LLM judges and pairwise preferences enable RLHF/DPO, and pitfalls like reward hacking</li>
+            </ul>
+
+            <p>
+                By the end, you'll understand when LLM judges are reliable, what their failure modes are, and how they 
+                connect to the preference-based training methods from Lessons 02 and 04.
+            </p>
+        </section>
+
+        <section id="the-problem" class="content-section">
+            <h2>The Evaluation Gap: Why Multiple Choice Isn't Enough</h2>
+            <p>
+                Let's revisit benchmarks from earlier lessons and examine why they fall short for evaluating chat models.
+            </p>
+
+            <h3>MMLU (Lesson 01): Knowledge But Not Application</h3>
+            <p>
+                <strong>What it measures:</strong> Factual knowledge across 57 academic subjects via multiple choice.<br>
+                <strong>What it misses:</strong> Can the model <em>use</em> that knowledge to help a user? A model might 
+                ace MMLU but produce verbose, unhelpful, or condescending responses when asked for practical advice.
+            </p>
+
+            <h3>GSM8K (Lesson 03): Reasoning But Not Explanation</h3>
+            <p>
+                <strong>What it measures:</strong> Multi-step reasoning on grade-school math problems with verifiable numeric answers.<br>
+                <strong>What it misses:</strong> GSM8K doesn't measure whether the model explains its reasoning clearly, 
+                whether it catches its own errors, or whether it follows instructions (e.g., "explain this to a 10-year-old").
+            </p>
+
+            <h3>The Open-Ended Conversation Challenge</h3>
+            <p>
+                Real users don't ask multiple-choice questions. They ask:
+            </p>
+            <ul>
+                <li>"Help me write a cover letter for a software engineering job."</li>
+                <li>"What should I cook for dinner tonight? I have chicken, rice, and broccoli."</li>
+                <li>"Explain quantum entanglement like I'm five."</li>
+                <li>"Write a Python script to scrape a website." (Then: "Now add error handling.")</li>
+            </ul>
+            <p>
+                These prompts have <strong>no single correct answer</strong>. Quality is subjective: one user wants 
+                conciseness, another wants detail. Evaluating these requires human judgment—or a scalable proxy for it.
+            </p>
+
+            <div class="info-box">
+                <h3>Why Not Just Use Humans?</h3>
+                <p>
+                    Human evaluation is the gold standard, but it has serious limitations:
+                </p>
+                <ul>
+                    <li><strong>Expensive:</strong> $10-50+ per comparison depending on evaluator expertise</li>
+                    <li><strong>Slow:</strong> Days or weeks to collect hundreds of judgments</li>
+                    <li><strong>Doesn't scale:</strong> Training runs produce dozens of checkpoints; evaluating each is infeasible</li>
+                    <li><strong>Inconsistent:</strong> Human annotators disagree (~70-80% agreement on preference tasks)</li>
+                </ul>
+                <p>
+                    LLM judges offer a potential solution: <strong>scalable, fast, and cheap</strong> evaluation that 
+                    approximates human preferences. But do they work? That's what MT-Bench and Chatbot Arena measure.
+                </p>
+            </div>
+        </section>
+
+        <section id="mt-bench" class="content-section">
+            <h2>MT-Bench: Multi-Turn Benchmark Design</h2>
+            <p>
+                MT-Bench (Multi-Turn Benchmark) is a curated set of 80 conversation prompts designed to test chat models 
+                on realistic, open-ended tasks.
+            </p>
+
+            <h3>Design Principles</h3>
+            <div class="info-box">
+                <h4>1. Multi-Turn Conversations (Two Turns)</h4>
+                <p>
+                    Each MT-Bench question has <strong>two turns</strong>:
+                </p>
+                <ul>
+                    <li><strong>Turn 1:</strong> Initial user request (e.g., "Write a short poem about a sunset")</li>
+                    <li><strong>Turn 2:</strong> Follow-up that builds on Turn 1 (e.g., "Now rewrite it in the style of Shakespeare")</li>
+                </ul>
+                <p>
+                    This tests whether the model maintains context and handles dependencies—critical for real conversations.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Eight Categories</h4>
+                <p>
+                    MT-Bench covers diverse conversation types:
+                </p>
+                <ul>
+                    <li><strong>Writing:</strong> Creative and professional writing tasks (emails, stories, summaries)</li>
+                    <li><strong>Roleplay:</strong> Acting as a character or expert (travel agent, interviewer, therapist)</li>
+                    <li><strong>Reasoning:</strong> Logical puzzles, strategic thinking, causal reasoning</li>
+                    <li><strong>Math:</strong> Problem-solving with calculation and explanation</li>
+                    <li><strong>Coding:</strong> Writing, debugging, and explaining code</li>
+                    <li><strong>Extraction:</strong> Pulling structured info from text (names, dates, entities)</li>
+                    <li><strong>STEM:</strong> Science, technology, engineering questions</li>
+                    <li><strong>Humanities:</strong> History, philosophy, social sciences</li>
+                </ul>
+                <p>
+                    Each category has 10 questions, for 80 total (80 × 2 turns = 160 prompts per model evaluated).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. GPT-4 as Judge</h4>
+                <p>
+                    Each model response is evaluated by <strong>GPT-4</strong> on a 1-10 scale. The judge prompt instructs 
+                    GPT-4 to consider:
+                </p>
+                <ul>
+                    <li>Helpfulness: Does the response address the user's request?</li>
+                    <li>Relevance: Is it on-topic and accurate?</li>
+                    <li>Accuracy: Are facts correct (for knowledge/math questions)?</li>
+                    <li>Depth: Is the level of detail appropriate?</li>
+                    <li>Creativity: Is the response engaging and well-written (for creative tasks)?</li>
+                    <li>Level of detail: Not too brief, not too verbose</li>
+                </ul>
+                <p>
+                    GPT-4 provides both a numeric score (1-10) and a brief justification for that score.
+                </p>
+            </div>
+
+            <h3>Example MT-Bench Question</h3>
+            <div class="sample-question">
+                <h4>Category: Writing</h4>
+                <p><strong>Turn 1:</strong> Compose an engaging travel blog post about a recent trip to Hawaii, highlighting cultural experiences and must-see attractions.</p>
+                <p><strong>Turn 2:</strong> Rewrite your previous response. Start every sentence with the letter 'A'.</p>
+                <p class="chart-caption">
+                    Turn 2 tests instruction-following and creativity under constraints. A model that ignores the constraint 
+                    or produces nonsensical output scores low. A model that successfully rewrites with every sentence starting 
+                    with 'A' while maintaining coherence scores high.
+                </p>
+            </div>
+
+            <h3>Scoring and Aggregation</h3>
+            <p>
+                Each turn receives a score from 1-10. Final MT-Bench scores are the <strong>average across all 160 turns</strong> 
+                (80 questions × 2 turns). Models are ranked by this average.
+            </p>
+            <p>
+                Example leaderboard snapshot (as of paper publication, mid-2023):
+            </p>
+            <ul>
+                <li><strong>GPT-4:</strong> 8.99 / 10</li>
+                <li><strong>Claude-v1:</strong> 7.90 / 10</li>
+                <li><strong>GPT-3.5-turbo:</strong> 7.94 / 10</li>
+                <li><strong>Vicuna-13B:</strong> 6.39 / 10</li>
+                <li><strong>LLaMA-13B:</strong> 4.51 / 10</li>
+            </ul>
+            <p class="chart-caption">
+                MT-Bench revealed that instruction-tuned open models (Vicuna) significantly outperformed base models (LLaMA) 
+                on conversation quality, even when both had similar MMLU scores.
+            </p>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Findings</h2>
+            <p>
+                The MT-Bench paper (<a href="https://arxiv.org/abs/2306.05685" target="_blank">Zheng et al., 2023</a>) 
+                provides the first rigorous empirical study of LLM judges. Here are the most important results:
+            </p>
+
+            <div class="info-box">
+                <h3>Finding 1: GPT-4 Agrees with Humans ~80-85%</h3>
+                <blockquote>
+                    "We find that GPT-4 achieves over 80% agreement with human judges in pairwise comparisons, 
+                    which is comparable to the agreement rate between different human judges."
+                    <footer>— Section 4.2, <a href="https://arxiv.org/abs/2306.05685" target="_blank">arXiv:2306.05685</a></footer>
+                </blockquote>
+                <p>
+                    On a subset of 500 pairwise comparisons, GPT-4's judgments matched human preferences <strong>80.3%</strong> 
+                    of the time. Human-human agreement on the same set was <strong>81.0%</strong>, meaning GPT-4 is 
+                    <em>nearly as consistent as humans judging each other</em>.
+                </p>
+                <p>
+                    This result validated LLM-as-a-judge as a practical evaluation method—it's not perfect, but it's 
+                    good enough to be useful.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 2: Chatbot Arena Correlates with MT-Bench</h3>
+                <blockquote>
+                    "The Chatbot Arena Elo ratings correlate strongly with MT-Bench scores (Spearman ρ = 0.93), 
+                    indicating that both methods measure similar underlying model quality."
+                    <footer>— Section 5.1, <a href="https://arxiv.org/abs/2306.05685" target="_blank">arXiv:2306.05685</a></footer>
+                </blockquote>
+                <p>
+                    Chatbot Arena uses <strong>real user votes</strong>—thousands of crowdsourced pairwise comparisons 
+                    from the public. These votes are converted into Elo ratings (like chess rankings). The strong correlation 
+                    (ρ = 0.93) between Arena Elo and MT-Bench scores shows that GPT-4 judge evaluations track real human 
+                    preferences at scale.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 3: Single-Answer Grading is Less Reliable</h3>
+                <p>
+                    The paper tested three judging modes:
+                </p>
+                <ul>
+                    <li><strong>Pairwise comparison:</strong> "Is response A or B better?" (Most reliable)</li>
+                    <li><strong>Single-answer grading:</strong> "Rate this response on a scale of 1-10." (Less reliable)</li>
+                    <li><strong>Reference-guided grading:</strong> "Compare this response to a reference answer." (Best for math/factual tasks)</li>
+                </ul>
+                <p>
+                    Pairwise comparison had the <strong>highest agreement with humans</strong> (~80%) because it forces 
+                    a direct choice. Single-answer grading was more subjective—GPT-4 often gave inflated scores (mean ~7/10), 
+                    making it harder to differentiate models.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 4: Position Bias is Real but Manageable</h3>
+                <blockquote>
+                    "GPT-4 exhibits position bias, preferring the first response in a pair ~60% of the time 
+                    when order is not randomized. Swapping positions and averaging mitigates this bias."
+                    <footer>— Section 4.3, <a href="https://arxiv.org/abs/2306.05685" target="_blank">arXiv:2306.05685</a></footer>
+                </blockquote>
+                <p>
+                    When judging "Response A vs Response B," GPT-4 slightly prefers whichever is shown first. 
+                    The solution: <strong>evaluate both orders</strong> (A vs B and B vs A), then aggregate. 
+                    This reduces bias from ~60% to ~50% (random baseline).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 5: Verbosity Bias</h3>
+                <p>
+                    GPT-4 judges tend to prefer <strong>longer responses</strong>, even when brevity is more appropriate. 
+                    This mirrors human annotator biases—longer often feels more "helpful"—but it can be gamed.
+                </p>
+                <p>
+                    <strong>Mitigation:</strong> Include "appropriate level of detail" in judge prompts, or use length-controlled 
+                    evaluation (penalize excessive verbosity explicitly).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 6: Self-Enhancement Bias</h3>
+                <p>
+                    When GPT-4 judges its own outputs against another model, it shows <strong>self-enhancement bias</strong>—preferring 
+                    its own responses more than humans do (~10 percentage point gap).
+                </p>
+                <p>
+                    <strong>Implication:</strong> Don't use a model to judge itself. Use a <em>separate, stronger</em> judge 
+                    (e.g., GPT-4 judging GPT-3.5) or multiple judges for cross-validation.
+                </p>
+            </div>
+        </section>
+
+        <section id="chatbot-arena" class="content-section">
+            <h2>Chatbot Arena: Crowdsourced Preferences at Scale</h2>
+            <p>
+                While MT-Bench uses a <strong>fixed</strong> set of questions with GPT-4 as judge, 
+                <strong>Chatbot Arena</strong> collects <strong>real user preferences</strong> on arbitrary prompts 
+                from the public.
+            </p>
+
+            <h3>How Chatbot Arena Works</h3>
+            <div class="info-box">
+                <h4>1. Anonymous Side-by-Side Comparison</h4>
+                <p>
+                    Users visit the Arena platform, type a prompt, and receive responses from two anonymous models 
+                    (labeled "Model A" and "Model B"). After reading both, the user votes for which is better—or declares a tie.
+                </p>
+                <p>
+                    <strong>Model identities are hidden</strong> until after voting, preventing brand bias (e.g., assuming 
+                    GPT-4 is better because of its reputation).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Elo Rating System</h4>
+                <p>
+                    Votes are converted into <strong>Elo ratings</strong> (borrowed from chess). Each model starts with 
+                    a baseline rating (e.g., 1500). When Model A beats Model B:
+                </p>
+                <ul>
+                    <li>Model A gains Elo points (more points if B was rated higher—an "upset")</li>
+                    <li>Model B loses Elo points</li>
+                </ul>
+                <p>
+                    After thousands of comparisons, Elo ratings converge to reflect true model strength. A 100-point 
+                    difference means the higher-rated model wins ~64% of matchups; a 200-point difference means ~76%.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. Bradley-Terry Model</h4>
+                <p>
+                    The Elo system is equivalent to the <strong>Bradley-Terry preference model</strong> from Lesson 04 (DPO):
+                </p>
+                <div class="math-block">
+                    $$
+                    P(\text{Model A beats Model B}) = \frac{1}{1 + 10^{(R_B - R_A)/400}}
+                    $$
+                </div>
+                <p>
+                    Where \(R_A\) and \(R_B\) are Elo ratings. This is the same sigmoid preference model used in RLHF reward 
+                    training and DPO, connecting evaluation methodology to post-training techniques.
+                </p>
+            </div>
+
+            <h3>Chatbot Arena Statistics (as of paper publication)</h3>
+            <ul>
+                <li><strong>Total votes collected:</strong> ~70,000 pairwise comparisons</li>
+                <li><strong>Top models:</strong> GPT-4 (Elo ~1250), Claude-v1 (Elo ~1180), GPT-3.5 (Elo ~1140)</li>
+                <li><strong>Prompt diversity:</strong> Creative writing (31%), technical questions (27%), roleplay (18%), general knowledge (24%)</li>
+            </ul>
+
+            <h3>Why Arena Matters</h3>
+            <p>
+                Chatbot Arena provides:
+            </p>
+            <ul>
+                <li><strong>Unbiased human preferences:</strong> No researcher-designed prompts; users bring their real use cases</li>
+                <li><strong>Continuous evaluation:</strong> New models can be added to the Arena at any time; rankings update live</li>
+                <li><strong>Validation for LLM judges:</strong> Arena Elo correlates with MT-Bench scores, showing that GPT-4 judge is a good proxy for crowd preferences</li>
+            </ul>
+            <p>
+                Arena has become the de facto leaderboard for chat models, complementing static benchmarks like MMLU.
+            </p>
+        </section>
+
+        <section id="judging-modes" class="content-section">
+            <h2>Three LLM Judging Modes</h2>
+            <p>
+                The paper evaluates three ways to use an LLM as a judge. Each has different strengths and failure modes.
+            </p>
+
+            <h3>Mode 1: Pairwise Comparison</h3>
+            <div class="info-box">
+                <h4>How It Works</h4>
+                <p>
+                    Show the judge two responses to the same prompt and ask: "Which is better, A or B (or tie)?"
+                </p>
+                <p><strong>Example Prompt:</strong></p>
+                <pre><code>You are a helpful assistant. Compare the following two responses to the user question and determine which is better.
+
+Question: Explain why the sky is blue.
+
+Response A: [Model A's answer]
+
+Response B: [Model B's answer]
+
+Which response is better? Consider helpfulness, accuracy, and clarity. Output only "A", "B", or "Tie".</code></pre>
+            </div>
+
+            <div class="info-box">
+                <h4>Strengths</h4>
+                <ul>
+                    <li><strong>Most reliable:</strong> 80%+ agreement with humans (highest of all modes)</li>
+                    <li><strong>Robust ranking:</strong> Repeated pairwise comparisons build consistent leaderboards</li>
+                    <li><strong>Matches human evaluation workflow:</strong> Humans also find relative comparison easier than absolute scoring</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Weaknesses</h4>
+                <ul>
+                    <li><strong>Position bias:</strong> Judge may prefer the first response (mitigate by swapping)</li>
+                    <li><strong>Quadratic cost:</strong> Comparing N models requires O(N²) evaluations</li>
+                    <li><strong>No absolute scale:</strong> You only know relative ranking, not quality gaps</li>
+                </ul>
+            </div>
+
+            <h3>Mode 2: Single-Answer Grading</h3>
+            <div class="info-box">
+                <h4>How It Works</h4>
+                <p>
+                    Show the judge one response and ask for a numeric score (e.g., 1-10).
+                </p>
+                <p><strong>Example Prompt:</strong></p>
+                <pre><code>You are a helpful assistant. Rate the following response on a scale of 1 to 10, where 1 is poor and 10 is excellent.
+
+Question: Explain why the sky is blue.
+
+Response: [Model's answer]
+
+Consider helpfulness, accuracy, and clarity. Provide a score and brief justification.</code></pre>
+            </div>
+
+            <div class="info-box">
+                <h4>Strengths</h4>
+                <ul>
+                    <li><strong>Efficient:</strong> O(N) evaluations for N models</li>
+                    <li><strong>Absolute scores:</strong> Can measure quality gaps, not just rankings</li>
+                    <li><strong>Easier to interpret:</strong> "8/10" is more intuitive than "beats Vicuna 65% of the time"</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Weaknesses</h4>
+                <ul>
+                    <li><strong>Lower agreement with humans:</strong> ~70-75% (humans are inconsistent on absolute scales)</li>
+                    <li><strong>Scale calibration issues:</strong> GPT-4 tends to give inflated scores (mean ~7/10), compressing the range</li>
+                    <li><strong>Verbosity bias:</strong> Longer responses get higher scores even when not better</li>
+                </ul>
+            </div>
+
+            <h3>Mode 3: Reference-Guided Grading</h3>
+            <div class="info-box">
+                <h4>How It Works</h4>
+                <p>
+                    Provide a <strong>reference answer</strong> (ground truth or expert response) and ask the judge to 
+                    compare the model's response to it.
+                </p>
+                <p><strong>Example Prompt:</strong></p>
+                <pre><code>You are a helpful assistant. Compare the model's response to the reference answer and rate how well it matches.
+
+Question: What is 15% of 240?
+
+Reference Answer: 36
+
+Model Response: [Model's answer]
+
+Rate from 1-10 how correct and complete the response is. Consider accuracy, explanation quality, and clarity.</code></pre>
+            </div>
+
+            <div class="info-box">
+                <h4>Strengths</h4>
+                <ul>
+                    <li><strong>Best for factual/math tasks:</strong> Ground truth anchors evaluation, reducing subjectivity</li>
+                    <li><strong>Reduces verbosity bias:</strong> Judge focuses on correctness, not length</li>
+                    <li><strong>Chain-of-thought grading:</strong> Can check if reasoning steps are correct, not just the final answer</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Weaknesses</h4>
+                <ul>
+                    <li><strong>Requires reference answers:</strong> Not applicable to open-ended creative tasks</li>
+                    <li><strong>May penalize valid alternative approaches:</strong> If the reference uses Method A but the model uses correct Method B, judge might score it lower</li>
+                </ul>
+            </div>
+
+            <h3>Which Mode to Use?</h3>
+            <ul>
+                <li><strong>Pairwise comparison:</strong> Default choice for general chat quality evaluation (most reliable)</li>
+                <li><strong>Single-answer grading:</strong> Quick iteration during development when you need fast feedback</li>
+                <li><strong>Reference-guided:</strong> Math, coding, extraction, or any task with verifiable ground truth</li>
+            </ul>
+        </section>
+
+        <section id="judge-biases" class="content-section">
+            <h2>Judge Biases and How to Mitigate Them</h2>
+            <p>
+                LLM judges aren't perfect. They inherit biases from their training data and prompting. Understanding 
+                these biases is critical for building fair evaluation systems.
+            </p>
+
+            <h3>Bias 1: Position Bias</h3>
+            <div class="limitation-card">
+                <h4>What It Is</h4>
+                <p>
+                    When shown "Response A vs Response B," the judge prefers whichever appears first ~60% of the time, 
+                    even when both are equal quality.
+                </p>
+                <h4>Why It Happens</h4>
+                <p>
+                    LLMs are trained on text where the first option is often correct (e.g., "The answer is A. B is wrong."). 
+                    This creates an ordering prior that persists in judgment tasks.
+                </p>
+                <h4>Mitigation</h4>
+                <ul>
+                    <li><strong>Swap positions:</strong> Evaluate both "A vs B" and "B vs A", then aggregate (if both orders agree, high confidence; if they disagree, mark as tie)</li>
+                    <li><strong>Randomize order:</strong> Don't always put the baseline first—vary which model is Position 1</li>
+                    <li><strong>Few-shot prompting:</strong> Include examples in the judge prompt where the second response is better</li>
+                </ul>
+            </div>
+
+            <h3>Bias 2: Verbosity Bias (Length Bias)</h3>
+            <div class="limitation-card">
+                <h4>What It Is</h4>
+                <p>
+                    Judges prefer longer responses, even when brevity is appropriate. On average, responses 50%+ longer 
+                    than competitors win ~65% of pairwise matchups, regardless of quality.
+                </p>
+                <h4>Why It Happens</h4>
+                <p>
+                    Human annotators also prefer longer responses (length correlates with effort and detail). LLM judges 
+                    inherit this bias. Additionally, verbose responses often include caveats and nuance, which <em>seem</em> 
+                    more thoughtful.
+                </p>
+                <h4>Mitigation</h4>
+                <ul>
+                    <li><strong>Explicit judge instructions:</strong> "Prefer concise answers when appropriate. Penalize unnecessary verbosity."</li>
+                    <li><strong>Length-controlled evaluation:</strong> Normalize scores by response length or explicitly track length separately</li>
+                    <li><strong>Length-controlled benchmarks:</strong> Variants like AlpacaEval 2.0 address this by penalizing length in win rate calculations</li>
+                </ul>
+            </div>
+
+            <h3>Bias 3: Self-Enhancement Bias</h3>
+            <div class="limitation-card">
+                <h4>What It Is</h4>
+                <p>
+                    When judging its own outputs vs another model, GPT-4 prefers itself ~10 percentage points more than 
+                    humans do. Example: if humans prefer GPT-4 over Model X 70% of the time, GPT-4 self-judges prefer 
+                    itself 80% of the time.
+                </p>
+                <h4>Why It Happens</h4>
+                <p>
+                    GPT-4 recognizes its own writing style (phrasing, structure, tone). Even if model outputs are anonymized, 
+                    subtle patterns leak identity.
+                </p>
+                <h4>Mitigation</h4>
+                <ul>
+                    <li><strong>Never use a model to judge itself:</strong> Use a separate judge (e.g., GPT-4 judging Claude or GPT-3.5)</li>
+                    <li><strong>Multi-judge consensus:</strong> Use multiple LLM judges (GPT-4, Claude, Gemini) and aggregate their votes</li>
+                    <li><strong>Blind with paraphrasing:</strong> Rewrite responses to mask style before judging (expensive, rarely done in practice)</li>
+                </ul>
+            </div>
+
+            <h3>Bias 4: Sensitivity to Prompt Phrasing</h3>
+            <div class="limitation-card">
+                <h4>What It Is</h4>
+                <p>
+                    Small changes to the judge prompt can swing verdicts by 10-15%. Example: "Which is better?" vs 
+                    "Which is more helpful?" can produce different rankings.
+                </p>
+                <h4>Mitigation</h4>
+                <ul>
+                    <li><strong>Standardized judge prompts:</strong> Use tested, fixed templates (MT-Bench provides theirs)</li>
+                    <li><strong>Multi-criteria prompts:</strong> Ask judge to consider multiple dimensions (helpfulness, accuracy, clarity) and average</li>
+                    <li><strong>Calibration on known pairs:</strong> Test your judge prompt on examples with known human labels first</li>
+                </ul>
+            </div>
+
+            <h3>Summary: Mitigating Judge Bias</h3>
+            <div class="info-box">
+                <h4>Best Practices</h4>
+                <ul>
+                    <li>Use <strong>pairwise comparison</strong> mode (most reliable)</li>
+                    <li><strong>Swap positions</strong> and aggregate to cancel position bias</li>
+                    <li>Include <strong>explicit instructions</strong> about appropriate detail level</li>
+                    <li>Use <strong>reference answers</strong> for math/code to reduce subjectivity</li>
+                    <li><strong>Never let a model judge itself</strong>—use a separate, stronger judge</li>
+                    <li><strong>Chain-of-thought prompting:</strong> Ask the judge to explain its reasoning before rendering verdict (improves consistency)</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="agreement" class="content-section">
+            <h2>Agreement Results: Judges vs Humans</h2>
+            <p>
+                How well do LLM judges track human preferences? The MT-Bench paper quantifies this with agreement rate studies.
+            </p>
+
+            <h3>Methodology</h3>
+            <p>
+                The authors collected 500 pairwise human judgments on MT-Bench questions (crowdworkers voted which of 
+                two model responses was better). They then:
+            </p>
+            <ol>
+                <li>Had GPT-4 judge the same 500 pairs</li>
+                <li>Measured agreement rate: % of pairs where judge and humans agreed</li>
+                <li>Compared to human-human agreement (two human annotators judging the same pairs)</li>
+            </ol>
+
+            <h3>Results</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Judge</th>
+                        <th>Agreement with Humans</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Human-Human</td>
+                        <td>81.0%</td>
+                        <td>Baseline: How often two humans agree</td>
+                    </tr>
+                    <tr>
+                        <td>GPT-4</td>
+                        <td>80.3%</td>
+                        <td>Nearly matches human-human agreement</td>
+                    </tr>
+                    <tr>
+                        <td>GPT-3.5</td>
+                        <td>74.2%</td>
+                        <td>Weaker model, lower agreement</td>
+                    </tr>
+                    <tr>
+                        <td>Claude-v1</td>
+                        <td>77.8%</td>
+                        <td>Competitive alternative judge</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Interpretation</h3>
+            <div class="info-box">
+                <h4>GPT-4 as Proxy for Human Judgment</h4>
+                <p>
+                    <strong>80.3% agreement</strong> means GPT-4 matched human preferences on <strong>402 out of 500 pairs</strong>. 
+                    This is only 0.7 percentage points below human-human agreement (81.0%).
+                </p>
+                <p>
+                    Implication: <em>GPT-4 disagreeing with a single human annotator is no more concerning than two humans 
+                    disagreeing with each other.</em> LLM judges are noisy, but so are humans.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Why Not 100%?</h4>
+                <p>
+                    The ~20% disagreement comes from:
+                </p>
+                <ul>
+                    <li><strong>Legitimately subjective preferences:</strong> Some pairs have no clear winner (different users want different things)</li>
+                    <li><strong>Judge biases:</strong> Position bias, verbosity bias contribute to some errors</li>
+                    <li><strong>Human annotator noise:</strong> Humans make mistakes, rush judgments, or apply inconsistent criteria</li>
+                </ul>
+                <p>
+                    Even 70-75% agreement would be useful for coarse model ranking. 80%+ makes LLM judges practical for 
+                    fine-grained evaluation.
+                </p>
+            </div>
+
+            <h3>Agreement by Category</h3>
+            <p>
+                Agreement varies by task type:
+            </p>
+            <ul>
+                <li><strong>Math:</strong> ~90% agreement (most objective—either right or wrong)</li>
+                <li><strong>Coding:</strong> ~85% agreement (can verify correctness)</li>
+                <li><strong>Writing/Roleplay:</strong> ~75% agreement (highly subjective)</li>
+                <li><strong>Reasoning:</strong> ~78% agreement (depends on problem clarity)</li>
+            </ul>
+            <p>
+                <strong>Takeaway:</strong> LLM judges are most reliable for objective tasks with verifiable correctness. 
+                For creative/subjective tasks, agreement is lower but still useful.
+            </p>
+
+            <h3>Comparison to Automatic Metrics</h3>
+            <p>
+                How does LLM-as-judge compare to traditional NLP metrics?
+            </p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Agreement with Humans</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>BLEU (n-gram overlap)</td>
+                        <td>~45%</td>
+                        <td>Poor for open-ended generation</td>
+                    </tr>
+                    <tr>
+                        <td>ROUGE (summarization)</td>
+                        <td>~52%</td>
+                        <td>Better than BLEU but still weak</td>
+                    </tr>
+                    <tr>
+                        <td>BERTScore (embedding similarity)</td>
+                        <td>~60%</td>
+                        <td>Captures semantic similarity, misses quality</td>
+                    </tr>
+                    <tr>
+                        <td>GPT-4 Judge</td>
+                        <td><strong>80.3%</strong></td>
+                        <td>Closest to human judgment</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                LLM judges vastly outperform traditional metrics, which don't capture helpfulness, instruction-following, 
+                or conversational quality.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Check your knowledge of LLM-as-judge, MT-Bench, and evaluation methodology.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: Why LLM-as-Judge?</h3>
+                    <p>What is the main advantage of using LLM judges like GPT-4 over human evaluation?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">LLM judges are always more accurate than humans</button>
+                        <button class="quiz-option" data-answer="correct">LLM judges are scalable, fast, and cheap while achieving ~80% agreement with humans</button>
+                        <button class="quiz-option" data-answer="wrong">LLM judges have no biases</button>
+                        <button class="quiz-option" data-answer="wrong">LLM judges work for all tasks including math and coding</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: MT-Bench Structure</h3>
+                    <p>How is MT-Bench structured?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">100 single-turn questions with multiple choice answers</button>
+                        <button class="quiz-option" data-answer="correct">80 multi-turn questions (2 turns each) across 8 categories, judged by GPT-4 on 1-10 scale</button>
+                        <button class="quiz-option" data-answer="wrong">50 coding problems with automated test cases</button>
+                        <button class="quiz-option" data-answer="wrong">200 math problems with numeric answers</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Chatbot Arena</h3>
+                    <p>How does Chatbot Arena work?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Researchers design prompts and hire annotators to vote</button>
+                        <button class="quiz-option" data-answer="correct">Users chat with two anonymous models side-by-side and vote; votes are converted to Elo ratings</button>
+                        <button class="quiz-option" data-answer="wrong">GPT-4 automatically ranks all models on a leaderboard</button>
+                        <button class="quiz-option" data-answer="wrong">Models compete in coding challenges with objective scores</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: Most Reliable Judging Mode</h3>
+                    <p>Which judging mode has the highest agreement with human preferences?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Single-answer grading (1-10 scale)</button>
+                        <button class="quiz-option" data-answer="correct">Pairwise comparison ("Which is better, A or B?")</button>
+                        <button class="quiz-option" data-answer="wrong">Reference-guided grading</button>
+                        <button class="quiz-option" data-answer="wrong">All modes have equal reliability</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: Position Bias</h3>
+                    <p>What is position bias and how do you mitigate it?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The judge prefers models trained by certain companies; mitigate by anonymizing company names</button>
+                        <button class="quiz-option" data-answer="correct">The judge prefers whichever response appears first (~60%); mitigate by swapping order and aggregating</button>
+                        <button class="quiz-option" data-answer="wrong">The judge prefers responses in certain positions of the conversation; no good mitigation</button>
+                        <button class="quiz-option" data-answer="wrong">Position bias only affects humans, not LLM judges</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: Verbosity Bias</h3>
+                    <p>What is verbosity bias?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Judges prefer concise responses regardless of quality</button>
+                        <button class="quiz-option" data-answer="correct">Judges prefer longer responses, even when brevity is more appropriate</button>
+                        <button class="quiz-option" data-answer="wrong">Judges can't evaluate long responses accurately</button>
+                        <button class="quiz-option" data-answer="wrong">Verbosity bias only affects human judges, not LLMs</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: GPT-4 Agreement Rate</h3>
+                    <p>How often does GPT-4 agree with human judges on pairwise comparisons?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">~95% (near perfect)</button>
+                        <button class="quiz-option" data-answer="correct">~80%, which is comparable to human-human agreement (~81%)</button>
+                        <button class="quiz-option" data-answer="wrong">~65% (barely better than random)</button>
+                        <button class="quiz-option" data-answer="wrong">~50% (same as random guessing)</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: Self-Enhancement Bias</h3>
+                    <p>What is self-enhancement bias?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">The judge always prefers its own responses (100% of the time)</button>
+                        <button class="quiz-option" data-answer="correct">When judging its own outputs, the model prefers itself ~10 percentage points more than humans do</button>
+                        <button class="quiz-option" data-answer="wrong">The judge enhances (improves) responses before judging them</button>
+                        <button class="quiz-option" data-answer="wrong">Self-enhancement bias doesn't exist in LLM judges</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: Reference-Guided Grading</h3>
+                    <p>When is reference-guided grading most useful?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Creative writing and open-ended conversation</button>
+                        <button class="quiz-option" data-answer="correct">Math, coding, and factual tasks where there's ground truth</button>
+                        <button class="quiz-option" data-answer="wrong">Reference-guided is always better than pairwise comparison</button>
+                        <button class="quiz-option" data-answer="wrong">Reference-guided never works for LLM judges</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: Traditional Metrics vs LLM Judges</h3>
+                    <p>How do traditional metrics (BLEU, ROUGE) compare to LLM judges?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">BLEU and ROUGE have ~80% agreement with humans, same as GPT-4</button>
+                        <button class="quiz-option" data-answer="correct">BLEU/ROUGE have only ~45-52% agreement; GPT-4 at ~80% vastly outperforms them</button>
+                        <button class="quiz-option" data-answer="wrong">Traditional metrics are more reliable because they're objective</button>
+                        <button class="quiz-option" data-answer="wrong">LLM judges and traditional metrics measure completely different things</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="mtbench-explorer" class="content-section">
+            <h2>Interactive: MT-Bench Question Explorer</h2>
+            <p>
+                Browse real MT-Bench questions across different categories. Each question has two turns to test 
+                multi-turn conversation ability.
+            </p>
+
+            <div class="explorer-controls">
+                <label for="category-select">Select Category:</label>
+                <select id="category-select">
+                    <option value="writing">Writing</option>
+                    <option value="roleplay">Roleplay</option>
+                    <option value="reasoning">Reasoning</option>
+                    <option value="math">Math</option>
+                    <option value="coding">Coding</option>
+                    <option value="extraction">Extraction</option>
+                    <option value="stem">STEM</option>
+                    <option value="humanities">Humanities</option>
+                </select>
+            </div>
+
+            <div id="mtbench-display" class="question-display"></div>
+        </section>
+
+        <section id="data-charts" class="content-section">
+            <h2>Data & Visualizations</h2>
+            <p>
+                Explore agreement data, position bias demonstrations, and interactive Elo rating simulations.
+            </p>
+
+            <h3>Judge-Human Agreement Rates</h3>
+            <p class="chart-caption">
+                Agreement between different judges and human annotators on 500 pairwise comparisons. 
+                Data from Table 3, Zheng et al. (2023).
+            </p>
+            <div class="chart-container">
+                <canvas id="agreement-chart"></canvas>
+            </div>
+
+            <h3>Position Bias Demonstration</h3>
+            <p class="chart-caption">
+                When the same pair is judged in both orders (A vs B and B vs A), how often does the judge 
+                change its verdict? Lower swap rate = less position bias.
+            </p>
+            <div class="chart-container">
+                <canvas id="position-bias-chart"></canvas>
+            </div>
+
+            <h3>Interactive: Elo Rating Simulator</h3>
+            <p>
+                Add pairwise votes and watch Elo ratings update in real-time. This demonstrates how Chatbot Arena 
+                converts votes into rankings.
+            </p>
+            <div id="elo-simulator"></div>
+        </section>
+
+        <section id="bridge-to-training" class="content-section">
+            <h2>Bridge to Post-Training: Judges, Preferences, and Reward Hacking</h2>
+            <p>
+                LLM-as-judge evaluation isn't just for benchmarking—it's deeply connected to <strong>post-training methods</strong> 
+                from Lessons 02 and 04.
+            </p>
+
+            <h3>Connection 1: Preference Data Collection</h3>
+            <div class="info-box">
+                <h4>From Evaluation to Training Data</h4>
+                <p>
+                    In Lesson 02 (RLHF) and Lesson 04 (DPO), you learned that preference optimization requires preference 
+                    pairs: (prompt, chosen response, rejected response). Where do these come from?
+                </p>
+                <ul>
+                    <li><strong>Human labeling (expensive):</strong> Hire annotators to rank model outputs</li>
+                    <li><strong>LLM judges (scalable):</strong> Generate multiple responses per prompt, use GPT-4 to rank them</li>
+                </ul>
+                <p>
+                    <strong>RLAIF (Reinforcement Learning from AI Feedback):</strong> The practice of using LLM judges 
+                    to generate preference data instead of humans. If GPT-4 agrees with humans 80% of the time, then 
+                    training on GPT-4 preferences should recover 80% of the benefit of training on human preferences—at 
+                    a fraction of the cost.
+                </p>
+            </div>
+
+            <h3>Connection 2: The Bradley-Terry Model</h3>
+            <p>
+                Chatbot Arena's Elo system and the Bradley-Terry preference model are the <em>same math</em> used in 
+                RLHF reward model training (Lesson 02) and DPO (Lesson 04):
+            </p>
+            <div class="math-block">
+                $$
+                P(\text{Model A preferred over Model B}) = \sigma(r_A - r_B) = \frac{1}{1 + e^{-(r_A - r_B)}}
+                $$
+            </div>
+            <p>
+                In Chatbot Arena, \(r_A\) and \(r_B\) are Elo ratings. In RLHF, they're reward model outputs. In DPO, 
+                they're implicit rewards \(\beta \log \frac{\pi_\theta}{\pi_{\text{ref}}}\). All three use the same 
+                preference model—evaluation and training are unified by this framework.
+            </p>
+
+            <h3>Connection 3: GPT-4 as Reward Model</h3>
+            <div class="info-box">
+                <h4>Can You Skip RLHF Reward Training Entirely?</h4>
+                <p>
+                    In traditional RLHF (Lesson 02), you train a <em>separate</em> reward model on human preferences, 
+                    then optimize a policy against that reward model with PPO.
+                </p>
+                <p>
+                    But what if you just use <strong>GPT-4 as the reward model directly</strong>? During PPO training, 
+                    query GPT-4 to score each response. This is called <strong>reward model-free RLHF</strong> or 
+                    <strong>direct RL from LLM feedback</strong>.
+                </p>
+                <p>
+                    <strong>Pros:</strong> No reward model training required; GPT-4 is a high-quality judge.<br>
+                    <strong>Cons:</strong> Expensive (GPT-4 queries for every PPO rollout), slow, and risk of reward hacking.
+                </p>
+            </div>
+
+            <h3>Failure Mode: Reward Hacking and Length Exploitation</h3>
+            <div class="limitation-card">
+                <h4>The Problem</h4>
+                <p>
+                    Remember verbosity bias? LLM judges prefer longer responses. If you use an LLM judge as a reward 
+                    signal for RLHF or DPO, the policy learns to <strong>exploit that bias</strong>.
+                </p>
+                <p>
+                    <strong>Example:</strong> A model trained with GPT-4-as-judge learns to generate excessively long, 
+                    rambling responses padded with filler because that maximizes GPT-4's scores.
+                </p>
+                <p>
+                    This is <strong>reward hacking</strong> or <strong>Goodhart's Law</strong>: "When a measure becomes 
+                    a target, it ceases to be a good measure." The model optimizes the proxy (GPT-4 scores) instead of 
+                    true quality.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Real-World Example: AlpacaEval and Length-Controlled Variants</h4>
+                <p>
+                    <strong>AlpacaEval</strong> is a popular benchmark that uses GPT-4 as judge to compare models against 
+                    GPT-3.5. Early versions suffered from severe length exploitation: models could achieve 90%+ win rates 
+                    just by generating 2-3x longer responses.
+                </p>
+                <p>
+                    <strong>AlpacaEval 2.0</strong> (later work) introduced <strong>length-controlled win rates</strong>: 
+                    statistically adjust for length differences when computing rankings. This reduced the length gaming 
+                    significantly.
+                </p>
+                <p>
+                    <strong>Lesson:</strong> Always monitor response length during training. If length grows without 
+                    quality improving, you're reward hacking the judge.
+                </p>
+            </div>
+
+            <h3>Connection 4: Multi-Objective Evaluation</h3>
+            <p>
+                Post-training often balances multiple objectives:
+            </p>
+            <ul>
+                <li><strong>Helpfulness:</strong> Does the model answer the question?</li>
+                <li><strong>Harmlessness:</strong> Does it avoid toxic or unsafe outputs?</li>
+                <li><strong>Honesty:</strong> Does it admit uncertainty instead of hallucinating?</li>
+            </ul>
+            <p>
+                MT-Bench and Chatbot Arena conflate these into a single "which is better" judgment. In practice, you 
+                might train separate reward models or judges for each dimension, then combine them (e.g., 
+                \(r_{\text{total}} = r_{\text{helpful}} + \lambda \cdot r_{\text{harmless}}\)).
+            </p>
+
+            <h3>Looking Ahead: What Makes a Good Judge?</h3>
+            <div class="info-box">
+                <p>
+                    A good judge for post-training must:
+                </p>
+                <ul>
+                    <li><strong>Agree with humans highly:</strong> 75%+ is baseline; 80%+ is strong</li>
+                    <li><strong>Be hard to exploit:</strong> No obvious hacks (length, verbosity, buzzwords)</li>
+                    <li><strong>Generalize out-of-distribution:</strong> Judge novel responses well, not just training-distribution outputs</li>
+                    <li><strong>Be consistent:</strong> Same response gets same score across multiple evaluations</li>
+                </ul>
+                <p>
+                    GPT-4 meets most of these criteria, which is why it's the de facto judge for modern RLHF/DPO systems. 
+                    But as models improve, judges must too—eventually GPT-4 may not be strong enough to evaluate GPT-5-level 
+                    models. This is an active research area: <strong>scalable oversight</strong> and <strong>superalignment</strong>.
+                </p>
+            </div>
+        </section>
+
+        <section id="python-tutorial" class="content-section">
+            <h2>Python Tutorial</h2>
+            <div class="placeholder-box">
+                <p>
+                    Want to implement an LLM judge, run MT-Bench evaluations locally, or build your own Chatbot Arena? 
+                    Ask <strong>Main Guy in chat</strong> for a guided Python tutorial, and it will be added here.
+                </p>
+                <p>
+                    Topics will include:
+                </p>
+                <ul>
+                    <li>Calling GPT-4 API to judge pairwise comparisons</li>
+                    <li>Implementing position-swap aggregation to reduce bias</li>
+                    <li>Computing agreement rates between judge and human labels</li>
+                    <li>Building a simple Elo rating system from pairwise votes</li>
+                    <li>Running MT-Bench locally with FastChat and GPT-4</li>
+                    <li>Analyzing judge biases: position, verbosity, self-enhancement</li>
+                    <li>Using LLM judges to generate preference data for DPO training</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 MT-Bench Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2306.05685" target="_blank">Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena</a></p>
+                    <p>Zheng, Chiang, Sheng, Zhuang, Wu, Zhuang, Lin, Li, Xing, Gonzalez, Stoica, Hsieh (2023)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🌐 Chatbot Arena (LMSYS)</h3>
+                    <p><a href="https://chat.lmsys.org/" target="_blank">Live Arena Platform</a></p>
+                    <p>Vote on model comparisons and see the live Elo leaderboard</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 FastChat Repo</h3>
+                    <p><a href="https://github.com/lm-sys/FastChat" target="_blank">FastChat: MT-Bench Implementation</a></p>
+                    <p>Run MT-Bench locally with your own models and judges</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 MT-Bench Dataset</h3>
+                    <p><a href="https://huggingface.co/datasets/lmsys/mt_bench" target="_blank">80 Multi-Turn Questions</a></p>
+                    <p>Full dataset with reference answers and judge prompts</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📚 AlpacaEval 2.0</h3>
+                    <p><a href="https://github.com/tatsu-lab/alpaca_eval" target="_blank">Length-Controlled LLM Evaluation</a></p>
+                    <p>Addresses verbosity bias with statistical length control</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🔬 RLAIF Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2309.00267" target="_blank">RLAIF: Scaling Reinforcement Learning from Human Feedback with AI Feedback</a></p>
+                    <p>Bai et al. (2023) - Using LLM judges to generate preference data</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📖 Blog: GPT-4 as Judge</h3>
+                    <p><a href="https://lmsys.org/blog/2023-06-22-leaderboard/" target="_blank">LMSYS: Introducing Chatbot Arena</a></p>
+                    <p>The story behind Chatbot Arena and LLM-as-judge validation</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📄 Goodhart's Law & Reward Hacking</h3>
+                    <p><a href="https://arxiv.org/abs/2210.10760" target="_blank">Scaling Laws for Reward Model Overoptimization</a></p>
+                    <p>Gao et al. (2022) - Quantifying reward hacking in RLHF</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Lesson 05 - Track A (Foundations) | 
+                <a href="../04-dpo-direct-preference-optimization/">← Previous: DPO</a> | 
+                <a href="../README.md">Return to Curriculum Index</a> |
+                Next: Lesson 06 (RLHF at Scale) →
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // Render KaTeX math after DOM loads
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+    <script src="mtbench-explorer.js"></script>
+    <script src="elo-simulator.js"></script>
+</body>
+</html>
