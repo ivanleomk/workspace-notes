@@ -267,8 +267,8 @@
                     <footer>— Section 4.2, <a href="https://arxiv.org/abs/2306.05685" target="_blank">arXiv:2306.05685</a></footer>
                 </blockquote>
                 <p>
-                    On a subset of 500 pairwise comparisons, GPT-4's judgments matched human preferences <strong>80.3%</strong> 
-                    of the time. Human-human agreement on the same set was <strong>81.0%</strong>, meaning GPT-4 is 
+                    On MT-bench pairwise comparisons, GPT-4's judgments matched human preferences <strong>around 80-85%</strong> 
+                    of the time (85% in the non-tie setup). Human-human agreement was <strong>81%</strong>, meaning GPT-4 is 
                     <em>nearly as consistent as humans judging each other</em>.
                 </p>
                 <p>
@@ -279,16 +279,15 @@
 
             <div class="info-box">
                 <h3>Finding 2: Chatbot Arena Correlates with MT-Bench</h3>
-                <blockquote>
-                    "The Chatbot Arena Elo ratings correlate strongly with MT-Bench scores (Spearman ρ = 0.93), 
-                    indicating that both methods measure similar underlying model quality."
-                    <footer>— Section 5.1, <a href="https://arxiv.org/abs/2306.05685" target="_blank">arXiv:2306.05685</a></footer>
-                </blockquote>
                 <p>
                     Chatbot Arena uses <strong>real user votes</strong>—thousands of crowdsourced pairwise comparisons 
-                    from the public. These votes are converted into Elo ratings (like chess rankings). The strong correlation 
-                    (ρ = 0.93) between Arena Elo and MT-Bench scores shows that GPT-4 judge evaluations track real human 
-                    preferences at scale.
+                    from the public. These votes are converted into Elo ratings (like chess rankings). The paper demonstrates 
+                    that Arena Elo ratings and MT-Bench scores show strong agreement, indicating that GPT-4 judge evaluations 
+                    track real human preferences at scale.
+                </p>
+                <p>
+                    <em>Note: The paper presents correlation analysis between Arena and MT-Bench but does not report a 
+                    specific Spearman correlation coefficient.</em>
                 </p>
             </div>
 
@@ -403,9 +402,9 @@
 
             <h3>Chatbot Arena Statistics (as of paper publication)</h3>
             <ul>
-                <li><strong>Total votes collected:</strong> ~70,000 pairwise comparisons</li>
-                <li><strong>Top models:</strong> GPT-4 (Elo ~1250), Claude-v1 (Elo ~1180), GPT-3.5 (Elo ~1140)</li>
-                <li><strong>Prompt diversity:</strong> Creative writing (31%), technical questions (27%), roleplay (18%), general knowledge (24%)</li>
+                <li><strong>Total votes in study:</strong> Over 125,000 comparisons (earlier public version had ~70K)</li>
+                <li><strong>Top models:</strong> GPT-4, Claude-v1, GPT-3.5 (Elo ratings vary by evaluation period)</li>
+                <li><strong>Prompt diversity:</strong> Creative writing, technical questions, roleplay, and general knowledge tasks</li>
             </ul>
 
             <h3>Why Arena Matters</h3>
@@ -669,23 +668,23 @@ Rate from 1-10 how correct and complete the response is. Consider accuracy, expl
                 <tbody>
                     <tr>
                         <td>Human-Human</td>
-                        <td>81.0%</td>
-                        <td>Baseline: How often two humans agree</td>
+                        <td>81%</td>
+                        <td>Baseline: How often two humans agree (Table 13)</td>
                     </tr>
                     <tr>
-                        <td>GPT-4</td>
-                        <td>80.3%</td>
-                        <td>Nearly matches human-human agreement</td>
+                        <td>GPT-4 (pairwise, non-tie)</td>
+                        <td>85%</td>
+                        <td>Matches or exceeds human-human agreement (Table 13)</td>
                     </tr>
                     <tr>
-                        <td>GPT-3.5</td>
-                        <td>74.2%</td>
-                        <td>Weaker model, lower agreement</td>
+                        <td>GPT-4 (all votes)</td>
+                        <td>~66-68%</td>
+                        <td>Includes ties and position inconsistencies</td>
                     </tr>
                     <tr>
-                        <td>Claude-v1</td>
-                        <td>77.8%</td>
-                        <td>Competitive alternative judge</td>
+                        <td>Claude</td>
+                        <td>~67%</td>
+                        <td>Competitive alternative (Table 13)</td>
                     </tr>
                 </tbody>
             </table>
@@ -694,8 +693,8 @@ Rate from 1-10 how correct and complete the response is. Consider accuracy, expl
             <div class="info-box">
                 <h4>GPT-4 as Proxy for Human Judgment</h4>
                 <p>
-                    <strong>80.3% agreement</strong> means GPT-4 matched human preferences on <strong>402 out of 500 pairs</strong>. 
-                    This is only 0.7 percentage points below human-human agreement (81.0%).
+                    <strong>Over 80% agreement</strong> (85% in non-tie setup) means GPT-4 closely matches human preferences. 
+                    This approaches or matches human-human agreement (81%).
                 </p>
                 <p>
                     Implication: <em>GPT-4 disagreeing with a single human annotator is no more concerning than two humans 
@@ -736,42 +735,15 @@ Rate from 1-10 how correct and complete the response is. Consider accuracy, expl
 
             <h3>Comparison to Automatic Metrics</h3>
             <p>
-                How does LLM-as-judge compare to traditional NLP metrics?
+                The paper notes that traditional NLP metrics like BLEU and ROUGE are ineffective for open-ended 
+                chat evaluation, as they rely on similarity to reference answers rather than measuring quality directly. 
+                LLM judges like GPT-4 achieve much higher agreement with humans (over 80%) compared to these 
+                traditional metrics, which typically perform poorly on open-ended generation tasks.
             </p>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Metric</th>
-                        <th>Agreement with Humans</th>
-                        <th>Notes</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>BLEU (n-gram overlap)</td>
-                        <td>~45%</td>
-                        <td>Poor for open-ended generation</td>
-                    </tr>
-                    <tr>
-                        <td>ROUGE (summarization)</td>
-                        <td>~52%</td>
-                        <td>Better than BLEU but still weak</td>
-                    </tr>
-                    <tr>
-                        <td>BERTScore (embedding similarity)</td>
-                        <td>~60%</td>
-                        <td>Captures semantic similarity, misses quality</td>
-                    </tr>
-                    <tr>
-                        <td>GPT-4 Judge</td>
-                        <td><strong>80.3%</strong></td>
-                        <td>Closest to human judgment</td>
-                    </tr>
-                </tbody>
-            </table>
             <p>
-                LLM judges vastly outperform traditional metrics, which don't capture helpfulness, instruction-following, 
-                or conversational quality.
+                <em>Note: The paper discusses that BLEU and ROUGE are inadequate but does not provide specific 
+                agreement percentages for these metrics on MT-bench data. Traditional metrics fundamentally cannot 
+                capture helpfulness, instruction-following, or conversational quality the way LLM judges can.</em>
             </p>
         </section>
 
