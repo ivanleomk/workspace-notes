@@ -777,8 +777,8 @@ Total reward: 1.0</code></pre>
                     </tr>
                     <tr>
                         <td>DeepSeekMath-7B-Instruct (SFT)</td>
-                        <td>84.1%</td>
-                        <td>+19.9 points from SFT on math solutions</td>
+                        <td>82.9%</td>
+                        <td>+18.7 points from SFT on math solutions</td>
                     </tr>
                     <tr>
                         <td>DeepSeekMath-7B-RL (SFT + GRPO)</td>
@@ -1120,14 +1120,6 @@ Total reward: 1.0</code></pre>
                 <canvas id="training-progression-chart"></canvas>
             </div>
 
-            <h3>MATH Performance by Difficulty Level</h3>
-            <p class="chart-caption">
-                SFT vs GRPO accuracy on MATH levels 1-5. RL helps more on harder problems. Data from Section 5.2.
-            </p>
-            <div class="chart-container" style="height: 400px;">
-                <canvas id="difficulty-chart"></canvas>
-            </div>
-
             <h3>Model Comparison: 7B vs Larger Models</h3>
             <p class="chart-caption">
                 DeepSeekMath-7B-RL rivals models 100× its size on MATH. Data from Table 6, Shao et al. (2024).
@@ -1136,13 +1128,6 @@ Total reward: 1.0</code></pre>
                 <canvas id="model-comparison-chart"></canvas>
             </div>
 
-            <h3>GRPO vs PPO Efficiency</h3>
-            <p class="chart-caption">
-                GRPO achieves similar accuracy with less memory and faster training. Data from Table 4.
-            </p>
-            <div class="chart-container" style="height: 450px;">
-                <canvas id="efficiency-chart"></canvas>
-            </div>
         </section>
 
         <section id="bridge-to-curriculum" class="content-section">

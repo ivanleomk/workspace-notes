@@ -31,8 +31,8 @@ const quizData = {
     5: {
         correct: "Labelers preferred InstructGPT 1.3B over GPT-3 175B despite the 100x size difference",
         feedback: {
-            correct: "✓ Correct! This is the headline result from the paper: human evaluators preferred the smaller RLHF-trained InstructGPT 1.3B over the much larger base GPT-3 175B model about 85% of the time. This demonstrates that alignment (learning to follow instructions and satisfy user preferences) matters more than raw scale. Bigger isn't always better—training approach matters enormously.",
-            wrong: "✗ InstructGPT's most striking result wasn't perfection on benchmarks (it actually regressed slightly on some) or eliminating all failure modes. It was the head-to-head preference win: labelers preferred InstructGPT 1.3B over GPT-3 175B ~85% of the time. A model 100x smaller won because RLHF taught it to be helpful, honest, and harmless—qualities GPT-3 wasn't optimized for."
+            correct: "✓ Correct! This is the headline result from the paper's abstract and Figure 1: human evaluators preferred the smaller RLHF-trained InstructGPT 1.3B over the much larger base GPT-3 175B model. This demonstrates that alignment (learning to follow instructions and satisfy user preferences) matters more than raw scale. For context, when comparing same-size models, the 175B InstructGPT was preferred over 175B GPT-3 about 85% of the time. Bigger isn't always better—training approach matters enormously.",
+            wrong: "✗ InstructGPT's most striking result wasn't perfection on benchmarks (it actually regressed slightly on some) or eliminating all failure modes. It was the head-to-head preference win: labelers preferred InstructGPT 1.3B over GPT-3 175B. A model 100x smaller won because RLHF taught it to be helpful, honest, and harmless—qualities GPT-3 wasn't optimized for. The paper reports that same-size comparisons (175B InstructGPT vs 175B GPT-3) showed 85% preference for InstructGPT."
         }
     },
     6: {
