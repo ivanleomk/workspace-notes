@@ -52,7 +52,7 @@
         <section id="what-is-gsm8k" class="content-section">
             <h2>What is GSM8K?</h2>
             <p>
-                <strong>GSM8K</strong> (Grade School Math 8K) is a dataset of 8,500 high-quality, linguistically 
+                <strong>GSM8K</strong> (Grade School Math 8K) is a dataset of 8,792 high-quality, linguistically 
                 diverse grade-school math word problems created by human problem writers. These problems require 
                 between 2 and 8 steps to solve, involving basic arithmetic operations.
             </p>
@@ -60,7 +60,7 @@
             <div class="info-box">
                 <h3>Key Facts</h3>
                 <ul>
-                    <li><strong>8,500 problems total:</strong> 7,500 training problems + 1,000 test problems (7.5K train, 1K test)</li>
+                    <li><strong>8,792 problems total:</strong> 7,473 training problems + 1,319 test problems (the paper rounds these to "~7.5K train, ~1K test")</li>
                     <li><strong>Human-written:</strong> Created by contractors specifically for this benchmark</li>
                     <li><strong>Grade-school level:</strong> Solvable using basic arithmetic (no calculus, algebra, geometry theorems)</li>
                     <li><strong>Multi-step reasoning:</strong> Typically 2-8 steps per problem</li>
@@ -328,7 +328,7 @@ Natalia sold 48+24 = 72 clips altogether in April and May.
                         <li><strong>Difficulty:</strong> Grade-school (ages 8-12)</li>
                         <li><strong>Topics:</strong> Basic arithmetic, word problems</li>
                         <li><strong>Steps:</strong> 2-8 steps per problem</li>
-                        <li><strong>Size:</strong> 8,500 problems</li>
+                        <li><strong>Size:</strong> 8,792 problems (7,473 train / 1,319 test)</li>
                         <li><strong>Source:</strong> Human-written, linguistically diverse</li>
                         <li><strong>Example:</strong> "Janet has 16 chickens. She sells 8. How many does she have left?"</li>
                     </ul>
@@ -429,7 +429,7 @@ Janet has 8 chickens left.
                 <h4>GSM1k: A Clean Variant</h4>
                 <p>
                     To address contamination concerns, researchers created <strong>GSM1k</strong>—a variant of GSM8K 
-                    with 1,000 newly written problems in the same style. Key findings from contamination studies:
+                    with 1,319 newly written problems in the same style. Key findings from contamination studies:
                 </p>
                 <ul>
                     <li><strong>Performance drops:</strong> Some models show 5-15 percentage point drops on GSM1k 

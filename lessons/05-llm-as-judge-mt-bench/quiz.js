@@ -45,7 +45,7 @@ const quizData = {
     7: {
         correct: "~80%, which is comparable to human-human agreement (~81%)",
         feedback: {
-            correct: "✓ Right! On 500 pairwise comparisons, GPT-4 agreed with human judges 80.3% of the time. Human-human agreement on the same set was 81.0%. The 0.7 percentage point gap means GPT-4 is nearly as consistent as humans judging each other. This validated LLM-as-judge as a practical method: disagreement between GPT-4 and a human is no more concerning than two humans disagreeing. The remaining 20% disagreement comes from: (1) legitimately subjective cases where there's no clear winner, (2) judge biases (position, verbosity), and (3) human annotator noise (mistakes, inconsistent criteria).",
+            correct: "✓ Right! The paper reports that GPT-4 achieves 85% agreement with human judges on pairwise comparisons (Setup S2, excluding ties), which actually exceeds the human-human agreement rate of 81-82%. This validated LLM-as-judge as a practical method: GPT-4's judgments align with the majority of humans as well as humans agree with each other. The paper states this demonstrates 'over 80% agreement, the same level of agreement between humans.'",
             wrong: "✗ GPT-4 isn't near-perfect (95% would require almost superhuman consistency) and it's way better than random (50%). The 65% option would be borderline useful but not compelling. The 80% agreement rate is significant because it matches human-human agreement—this means GPT-4 judgments are about as reliable as hiring a second human annotator. For coarse model ranking, even 70% would be useful. At 80%+, LLM judges enable fine-grained evaluation of model capabilities, which is why they've become standard in RLHF/DPO workflows and leaderboards."
         }
     },
@@ -64,9 +64,9 @@ const quizData = {
         }
     },
     10: {
-        correct: "BLEU/ROUGE have only ~45-52% agreement; GPT-4 at ~80% vastly outperforms them",
+        correct: "Traditional metrics like BLEU/ROUGE are ineffective; GPT-4 achieves 85% agreement with humans",
         feedback: {
-            correct: "✓ Right! Traditional n-gram overlap metrics (BLEU, ROUGE) have only ~45-52% agreement with human preferences on open-ended generation tasks. They were designed for narrow tasks (machine translation, extractive summarization) where surface form matters. They completely miss semantic quality, helpfulness, and instruction-following—which is what matters for chat models. BERTScore (embedding similarity) improves to ~60% but still falls short. GPT-4 at ~80% is a step change in evaluation quality. This is why LLM judges have rapidly replaced traditional metrics for chat model evaluation.",
+            correct: "✓ Right! The paper states that traditional similarity-based metrics like BLEU and ROUGE are 'ineffective' for open-ended questions without reference answers. They were designed for narrow tasks (machine translation, extractive summarization) where surface form matters. They miss semantic quality, helpfulness, and instruction-following—which is what matters for chat models. GPT-4 as a judge achieves 85% agreement with human preferences, providing a step change in evaluation quality for open-ended generation. This is why LLM judges have rapidly replaced traditional metrics for chat model evaluation.",
             wrong: "✗ BLEU/ROUGE don't achieve 80% agreement (they're much worse), and while they're 'objective' in the sense of being deterministic, that doesn't make them reliable—they measure the wrong thing. They're good for translation where phrasing matters; terrible for chat quality. LLM judges and traditional metrics do measure different things: traditional metrics measure surface overlap, LLM judges measure helpfulness/quality. For modern instruction-following chat models, quality is what matters. BLEU gave way to BERTScore, which gave way to LLM-as-judge—each generation gets closer to human judgment."
         }
     }
