@@ -110,6 +110,29 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Agreement by task type visualization
 - **Status:** Complete
 
+### Lesson 06 - DeepSeekMath: RL from Verifiable Rewards (GRPO) ✅
+- **Track:** B (SOTA)
+- **Paper:** DeepSeekMath: Pushing the Limits of Mathematical Reasoning (Shao et al., 2024)
+- **Path:** [`06-deepseekmath-grpo/`](06-deepseekmath-grpo/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/](https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/)
+- **Topics:**
+  - Why PPO's value network is unnecessary for verifiable rewards
+  - GRPO (Group Relative Policy Optimization): group sampling, relative advantages, no critic
+  - Verifiable rewards vs learned reward models: rule-based checks for math correctness
+  - Outcome supervision vs process supervision for mathematical reasoning
+  - DeepSeekMath data pipeline: contamination prevention, quality filtering, math-focused pre-training
+  - Results: 51.7% on MATH, 88.2% on GSM8K (7B model rivals 100×+ larger models)
+  - GRPO vs PPO: comparable performance with 2× less memory and 1.4× faster training
+  - Connection to GSM8K (Lesson 03), RLHF (Lesson 02), DPO (Lesson 04), LLM-as-Judge (Lesson 05)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Interactive GRPO advantage calculator (set group rewards, see advantages update)
+  - Training progression charts (Base → SFT → GRPO)
+  - MATH performance by difficulty level (RL helps harder problems more)
+  - Model comparison: 7B vs 70B, 540B, 1000B+ models
+  - GRPO vs PPO efficiency radar chart
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -120,6 +143,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 03: GSM8K](https://ivanleomk.github.io/workspace-notes/03-gsm8k-reasoning-benchmarks/)
 - [Lesson 04: DPO](https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/)
 - [Lesson 05: LLM-as-Judge & MT-Bench](https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/)
+- [Lesson 06: DeepSeekMath & GRPO](https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/)
 
 ### 💻 Local Serving (for development)
 ```bash
