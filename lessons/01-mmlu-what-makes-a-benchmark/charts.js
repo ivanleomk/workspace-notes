@@ -3,12 +3,12 @@
 // Table 3 and Figure 2 from the paper
 
 // Performance by category for GPT-3 175B (5-shot)
-// These numbers are from the original MMLU paper
+// Data from Table 1 in Hendrycks et al. (2020)
 const categoryData = {
-    labels: ['STEM', 'Humanities', 'Social Sciences', 'Other'],
+    labels: ['Humanities', 'Social Sciences', 'STEM', 'Other'],
     datasets: [{
         label: 'GPT-3 175B (5-shot)',
-        data: [46.4, 40.8, 50.4, 43.9],
+        data: [40.8, 50.4, 36.7, 48.8],
         backgroundColor: 'rgba(59, 130, 246, 0.7)',
         borderColor: 'rgba(59, 130, 246, 1)',
         borderWidth: 2
