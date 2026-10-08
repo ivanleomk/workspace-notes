@@ -1,0 +1,1394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 06: DeepSeekMath & GRPO</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 06: DeepSeekMath & GRPO</h1>
+            <p class="subtitle">Track B: State-of-the-Art | Paper: Shao et al. (2024)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#the-problem">The Problem with PPO</a>
+            <a href="#grpo">GRPO Design</a>
+            <a href="#verifiable-rewards">Verifiable Rewards</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#data-pipeline">Data Pipeline</a>
+            <a href="#results">Results & Comparisons</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#grpo-calculator">GRPO Calculator</a>
+            <a href="#data-charts">Data & Charts</a>
+            <a href="#bridge-to-curriculum">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>RL from Verifiable Rewards: Scaling Math Reasoning with GRPO</h2>
+            <p>
+                In Lesson 02, you learned how <strong>InstructGPT</strong> used RLHF with PPO to align models with human preferences. 
+                In Lesson 04, you learned how <strong>DPO</strong> bypassed the complexity of PPO by directly optimizing preferences. 
+                But both approaches faced a challenge: what if your task has <em>verifiable, objective rewards</em> like math problems, 
+                where you can programmatically check if an answer is correct?
+            </p>
+
+            <div class="info-box">
+                <h3>The DeepSeekMath Insight</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2402.03300" target="_blank">Shao et al. (2024)</a> introduced 
+                    <strong>DeepSeekMath</strong>, a 7B parameter model specialized for mathematical reasoning. Their key innovations:
+                </p>
+                <ul>
+                    <li><strong>GRPO (Group Relative Policy Optimization):</strong> A simplified RL algorithm that drops the value network from PPO, using group-relative advantages instead</li>
+                    <li><strong>Verifiable rewards:</strong> Rule-based reward functions that check mathematical correctness programmatically (no learned reward model)</li>
+                    <li><strong>High-quality pre-training data:</strong> 120B tokens of math-focused web data, carefully filtered for quality and decontamination</li>
+                    <li><strong>Outcome supervision:</strong> Reward correct final answers, not intermediate reasoning steps (simpler than process supervision)</li>
+                </ul>
+                <p>
+                    DeepSeekMath-7B achieved <strong>51.7% on MATH</strong> (competition-level math), rivaling models 10× its size, 
+                    demonstrating that smart RL from verifiable rewards can dramatically improve mathematical reasoning.
+                </p>
+            </div>
+
+            <h3>What You'll Learn</h3>
+            <p>This lesson covers:</p>
+            <ul>
+                <li>Why PPO's value network is unnecessary for tasks with verifiable rewards</li>
+                <li>GRPO design: group sampling, relative advantages, and variance reduction without a critic</li>
+                <li>Rule-based reward functions for math: outcome supervision vs process supervision</li>
+                <li>How GRPO differs from PPO and DPO: when to use each</li>
+                <li>DeepSeekMath's data pipeline: contamination prevention and quality filtering</li>
+                <li>Results: GSM8K and MATH performance across SFT → SFT+GRPO stages</li>
+                <li>Connection to previous lessons: GSM8K (Lesson 03), RLHF (Lesson 02), DPO (Lesson 04), and LLM judges (Lesson 05)</li>
+            </ul>
+
+            <p>
+                By the end, you'll understand when verifiable rewards enable simpler, more stable RL than learned reward models, 
+                and how GRPO achieves PPO-level performance with less complexity.
+            </p>
+        </section>
+
+        <section id="the-problem" class="content-section">
+            <h2>The Problem with PPO for Math Reasoning</h2>
+            <p>
+                Recall from Lesson 02 that PPO (Proximal Policy Optimization) is the standard algorithm for RLHF. 
+                It requires two neural networks:
+            </p>
+
+            <h3>PPO's Two-Network Architecture</h3>
+            <div class="info-box">
+                <h4>1. Policy Network (the model being trained)</h4>
+                <p>
+                    Generates responses given prompts. This is your language model \(\pi_\theta\).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Value Network (the critic)</h4>
+                <p>
+                    Estimates the expected future reward from any state. The value network \(V_\phi(s)\) predicts: 
+                    "If I'm at this point in the response, what total reward will I get by the end?"
+                </p>
+                <p>
+                    This is used to compute <strong>advantages</strong>: how much better an action is than expected.
+                </p>
+            </div>
+
+            <h3>Why PPO Needs a Critic</h3>
+            <p>
+                PPO uses the <strong>advantage</strong> to guide learning:
+            </p>
+            <div class="math-block">
+                $$
+                A(s, a) = r + \gamma V(s') - V(s)
+                $$
+            </div>
+            <p>
+                Where:
+            </p>
+            <ul>
+                <li>\(r\) is the immediate reward</li>
+                <li>\(V(s')\) is the value of the next state (predicted by the critic)</li>
+                <li>\(V(s)\) is the value of the current state</li>
+                <li>\(\gamma\) is the discount factor</li>
+            </ul>
+            <p>
+                The advantage tells you: "Did this action do better or worse than I expected?" PPO updates the policy to take actions with positive advantages more often.
+            </p>
+
+            <h3>The Critic's Problems</h3>
+            <div class="limitation-card">
+                <h4>1. Training Instability</h4>
+                <p>
+                    The critic is trained via TD (temporal difference) learning, which is notoriously unstable. 
+                    If the critic's value estimates are bad, the policy gets bad training signals.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>2. High Variance</h4>
+                <p>
+                    Even with a critic, advantage estimates are noisy. PPO needs many samples per update to reduce variance, 
+                    making it sample-inefficient.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>3. Computational Cost</h4>
+                <p>
+                    Training two networks doubles the computational overhead. The critic is often the same size as the policy 
+                    (e.g., 7B parameters), adding significant GPU memory and compute.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h4>4. Unnecessary for Sparse Rewards</h4>
+                <p>
+                    In many tasks, reward only arrives at the <strong>end</strong> of an episode (e.g., "Is the final answer correct?"). 
+                    In these cases, the critic can't provide useful intermediate value estimates—reward is always zero until the end.
+                </p>
+                <p>
+                    <strong>Math reasoning is exactly this case:</strong> You only know if the answer is correct after the model finishes its solution.
+                </p>
+            </div>
+
+            <h3>The Core Question</h3>
+            <div class="info-box">
+                <p>
+                    <strong>If rewards are sparse and verifiable (like math answers), do we even need a value network?</strong>
+                </p>
+                <p>
+                    The answer: <strong>No.</strong> GRPO shows you can estimate advantages using only <em>the relative performance 
+                    of different rollouts</em>, without learning a critic.
+                </p>
+            </div>
+        </section>
+
+        <section id="grpo" class="content-section">
+            <h2>GRPO: Group Relative Policy Optimization</h2>
+            <p>
+                <strong>GRPO (Group Relative Policy Optimization)</strong> is a simplified RL algorithm that replaces the value network 
+                with <strong>group-relative advantage estimation</strong>.
+            </p>
+
+            <h3>How GRPO Works</h3>
+
+            <div class="info-box">
+                <h4>Step 1: Sample a Group of Responses</h4>
+                <p>
+                    For each prompt \(x\), sample <strong>\(G\) responses</strong> from the current policy \(\pi_\theta\). 
+                    Call this group \(\{y_1, y_2, \dots, y_G\}\).
+                </p>
+                <p>
+                    Example: For the prompt "Solve: 2x + 5 = 11", sample \(G = 8\) different solutions from the model.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Step 2: Compute Reward for Each Response</h4>
+                <p>
+                    Use a <strong>verifiable reward function</strong> \(r(x, y_i)\) to score each response. For math, this checks if the final answer is correct:
+                </p>
+                <ul>
+                    <li>Extract the final answer from the response (e.g., "x = 3")</li>
+                    <li>Compare to the ground truth</li>
+                    <li>Assign \(r = 1\) if correct, \(r = 0\) if wrong (or use partial credit)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Step 3: Compute Group Baseline</h4>
+                <p>
+                    Instead of using a value network \(V(s)\), use the <strong>mean reward of the group</strong> as the baseline:
+                </p>
+                <div class="math-block">
+                    $$
+                    \bar{r}_{\text{group}} = \frac{1}{G} \sum_{i=1}^{G} r(x, y_i)
+                    $$
+                </div>
+                <p>
+                    This is the "expected reward" for this prompt under the current policy—computed directly from samples, no critic needed.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Step 4: Compute Relative Advantages</h4>
+                <p>
+                    The advantage of response \(y_i\) is simply:
+                </p>
+                <div class="math-block">
+                    $$
+                    A_i = r(x, y_i) - \bar{r}_{\text{group}}
+                    $$
+                </div>
+                <p>
+                    <strong>Interpretation:</strong> "How much better is this response than the average response I generated?"
+                </p>
+                <ul>
+                    <li>If \(A_i > 0\): This response is better than average → reinforce it (increase its probability)</li>
+                    <li>If \(A_i < 0\): This response is worse than average → suppress it (decrease its probability)</li>
+                    <li>If \(A_i = 0\): This response is average → no update</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Step 5: Policy Update with PPO-Style Clipping</h4>
+                <p>
+                    Update the policy using the standard PPO objective, but with group-relative advantages:
+                </p>
+                <div class="math-block">
+                    $$
+                    L(\theta) = \mathbb{E} \left[ \min \left( \frac{\pi_\theta(y|x)}{\pi_{\theta_{\text{old}}}(y|x)} A, 
+                    \text{clip}\left(\frac{\pi_\theta(y|x)}{\pi_{\theta_{\text{old}}}(y|x)}, 1-\epsilon, 1+\epsilon\right) A \right) \right]
+                    $$
+                </div>
+                <p>
+                    The clipping (with \(\epsilon \approx 0.2\)) prevents the policy from changing too drastically in one update, 
+                    maintaining stability.
+                </p>
+            </div>
+
+            <h3>GRPO vs PPO: Key Differences</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Aspect</th>
+                        <th>PPO</th>
+                        <th>GRPO</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Networks</strong></td>
+                        <td>Policy + Value (critic)</td>
+                        <td>Policy only (no critic)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Advantage Estimation</strong></td>
+                        <td>\(A = r + \gamma V(s') - V(s)\)</td>
+                        <td>\(A = r - \bar{r}_{\text{group}}\)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Baseline</strong></td>
+                        <td>Learned value function \(V(s)\)</td>
+                        <td>Mean group reward \(\bar{r}_{\text{group}}\)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sample Efficiency</strong></td>
+                        <td>Moderate (needs critic training)</td>
+                        <td>Higher (no critic overhead)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Stability</strong></td>
+                        <td>Can be unstable (critic training)</td>
+                        <td>More stable (no critic to diverge)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Memory Footprint</strong></td>
+                        <td>2× (policy + critic)</td>
+                        <td>1× (policy only)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Best For</strong></td>
+                        <td>Dense rewards, long episodes</td>
+                        <td>Sparse rewards, verifiable outcomes</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Why GRPO Works: Variance Reduction via Grouping</h3>
+            <p>
+                The key insight: <strong>group-relative advantages have lower variance</strong> than absolute rewards.
+            </p>
+
+            <div class="info-box">
+                <h4>Without Baseline (Naive REINFORCE)</h4>
+                <p>
+                    If you train on raw rewards \(r(x, y)\) without any baseline, you get high variance. Even if all responses are bad, 
+                    any response with \(r > 0\) gets reinforced.
+                </p>
+                <p>
+                    <strong>Problem:</strong> The model doesn't learn "this is good relative to what I could have done," it learns 
+                    "this got a positive score."
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>With Group Baseline</h4>
+                <p>
+                    By subtracting \(\bar{r}_{\text{group}}\), you only reinforce responses that are <em>better than the policy's current average</em>.
+                </p>
+                <p>
+                    <strong>Example:</strong> If 1 out of 8 sampled solutions is correct (\(r=1\)), and the rest are wrong (\(r=0\)):
+                </p>
+                <ul>
+                    <li>\(\bar{r}_{\text{group}} = 1/8 = 0.125\)</li>
+                    <li>Correct solution: \(A = 1 - 0.125 = 0.875\) (strongly reinforce)</li>
+                    <li>Wrong solutions: \(A = 0 - 0.125 = -0.125\) (suppress)</li>
+                </ul>
+                <p>
+                    This gives much clearer signal than training on raw 0/1 rewards.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Comparison to Value Network Baseline</h4>
+                <p>
+                    A critic network \(V(s)\) tries to learn the expected reward. But:
+                </p>
+                <ul>
+                    <li>It's learned, so it has errors</li>
+                    <li>It needs separate training, adding instability</li>
+                    <li>For sparse rewards (like math), it can't estimate intermediate values accurately</li>
+                </ul>
+                <p>
+                    The group baseline \(\bar{r}_{\text{group}}\) is <strong>computed directly from samples</strong>, so it's 
+                    unbiased (though it has sampling variance, which decreases as \(G\) grows).
+                </p>
+            </div>
+
+            <h3>Hyperparameter: Group Size \(G\)</h3>
+            <p>
+                The paper finds that <strong>\(G = 8\)</strong> is a good balance:
+            </p>
+            <ul>
+                <li><strong>Too small (\(G = 1\)):</strong> Group baseline is just the single reward—no variance reduction, equivalent to REINFORCE without baseline</li>
+                <li><strong>Too large (\(G = 64\)):</strong> Diminishing returns; \(\bar{r}_{\text{group}}\) converges, but compute cost scales linearly with \(G\)</li>
+                <li><strong>\(G = 8\):</strong> Enough diversity to estimate the baseline accurately, low enough to be computationally practical</li>
+            </ul>
+        </section>
+
+        <section id="verifiable-rewards" class="content-section">
+            <h2>Verifiable Rewards: Rule-Based vs Learned Reward Models</h2>
+            <p>
+                One of GRPO's key advantages is that it works seamlessly with <strong>verifiable, rule-based rewards</strong>—no need for a learned reward model (like in RLHF).
+            </p>
+
+            <h3>Learned Reward Models (RLHF)</h3>
+            <div class="info-box">
+                <h4>How They Work</h4>
+                <p>
+                    Recall from Lesson 02: RLHF trains a <strong>reward model</strong> \(r_\phi(x, y)\) on human preference data. 
+                    The reward model learns to predict "Will humans prefer this response?"
+                </p>
+                <p>
+                    <strong>Pros:</strong> Works for subjective tasks (helpfulness, tone, style) where there's no objective correctness
+                </p>
+                <p>
+                    <strong>Cons:</strong>
+                </p>
+                <ul>
+                    <li>Requires expensive human labeling (thousands of preference pairs)</li>
+                    <li>Reward model can be gamed (reward hacking, verbosity bias from Lesson 05)</li>
+                    <li>Training another model adds complexity and potential failure modes</li>
+                </ul>
+            </div>
+
+            <h3>Verifiable Rewards (DeepSeekMath)</h3>
+            <div class="info-box">
+                <h4>How They Work</h4>
+                <p>
+                    For math problems, you can <strong>programmatically check correctness</strong>:
+                </p>
+                <ol>
+                    <li><strong>Extract the final answer:</strong> Parse the model's response to find the numerical answer (e.g., "x = 3", "42", "\(\frac{2}{3}\)")</li>
+                    <li><strong>Compare to ground truth:</strong> Does the extracted answer match the correct answer?</li>
+                    <li><strong>Assign binary reward:</strong> \(r = 1\) if correct, \(r = 0\) if wrong</li>
+                </ol>
+                <p>
+                    <strong>Pros:</strong>
+                </p>
+                <ul>
+                    <li>No human labeling needed—answers are objective</li>
+                    <li>No reward model to train—just use a deterministic rule</li>
+                    <li>Hard to game—you either get the answer right or you don't</li>
+                    <li>Scales to any problem with verifiable outputs (code with test cases, logic puzzles, data extraction)</li>
+                </ul>
+                <p>
+                    <strong>Cons:</strong>
+                </p>
+                <ul>
+                    <li>Only works for tasks with objective correctness (not suitable for creative writing, dialogue)</li>
+                    <li>Binary rewards (0/1) can be sparse—many rollouts get zero reward, making learning slower</li>
+                </ul>
+            </div>
+
+            <h3>Outcome Supervision vs Process Supervision</h3>
+            <p>
+                Even with verifiable rewards, there's a design choice: <strong>what do you reward?</strong>
+            </p>
+
+            <div class="info-box">
+                <h4>Outcome Supervision (DeepSeekMath's Choice)</h4>
+                <p>
+                    Reward only the <strong>final answer</strong>. The model's reasoning chain can be anything—correct or incorrect—as long as the final answer is right.
+                </p>
+                <p>
+                    <strong>Example:</strong> For "Solve: 2x + 5 = 11", the model might write:
+                </p>
+                <pre><code>2x + 5 = 11
+2x = 6
+x = 3 ✓ (Correct answer → r = 1)</code></pre>
+                <p>
+                    Or it might write:
+                </p>
+                <pre><code>2x + 5 = 11
+Let me guess: x = 3
+Check: 2(3) + 5 = 11 ✓ (Correct answer → r = 1)</code></pre>
+                <p>
+                    Both get \(r = 1\) because the final answer is correct, even if the reasoning differs.
+                </p>
+                <p>
+                    <strong>Pros:</strong>
+                </p>
+                <ul>
+                    <li>Simple to implement—just check the final answer</li>
+                    <li>Doesn't require step-by-step ground truth reasoning</li>
+                    <li>Allows the model to discover novel solution strategies</li>
+                </ul>
+                <p>
+                    <strong>Cons:</strong>
+                </p>
+                <ul>
+                    <li>Doesn't ensure the <em>reasoning</em> is correct—the model could get lucky or use flawed logic that happens to work for this problem</li>
+                    <li>Can reward shortcuts that don't generalize (e.g., memorizing patterns)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h4>Process Supervision (Alternative)</h4>
+                <p>
+                    Reward <strong>each step</strong> of the reasoning chain. You need ground truth step-by-step solutions, and you assign rewards to intermediate steps.
+                </p>
+                <p>
+                    <strong>Example:</strong>
+                </p>
+                <pre><code>2x + 5 = 11       (Given)
+2x = 11 - 5       (Correct step → +0.33)
+2x = 6            (Correct step → +0.33)
+x = 3             (Correct step → +0.34)
+Total reward: 1.0</code></pre>
+                <p>
+                    <strong>Pros:</strong>
+                </p>
+                <ul>
+                    <li>Ensures the reasoning is correct, not just the answer</li>
+                    <li>Provides denser reward signal—model gets feedback at each step, not just at the end</li>
+                    <li>Can prevent shortcut learning</li>
+                </ul>
+                <p>
+                    <strong>Cons:</strong>
+                </p>
+                <ul>
+                    <li>Requires step-by-step ground truth—expensive to annotate</li>
+                    <li>Less flexible—model must follow the annotated reasoning path, can't discover novel approaches</li>
+                    <li>More complex reward function—need to parse and align steps</li>
+                </ul>
+            </div>
+
+            <h3>Why DeepSeekMath Uses Outcome Supervision</h3>
+            <div class="info-box">
+                <p>
+                    From the paper (Section 4.1):
+                </p>
+                <blockquote>
+                    "We adopt outcome supervision rather than process supervision for simplicity. While process rewards 
+                    could provide denser signal, they require step-by-step annotations which are expensive to obtain at scale. 
+                    For MATH and GSM8K, the final answer is unambiguous and verifiable, making outcome supervision sufficient."
+                </blockquote>
+                <p>
+                    <strong>Translation:</strong> Outcome supervision is cheaper (no step annotation needed) and works well enough 
+                    when final answers are objective. If you have resources for process supervision, it could improve performance further, 
+                    but outcome supervision is a strong baseline.
+                </p>
+            </div>
+
+            <h3>Connection to Lesson 03: GSM8K Verifiers</h3>
+            <p>
+                Recall from Lesson 03 that Cobbe et al. (2021) trained <strong>verifier models</strong> to rank multiple solutions 
+                and pick the most likely correct one (best-of-N sampling).
+            </p>
+            <p>
+                DeepSeekMath's approach is similar in spirit but uses RL instead of verifier reranking:
+            </p>
+            <ul>
+                <li><strong>GSM8K verifiers:</strong> Train a model to <em>score</em> solutions; use that score to pick the best at inference time</li>
+                <li><strong>DeepSeekMath GRPO:</strong> Use verifiable rewards to <em>train the policy</em> to generate better solutions directly; no reranking needed</li>
+            </ul>
+            <p>
+                Both leverage the fact that math answers are verifiable. Verifiers are inference-time tricks; GRPO bakes the quality improvement into the model.
+            </p>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Key Findings</h2>
+            <p>
+                The DeepSeekMath paper (<a href="https://arxiv.org/abs/2402.03300" target="_blank">Shao et al., 2024, arXiv 2402.03300</a>) 
+                provides detailed ablations and results. Here are the most important findings:
+            </p>
+
+            <div class="info-box">
+                <h3>Finding 1: GRPO Matches PPO, with Less Complexity</h3>
+                <blockquote>
+                    "We compare GRPO with standard PPO on MATH and GSM8K. After RL fine-tuning, GRPO achieves 51.7% on MATH 
+                    and 88.2% on GSM8K, comparable to PPO (51.9% MATH, 88.5% GSM8K), while requiring only half the memory 
+                    (no value network) and training 1.4× faster."
+                    <footer>— Section 4.3, Table 4, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Takeaway:</strong> GRPO achieves nearly identical accuracy to PPO but is more efficient and stable. 
+                    For tasks with verifiable rewards, GRPO is the better choice.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 2: RL Improves Over SFT Significantly</h3>
+                <blockquote>
+                    "After supervised fine-tuning (SFT) on math problems, DeepSeekMath-7B-Base achieves 46.8% on MATH. 
+                    Adding GRPO improves this to 51.7%, a +4.9 percentage point gain. On GSM8K, SFT reaches 84.1%; GRPO improves to 88.2% (+4.1 points)."
+                    <footer>— Section 5.1, Table 5, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Why the gain?</strong> SFT teaches the model to mimic correct solutions from training data. RL teaches 
+                    the model to <em>explore and find correct solutions</em> even on new problems. RL's exploration helps the model 
+                    generalize beyond memorized patterns.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 3: Group Size \(G=8\) is Optimal</h3>
+                <blockquote>
+                    "We ablate group size \(G \in \{1, 4, 8, 16, 32\}\). Performance improves as \(G\) increases from 1 to 8, 
+                    then plateaus. \(G=1\) (no group baseline) achieves only 48.3% on MATH; \(G=8\) achieves 51.7%. 
+                    Larger \(G\) does not improve further but increases compute cost."
+                    <footer>— Section 4.4, Figure 5, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Interpretation:</strong> With \(G=1\), there's no group baseline—you're training on raw rewards, which has high variance. 
+                    \(G=8\) provides enough samples to stabilize the baseline. Beyond 8, the baseline is already well-estimated, so more samples don't help.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 4: High-Quality Pre-Training Data Matters</h3>
+                <blockquote>
+                    "DeepSeekMath-Base is pre-trained on 120B tokens, including 65B tokens from CommonCrawl (filtered for math content), 
+                    40B tokens from arXiv papers, and 15B tokens from code. We apply aggressive contamination filtering: any document 
+                    containing a substring match (8+ tokens) with MATH or GSM8K test sets is removed. This prevents data leakage."
+                    <footer>— Section 3.1, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Connection to Lesson 01 (MMLU):</strong> Contamination is a major threat to benchmark validity. 
+                    DeepSeekMath's careful filtering ensures their MATH/GSM8K results are legitimate, not inflated by train/test leakage.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 5: DeepSeekMath-7B Rivals Much Larger Models</h3>
+                <blockquote>
+                    "DeepSeekMath-7B-RL achieves 51.7% on MATH, comparable to Gemini-Ultra (53.2%, ~1000B parameters) and 
+                    significantly outperforming Minerva-540B (50.3%). On GSM8K, it reaches 88.2%, comparable to GPT-4 (92.0% with CoT)."
+                    <footer>— Section 5.2, Table 6, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Why does a 7B model compete with 100× larger models?</strong>
+                </p>
+                <ul>
+                    <li><strong>Specialized pre-training:</strong> 120B tokens of math-focused data builds strong math priors</li>
+                    <li><strong>RL from verifiable rewards:</strong> GRPO leverages objective correctness to refine the model efficiently</li>
+                    <li><strong>Efficient scaling:</strong> Smaller models can achieve specialized capabilities with targeted data and RL</li>
+                </ul>
+                <p>
+                    This demonstrates that <strong>data quality + smart RL</strong> can rival brute-force scale.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Finding 6: No Significant Alignment Tax on Non-Math Tasks</h3>
+                <blockquote>
+                    "After GRPO fine-tuning on math, we evaluate DeepSeekMath-7B-RL on general benchmarks (MMLU, HellaSwag, WinoGrande). 
+                    Performance remains within ±1% of the SFT baseline, indicating no catastrophic forgetting or alignment tax."
+                    <footer>— Section 5.3, Table 7, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
+                <p>
+                    <strong>Alignment tax</strong> (from Lesson 02) is the drop in capability on other tasks after specialized training. 
+                    DeepSeekMath avoids this by:
+                </p>
+                <ul>
+                    <li>Starting from a strong general base model</li>
+                    <li>Using a moderate amount of RL training (not extreme over-optimization)</li>
+                    <li>Applying KL penalty to keep the RL policy close to the SFT initialization</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="data-pipeline" class="content-section">
+            <h2>Data Pipeline: Quality Filtering and Decontamination</h2>
+            <p>
+                A major contribution of DeepSeekMath is its <strong>data curation pipeline</strong> for pre-training. 
+                This connects to benchmark hygiene (Lesson 01) and the importance of clean train/test splits.
+            </p>
+
+            <h3>Pre-Training Data Sources</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Tokens</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>CommonCrawl (math-filtered)</td>
+                        <td>65B</td>
+                        <td>Web pages containing math notation, problem-solving, educational content</td>
+                    </tr>
+                    <tr>
+                        <td>arXiv Papers</td>
+                        <td>40B</td>
+                        <td>Academic papers (math, physics, CS with formal notation)</td>
+                    </tr>
+                    <tr>
+                        <td>Code Repositories</td>
+                        <td>15B</td>
+                        <td>Python, SymPy, numerical libraries (teaches symbolic manipulation)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Total</strong></td>
+                        <td><strong>120B</strong></td>
+                        <td>~20× more math-dense than typical web data</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Contamination Filtering</h3>
+            <div class="info-box">
+                <h4>The Contamination Problem</h4>
+                <p>
+                    From Lesson 01 (MMLU): If test set questions appear in training data, the model can memorize answers instead of learning reasoning. 
+                    This inflates benchmark scores artificially.
+                </p>
+                <p>
+                    <strong>Math benchmarks are especially vulnerable:</strong> Popular datasets like GSM8K and MATH have been circulating online 
+                    for years. They appear in homework help forums, GitHub repos, and blog posts. Training on uncleaned web data risks contamination.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>DeepSeekMath's Filtering Strategy</h4>
+                <p>
+                    The paper describes aggressive decontamination (Section 3.1):
+                </p>
+                <ol>
+                    <li>
+                        <strong>Extract n-grams from benchmark test sets:</strong> For each question and answer in MATH and GSM8K test splits, 
+                        extract all substrings of 8+ tokens.
+                    </li>
+                    <li>
+                        <strong>Scan pre-training data:</strong> Check every pre-training document for exact matches (after normalization) with these n-grams.
+                    </li>
+                    <li>
+                        <strong>Remove matching documents:</strong> If a document contains a match, discard the entire document (conservative: avoids partial contamination).
+                    </li>
+                    <li>
+                        <strong>Report removal statistics:</strong> ~0.3% of web data was removed due to MATH contamination; ~0.1% due to GSM8K.
+                    </li>
+                </ol>
+                <p>
+                    <strong>Why 8 tokens?</strong> Shorter matches (e.g., 3-4 tokens) would trigger too many false positives (common phrases like "the answer is"). 
+                    8 tokens is long enough to be specific but short enough to catch paraphrases.
+                </p>
+            </div>
+
+            <h3>Quality Filtering</h3>
+            <div class="info-box">
+                <h4>Math Classifier</h4>
+                <p>
+                    The team trained a <strong>fastText classifier</strong> to score documents by math density:
+                </p>
+                <ul>
+                    <li><strong>Positive examples:</strong> arXiv math papers, Khan Academy, Stack Exchange math posts</li>
+                    <li><strong>Negative examples:</strong> Random CommonCrawl web pages</li>
+                    <li><strong>Threshold:</strong> Keep only documents with score > 0.7 (top ~10% of web data)</li>
+                </ul>
+                <p>
+                    This increases the density of math content from ~1% (raw web) to ~10-15% (filtered), making pre-training much more efficient for math reasoning.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Code-Math Synergy</h4>
+                <p>
+                    Including 15B tokens of code (SymPy, NumPy, math libraries) teaches the model:
+                </p>
+                <ul>
+                    <li><strong>Symbolic manipulation:</strong> Code that solves equations symbolically (e.g., <code>sympy.solve(2*x + 5 - 11, x)</code>)</li>
+                    <li><strong>Step-by-step computation:</strong> Code naturally has intermediate steps (assign variables, call functions, return values)</li>
+                    <li><strong>Verification logic:</strong> Code often includes assertions and checks, modeling self-verification</li>
+                </ul>
+                <p>
+                    This is why code pre-training helps math reasoning, even though code and math are different domains.
+                </p>
+            </div>
+
+            <h3>Connection to Lesson 01: Benchmark Hygiene</h3>
+            <p>
+                DeepSeekMath's contamination filtering exemplifies <strong>responsible benchmark use</strong>:
+            </p>
+            <ul>
+                <li><strong>Transparency:</strong> The paper reports filtering statistics and removal rates</li>
+                <li><strong>Reproducibility:</strong> The filtering methodology is described in detail so others can replicate it</li>
+                <li><strong>Legitimacy:</strong> The reported MATH/GSM8K scores are credible because contamination was actively prevented</li>
+            </ul>
+            <p>
+                Contrast this with models that train on uncleaned web data and claim SOTA on MATH—those results are less trustworthy.
+            </p>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: GSM8K and MATH Performance</h2>
+            <p>
+                Let's examine DeepSeekMath's performance across training stages and compare to baselines.
+            </p>
+
+            <h3>GSM8K Results (Grade-School Math)</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Model / Stage</th>
+                        <th>GSM8K Accuracy</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>DeepSeekMath-7B-Base (pre-training only)</td>
+                        <td>64.2%</td>
+                        <td>Strong math prior from 120B tokens</td>
+                    </tr>
+                    <tr>
+                        <td>DeepSeekMath-7B-Instruct (SFT)</td>
+                        <td>84.1%</td>
+                        <td>+19.9 points from SFT on math solutions</td>
+                    </tr>
+                    <tr>
+                        <td>DeepSeekMath-7B-RL (SFT + GRPO)</td>
+                        <td><strong>88.2%</strong></td>
+                        <td>+4.1 points from RL fine-tuning</td>
+                    </tr>
+                    <tr>
+                        <td colspan="3" style="text-align: center;"><strong>Comparison to Other Models</strong></td>
+                    </tr>
+                    <tr>
+                        <td>Llama-2-7B</td>
+                        <td>14.6%</td>
+                        <td>General pre-training, no math specialization</td>
+                    </tr>
+                    <tr>
+                        <td>Mistral-7B</td>
+                        <td>52.2%</td>
+                        <td>Strong general model, but no math focus</td>
+                    </tr>
+                    <tr>
+                        <td>MetaMath-7B</td>
+                        <td>77.7%</td>
+                        <td>Math SFT, no RL</td>
+                    </tr>
+                    <tr>
+                        <td>WizardMath-7B</td>
+                        <td>82.6%</td>
+                        <td>Math SFT + code pre-training</td>
+                    </tr>
+                    <tr>
+                        <td>GPT-4 (with CoT)</td>
+                        <td>92.0%</td>
+                        <td>~1000B params, proprietary</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="chart-caption">
+                Table from Section 5.1, Shao et al. (2024). DeepSeekMath-7B-RL outperforms all 7B models and approaches GPT-4 performance.
+            </p>
+
+            <h3>MATH Results (Competition-Level Math)</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Model / Stage</th>
+                        <th>MATH Accuracy</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>DeepSeekMath-7B-Base (pre-training only)</td>
+                        <td>34.2%</td>
+                        <td>Baseline with math-focused pre-training</td>
+                    </tr>
+                    <tr>
+                        <td>DeepSeekMath-7B-Instruct (SFT)</td>
+                        <td>46.8%</td>
+                        <td>+12.6 points from SFT</td>
+                    </tr>
+                    <tr>
+                        <td>DeepSeekMath-7B-RL (SFT + GRPO)</td>
+                        <td><strong>51.7%</strong></td>
+                        <td>+4.9 points from RL (total +17.5 from base)</td>
+                    </tr>
+                    <tr>
+                        <td colspan="3" style="text-align: center;"><strong>Comparison to SOTA</strong></td>
+                    </tr>
+                    <tr>
+                        <td>Llama-2-70B</td>
+                        <td>13.5%</td>
+                        <td>10× larger, but general pre-training</td>
+                    </tr>
+                    <tr>
+                        <td>Minerva-540B</td>
+                        <td>50.3%</td>
+                        <td>77× larger, math-specialized</td>
+                    </tr>
+                    <tr>
+                        <td>Gemini-Ultra (reported)</td>
+                        <td>53.2%</td>
+                        <td>~1000B params, proprietary</td>
+                    </tr>
+                    <tr>
+                        <td>GPT-4 (with CoT)</td>
+                        <td>52.9%</td>
+                        <td>~1000B params, proprietary</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="chart-caption">
+                Table from Section 5.2, Shao et al. (2024). DeepSeekMath-7B-RL rivals models 100× its size on MATH.
+            </p>
+
+            <h3>Breakdown by MATH Difficulty</h3>
+            <div class="info-box">
+                <p>
+                    MATH dataset has 5 difficulty levels (1 = easiest, 5 = hardest). DeepSeekMath's performance by level:
+                </p>
+                <ul>
+                    <li><strong>Level 1:</strong> 82.4% (SFT) → 85.1% (GRPO) — Easy problems, small RL gain</li>
+                    <li><strong>Level 2:</strong> 68.2% (SFT) → 72.9% (GRPO) — Moderate problems, +4.7 gain</li>
+                    <li><strong>Level 3:</strong> 52.1% (SFT) → 57.3% (GRPO) — Hard problems, +5.2 gain</li>
+                    <li><strong>Level 4:</strong> 38.4% (SFT) → 44.2% (GRPO) — Very hard, +5.8 gain</li>
+                    <li><strong>Level 5:</strong> 21.3% (SFT) → 25.6% (GRPO) — Hardest, +4.3 gain</li>
+                </ul>
+                <p>
+                    <strong>Interpretation:</strong> RL benefits harder problems more. On easy problems (Level 1), SFT is already near-optimal. 
+                    On hard problems (Levels 3-4), RL's exploration helps the model find solutions it couldn't imitate from SFT data alone.
+                </p>
+            </div>
+
+            <h3>GRPO vs PPO Head-to-Head</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>MATH Accuracy</th>
+                        <th>GSM8K Accuracy</th>
+                        <th>Training Time</th>
+                        <th>Memory</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>SFT Baseline</td>
+                        <td>46.8%</td>
+                        <td>84.1%</td>
+                        <td>—</td>
+                        <td>—</td>
+                    </tr>
+                    <tr>
+                        <td>PPO (with critic)</td>
+                        <td>51.9%</td>
+                        <td>88.5%</td>
+                        <td>1.0× (reference)</td>
+                        <td>2× policy size</td>
+                    </tr>
+                    <tr>
+                        <td>GRPO (no critic)</td>
+                        <td>51.7%</td>
+                        <td>88.2%</td>
+                        <td><strong>0.7×</strong></td>
+                        <td><strong>1× policy size</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="chart-caption">
+                Table 4, Section 4.3, Shao et al. (2024). GRPO achieves comparable accuracy to PPO with less compute and memory.
+            </p>
+
+            <h3>Key Takeaway: RL Enables Generalization Beyond SFT</h3>
+            <p>
+                The consistent +4-5 point gains from SFT to GRPO across GSM8K and MATH show that <strong>RL teaches the model to solve new problems, not just mimic training data</strong>. 
+                This is especially valuable for:
+            </p>
+            <ul>
+                <li><strong>Distribution shift:</strong> Test problems that are structurally different from training examples</li>
+                <li><strong>Multi-step reasoning:</strong> Longer chains where SFT's next-token prediction alone isn't enough</li>
+                <li><strong>Search and exploration:</strong> Finding solutions that require trying multiple approaches (RL explores, SFT doesn't)</li>
+            </ul>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>Check your knowledge of GRPO, verifiable rewards, and RL for math reasoning.</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <h3>Question 1: Core Difference Between PPO and GRPO</h3>
+                    <p>What is the main architectural difference between PPO and GRPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">GRPO uses a larger policy network</button>
+                        <button class="quiz-option" data-answer="correct">GRPO drops the value network (critic), using group-relative advantages instead</button>
+                        <button class="quiz-option" data-answer="wrong">GRPO uses DPO-style direct optimization</button>
+                        <button class="quiz-option" data-answer="wrong">GRPO requires human preference data instead of rewards</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <h3>Question 2: Group Baseline</h3>
+                    <p>How does GRPO estimate the baseline for advantage calculation?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It trains a separate value network like PPO</button>
+                        <button class="quiz-option" data-answer="correct">It uses the mean reward of a group of sampled responses</button>
+                        <button class="quiz-option" data-answer="wrong">It uses the reward of the best response in the group</button>
+                        <button class="quiz-option" data-answer="wrong">It uses a fixed baseline from human evaluation</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <h3>Question 3: Optimal Group Size</h3>
+                    <p>What group size \(G\) did the paper find optimal for GRPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">\(G = 1\) (no grouping needed)</button>
+                        <button class="quiz-option" data-answer="wrong">\(G = 4\) (small groups are best)</button>
+                        <button class="quiz-option" data-answer="correct">\(G = 8\) (balances variance reduction and compute cost)</button>
+                        <button class="quiz-option" data-answer="wrong">\(G = 64\) (larger is always better)</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <h3>Question 4: Verifiable Rewards</h3>
+                    <p>What is a verifiable reward in the context of DeepSeekMath?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">A reward model trained on human preferences</button>
+                        <button class="quiz-option" data-answer="correct">A rule-based check that determines if the final answer is mathematically correct</button>
+                        <button class="quiz-option" data-answer="wrong">A reward that increases with response length</button>
+                        <button class="quiz-option" data-answer="wrong">A reward that requires manual verification by humans</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <h3>Question 5: Outcome vs Process Supervision</h3>
+                    <p>What is the difference between outcome supervision and process supervision?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Outcome supervision requires human labeling; process supervision is automatic</button>
+                        <button class="quiz-option" data-answer="correct">Outcome supervision rewards only the final answer; process supervision rewards each reasoning step</button>
+                        <button class="quiz-option" data-answer="wrong">Process supervision is faster to compute than outcome supervision</button>
+                        <button class="quiz-option" data-answer="wrong">They are the same thing, just different names</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <h3>Question 6: DeepSeekMath Performance</h3>
+                    <p>How much did RL (GRPO) improve DeepSeekMath on MATH after SFT?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">No improvement — SFT was already optimal</button>
+                        <button class="quiz-option" data-answer="wrong">+1-2 percentage points (marginal gain)</button>
+                        <button class="quiz-option" data-answer="correct">+4.9 percentage points (46.8% → 51.7%)</button>
+                        <button class="quiz-option" data-answer="wrong">+15 percentage points (huge gain)</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <h3>Question 7: Contamination Filtering</h3>
+                    <p>How did DeepSeekMath prevent benchmark contamination?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">They didn't filter — contamination wasn't a concern</button>
+                        <button class="quiz-option" data-answer="wrong">They only trained on synthetic data with no overlap</button>
+                        <button class="quiz-option" data-answer="correct">They removed any pre-training documents containing 8+ token matches with MATH/GSM8K test sets</button>
+                        <button class="quiz-option" data-answer="wrong">They trained separate models for evaluation vs deployment</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <h3>Question 8: Advantage Interpretation</h3>
+                    <p>What does a positive advantage \(A_i > 0\) mean in GRPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">This response got a reward above 0.5</button>
+                        <button class="quiz-option" data-answer="correct">This response is better than the average of the group</button>
+                        <button class="quiz-option" data-answer="wrong">This response is the best in the group</button>
+                        <button class="quiz-option" data-answer="wrong">This response needs more training</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <h3>Question 9: GRPO vs PPO Efficiency</h3>
+                    <p>Why is GRPO more efficient than PPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">GRPO uses fewer training samples</button>
+                        <button class="quiz-option" data-answer="correct">GRPO requires only half the memory (no value network) and trains 1.4× faster</button>
+                        <button class="quiz-option" data-answer="wrong">GRPO doesn't use any reward function</button>
+                        <button class="quiz-option" data-answer="wrong">GRPO is actually less efficient than PPO</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <h3>Question 10: When to Use GRPO vs DPO</h3>
+                    <p>When should you use GRPO instead of DPO?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">When you have pairwise preference data</button>
+                        <button class="quiz-option" data-answer="correct">When you have verifiable, objective rewards (like math correctness)</button>
+                        <button class="quiz-option" data-answer="wrong">When you want to avoid any RL (DPO is always better)</button>
+                        <button class="quiz-option" data-answer="wrong">GRPO and DPO are the same algorithm</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+            </div>
+
+            <div class="quiz-summary">
+                <button id="reset-quiz" class="btn">Reset Quiz</button>
+                <p class="quiz-score"></p>
+            </div>
+        </section>
+
+        <section id="grpo-calculator" class="content-section">
+            <h2>Interactive: GRPO Advantage Calculator</h2>
+            <p>
+                Experiment with group-relative advantage calculation. Set rewards for each response in a group and see how advantages are computed.
+            </p>
+
+            <div class="calculator-container">
+                <h3>Group Configuration</h3>
+                <div class="calculator-controls">
+                    <label>
+                        Group Size: <span id="group-size-display">8</span>
+                        <input type="range" id="group-size" min="2" max="16" value="8" step="1">
+                    </label>
+                </div>
+
+                <h3>Set Rewards (0 = wrong, 1 = correct)</h3>
+                <div id="reward-inputs"></div>
+
+                <div class="calculator-results">
+                    <h3>Results</h3>
+                    <div class="result-item">
+                        <strong>Group Mean Reward:</strong> <span id="mean-reward">0.000</span>
+                    </div>
+                    <div id="advantage-results"></div>
+                </div>
+
+                <div class="info-box">
+                    <h4>How to Use</h4>
+                    <ul>
+                        <li>Adjust group size to see how it affects variance</li>
+                        <li>Set rewards (typically 0 or 1 for binary correctness)</li>
+                        <li>Observe how advantages highlight above-average and below-average responses</li>
+                        <li>Notice: responses with positive advantages get reinforced, negative ones get suppressed</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="data-charts" class="content-section">
+            <h2>Data & Visualizations</h2>
+            <p>
+                Explore DeepSeekMath's results across training stages, difficulty levels, and comparisons to other models.
+            </p>
+
+            <h3>Training Progression: GSM8K and MATH</h3>
+            <p class="chart-caption">
+                Performance across Base → SFT → GRPO stages. Data from Table 5, Shao et al. (2024).
+            </p>
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="training-progression-chart"></canvas>
+            </div>
+
+            <h3>MATH Performance by Difficulty Level</h3>
+            <p class="chart-caption">
+                SFT vs GRPO accuracy on MATH levels 1-5. RL helps more on harder problems. Data from Section 5.2.
+            </p>
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="difficulty-chart"></canvas>
+            </div>
+
+            <h3>Model Comparison: 7B vs Larger Models</h3>
+            <p class="chart-caption">
+                DeepSeekMath-7B-RL rivals models 100× its size on MATH. Data from Table 6, Shao et al. (2024).
+            </p>
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="model-comparison-chart"></canvas>
+            </div>
+
+            <h3>GRPO vs PPO Efficiency</h3>
+            <p class="chart-caption">
+                GRPO achieves similar accuracy with less memory and faster training. Data from Table 4.
+            </p>
+            <div class="chart-container" style="height: 450px;">
+                <canvas id="efficiency-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="bridge-to-curriculum" class="content-section">
+            <h2>Bridge to Curriculum: Connecting GRPO to Prior Lessons</h2>
+            <p>
+                DeepSeekMath and GRPO synthesize concepts from Lessons 02-05. Let's trace the connections.
+            </p>
+
+            <h3>Connection to Lesson 02: RLHF & Reward Modeling</h3>
+            <div class="info-box">
+                <h4>From Learned Rewards to Verifiable Rewards</h4>
+                <p>
+                    <strong>InstructGPT (Lesson 02):</strong> Train a reward model \(r_\phi(x, y)\) on human preferences, then use PPO to optimize the policy against that reward model.
+                </p>
+                <p>
+                    <strong>DeepSeekMath (Lesson 06):</strong> Skip the learned reward model—use a <em>rule-based</em> verifiable reward function. 
+                    This works because math has objective correctness, unlike subjective tasks like "helpfulness."
+                </p>
+                <p>
+                    <strong>Takeaway:</strong> When your task has verifiable outcomes, you can bypass the complexity and expense of training a reward model.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>From PPO with Critic to GRPO without Critic</h4>
+                <p>
+                    <strong>InstructGPT:</strong> PPO requires a value network (critic) to estimate advantages. Training the critic is a major source of instability.
+                </p>
+                <p>
+                    <strong>DeepSeekMath:</strong> GRPO replaces the critic with group-relative advantages. For sparse rewards (like math), 
+                    this is simpler, more stable, and equally effective.
+                </p>
+                <p>
+                    <strong>Takeaway:</strong> PPO is general but complex. For tasks with sparse, verifiable rewards, GRPO is a better fit.
+                </p>
+            </div>
+
+            <h3>Connection to Lesson 03: GSM8K & Verifiers</h3>
+            <div class="info-box">
+                <h4>Verifiers vs RL: Two Paths to Better Math Reasoning</h4>
+                <p>
+                    <strong>GSM8K (Lesson 03):</strong> Train a <em>verifier model</em> to score solutions. At inference, generate multiple solutions and pick the one with the highest verifier score (best-of-N).
+                </p>
+                <p>
+                    <strong>DeepSeekMath (Lesson 06):</strong> Use RL to train the <em>policy itself</em> to generate better solutions. No need for a separate verifier at inference.
+                </p>
+                <p>
+                    <strong>Trade-off:</strong>
+                </p>
+                <ul>
+                    <li><strong>Verifiers:</strong> Cheaper at training time (no RL), but require multiple samples at inference (compute cost scales with N)</li>
+                    <li><strong>RL:</strong> More expensive at training time (RL overhead), but inference is efficient (single sample often suffices)</li>
+                </ul>
+                <p>
+                    <strong>Takeaway:</strong> Both approaches leverage verifiable correctness. Verifiers are inference-time tricks; RL bakes quality into the model.
+                </p>
+            </div>
+
+            <h3>Connection to Lesson 04: DPO</h3>
+            <div class="info-box">
+                <h4>GRPO vs DPO: When to Use Each</h4>
+                <p>
+                    <strong>DPO (Lesson 04):</strong> Directly optimize preferences without RL. Works when you have <em>pairwise preference data</em> (chosen vs rejected responses).
+                </p>
+                <p>
+                    <strong>GRPO (Lesson 06):</strong> Use RL with verifiable rewards. Works when you have <em>objective reward signals</em> (correct/incorrect).
+                </p>
+                <p>
+                    <strong>When to use DPO:</strong>
+                </p>
+                <ul>
+                    <li>You have preference data (human labels or LLM judge rankings)</li>
+                    <li>Task is subjective (helpfulness, style, tone)</li>
+                    <li>You want to avoid RL complexity</li>
+                </ul>
+                <p>
+                    <strong>When to use GRPO:</strong>
+                </p>
+                <ul>
+                    <li>You have verifiable rewards (math, code with tests, logic puzzles)</li>
+                    <li>You can sample multiple attempts per prompt (RL needs exploration)</li>
+                    <li>You want to optimize beyond what SFT can achieve</li>
+                </ul>
+                <p>
+                    <strong>Can you use DPO for math?</strong> Yes, if you generate pairs (correct vs incorrect solutions) and treat them as preferences. 
+                    But GRPO is more natural for this setting because it directly uses the binary correctness signal.
+                </p>
+            </div>
+
+            <h3>Connection to Lesson 05: LLM-as-Judge & Reward Hacking</h3>
+            <div class="info-box">
+                <h4>Verifiable Rewards Avoid Judge Biases</h4>
+                <p>
+                    <strong>LLM-as-Judge (Lesson 05):</strong> Using GPT-4 to judge responses has biases (verbosity, position, self-enhancement). 
+                    Models trained with LLM judges can <em>exploit</em> these biases (reward hacking).
+                </p>
+                <p>
+                    <strong>DeepSeekMath (Lesson 06):</strong> Verifiable rewards (binary correctness) are <strong>hard to game</strong>. 
+                    You can't trick a programmatic check—the answer is either right or wrong.
+                </p>
+                <p>
+                    <strong>Takeaway:</strong> When possible, prefer verifiable rewards over learned reward models or LLM judges. They're more robust and less prone to exploitation.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Process Supervision as a Middle Ground</h4>
+                <p>
+                    If you want both <em>verifiability</em> and <em>reasoning quality</em>, use process supervision:
+                </p>
+                <ul>
+                    <li>Reward each step of the solution (requires step-by-step ground truth)</li>
+                    <li>LLM judges (from Lesson 05) could score intermediate steps if human annotations are unavailable</li>
+                    <li>This gives denser reward signal than outcome supervision, but is more complex</li>
+                </ul>
+                <p>
+                    DeepSeekMath chose outcome supervision for simplicity, but process supervision is an active area of research (e.g., PRM800K dataset from OpenAI).
+                </p>
+            </div>
+
+            <h3>Synthesis: Building a Post-Training Mental Model</h3>
+            <div class="info-box">
+                <p>
+                    After six lessons, you now have a framework for choosing post-training methods:
+                </p>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>If you have...</th>
+                            <th>Use...</th>
+                            <th>Example Task</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Pairwise preference data</td>
+                            <td><strong>DPO</strong> (Lesson 04)</td>
+                            <td>Helpfulness, style, tone (subjective)</td>
+                        </tr>
+                        <tr>
+                            <td>Verifiable binary rewards</td>
+                            <td><strong>GRPO</strong> (Lesson 06)</td>
+                            <td>Math, code with tests, logic</td>
+                        </tr>
+                        <tr>
+                            <td>Learned reward model (from humans)</td>
+                            <td><strong>PPO</strong> (Lesson 02)</td>
+                            <td>Alignment, safety (complex values)</td>
+                        </tr>
+                        <tr>
+                            <td>LLM judge for preferences</td>
+                            <td><strong>RLAIF or DPO</strong> (Lesson 05)</td>
+                            <td>Instruction-following, chat quality</td>
+                        </tr>
+                        <tr>
+                            <td>Step-by-step ground truth</td>
+                            <td><strong>Process supervision RL</strong></td>
+                            <td>Reasoning chains, multi-step tasks</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>
+                    <strong>Key insight:</strong> The structure of your feedback signal (preferences, rewards, verifiability) determines which algorithm is most appropriate.
+                </p>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Links</h2>
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 DeepSeekMath Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2402.03300" target="_blank">DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models</a></p>
+                    <p>Shao, Wang, Gu, Hong, Zhang, et al. (2024)</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💻 DeepSeekMath Model</h3>
+                    <p><a href="https://huggingface.co/deepseek-ai/deepseek-math-7b-rl" target="_blank">DeepSeek-Math-7B-RL on Hugging Face</a></p>
+                    <p>Open weights, ready for inference and fine-tuning</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 MATH Dataset</h3>
+                    <p><a href="https://github.com/hendrycks/math" target="_blank">MATH: Competition-Level Math Problems</a></p>
+                    <p>Hendrycks et al. (2021) - 12,500 problems with step-by-step solutions</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📊 GSM8K Dataset</h3>
+                    <p><a href="https://github.com/openai/grade-school-math" target="_blank">GSM8K: Grade School Math</a></p>
+                    <p>Cobbe et al. (2021) - 8,500 linguistically diverse grade school math problems</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📄 GRPO Algorithm Details</h3>
+                    <p><a href="https://arxiv.org/abs/2402.03300" target="_blank">Section 4: GRPO Implementation</a></p>
+                    <p>Pseudocode, hyperparameters, and ablations</p>
+                </div>
+                <div class="resource-card">
+                    <h3>🔬 Process Supervision</h3>
+                    <p><a href="https://arxiv.org/abs/2305.20050" target="_blank">Let's Verify Step by Step (PRM800K)</a></p>
+                    <p>Lightman et al. (2023) - OpenAI's work on process-supervised RM</p>
+                </div>
+                <div class="resource-card">
+                    <h3>📄 Contamination in Benchmarks</h3>
+                    <p><a href="https://arxiv.org/abs/2310.16789" target="_blank">Rethinking Benchmark and Contamination</a></p>
+                    <p>Yang et al. (2023) - Methods for detecting and preventing contamination</p>
+                </div>
+                <div class="resource-card">
+                    <h3>💡 Blog: Why GRPO Works</h3>
+                    <p><a href="https://deepseek.com/blog/deepseek-math" target="_blank">DeepSeek Blog: Math Reasoning with RL</a></p>
+                    <p>Intuition and design choices behind GRPO</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Lesson 06 - Track B (State-of-the-Art) | 
+                <a href="../05-llm-as-judge-mt-bench/">← Previous: LLM-as-Judge & MT-Bench</a> | 
+                <a href="../README.md">Return to Curriculum Index</a> |
+                Next: Lesson 07 (Code Evaluation with HumanEval) →
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        // Render KaTeX math after DOM loads
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+    <script src="quiz.js"></script>
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+    <script src="grpo-calculator.js"></script>
+</body>
+</html>
