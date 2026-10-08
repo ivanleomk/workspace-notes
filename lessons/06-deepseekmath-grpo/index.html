@@ -704,7 +704,7 @@ Total reward: 1.0</code></pre>
             <div class="info-box">
                 <h4>Code-Math Synergy</h4>
                 <p>
-                    Including 15B tokens of code (SymPy, NumPy, math libraries) teaches the model:
+                    The paper notes that code training improves mathematical reasoning (Section 5.1.1). Including code in the training mix teaches the model:
                 </p>
                 <ul>
                     <li><strong>Symbolic manipulation:</strong> Code that solves equations symbolically (e.g., <code>sympy.solve(2*x + 5 - 11, x)</code>)</li>
@@ -712,7 +712,7 @@ Total reward: 1.0</code></pre>
                     <li><strong>Verification logic:</strong> Code often includes assertions and checks, modeling self-verification</li>
                 </ul>
                 <p>
-                    This is why code pre-training helps math reasoning, even though code and math are different domains.
+                    This is why code pre-training helps math reasoning, even though code and math are different domains. DeepSeekMath-Base 7B is initialized from DeepSeek-Coder-Base-v1.5 7B, leveraging this code-math connection.
                 </p>
             </div>
 
@@ -824,24 +824,19 @@ Total reward: 1.0</code></pre>
                         <td colspan="3" style="text-align: center;"><strong>Comparison to SOTA</strong></td>
                     </tr>
                     <tr>
-                        <td>Llama-2-70B</td>
-                        <td>13.5%</td>
-                        <td>10× larger, but general pre-training</td>
-                    </tr>
-                    <tr>
                         <td>Minerva-540B</td>
                         <td>33.6%</td>
                         <td>77× larger, math-specialized</td>
                     </tr>
                     <tr>
-                        <td>Gemini-Ultra (reported)</td>
+                        <td>Gemini-Ultra</td>
                         <td>53.2%</td>
-                        <td>~1000B params, proprietary</td>
+                        <td>Proprietary, much larger</td>
                     </tr>
                     <tr>
                         <td>GPT-4 (with CoT)</td>
                         <td>52.9%</td>
-                        <td>~1000B params, proprietary</td>
+                        <td>Proprietary, much larger</td>
                     </tr>
                 </tbody>
             </table>

@@ -13,17 +13,17 @@ const deepSeekMathData = {
     // Note: Paper does not provide MATH breakdown by difficulty level
     // Removed fabricated mathByDifficulty data
 
-    // Model comparison on MATH (Table 6)
+    // Model comparison on MATH (Table 2 for base models, Table 5 for instruct/RL)
     modelComparison: {
         models: [
-            'Llama-2-70B',
             'Minerva-540B',
             'GPT-4',
             'Gemini-Ultra',
             'DeepSeek\nMath-7B-RL'
         ],
-        mathAccuracy: [13.5, 50.3, 52.9, 53.2, 51.7],
-        parameters: [70, 540, 1000, 1000, 7]  // in billions
+        mathAccuracy: [33.6, 52.9, 53.2, 51.7],
+        // Note: GPT-4 and Gemini-Ultra parameter counts are not publicly disclosed
+        parameters: [540, null, null, 7]  // in billions; null = undisclosed
     },
 
     // Note: Paper does NOT report PPO comparison
