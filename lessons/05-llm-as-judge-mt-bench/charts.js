@@ -225,20 +225,16 @@ function createCharts() {
     const metricsCtx = document.getElementById('metrics-comparison-chart');
     if (metricsCtx) {
         const metricsData = {
-            labels: ['BLEU', 'ROUGE', 'BERTScore', 'GPT-4 Judge'],
+            labels: ['Traditional Metrics (BLEU/ROUGE)', 'GPT-4 Judge'],
             datasets: [{
-                label: 'Agreement with Humans (%)',
-                data: [45, 52, 60, 80.3],
+                label: 'Agreement with Humans (%, Setup S2 w/o tie)',
+                data: [null, 85.0],
                 backgroundColor: [
                     'rgba(239, 68, 68, 0.7)',
-                    'rgba(245, 158, 11, 0.7)',
-                    'rgba(139, 92, 246, 0.7)',
                     'rgba(16, 185, 129, 0.7)'
                 ],
                 borderColor: [
                     'rgba(239, 68, 68, 1)',
-                    'rgba(245, 158, 11, 1)',
-                    'rgba(139, 92, 246, 1)',
                     'rgba(16, 185, 129, 1)'
                 ],
                 borderWidth: 2

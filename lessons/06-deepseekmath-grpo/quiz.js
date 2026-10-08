@@ -15,12 +15,12 @@ document.addEventListener('DOMContentLoaded', function() {
             wrong: "Not quite. GRPO's key difference is that it eliminates the value network (critic) that PPO requires. Instead of learning a value function to estimate advantages, GRPO uses the mean reward of a group of sampled responses as the baseline."
         },
         2: {
-            correct: "Exactly! GRPO computes the mean reward across G sampled responses (e.g., G=8) and uses this as the baseline. The advantage of each response is then its reward minus this group mean. This approach avoids the need to train a separate value network.",
-            wrong: "Incorrect. GRPO doesn't use a learned value network. It samples a group of responses (typically 8), computes their mean reward, and uses that as the baseline for advantage calculation: A = r - mean(group rewards)."
+            correct: "Exactly! GRPO computes the mean reward across G sampled responses and uses this as the baseline. The advantage of each response is then its reward minus this group mean. This approach avoids the need to train a separate value network. The DeepSeekMath paper uses G=64 outputs per question.",
+            wrong: "Incorrect. GRPO doesn't use a learned value network. It samples a group of responses, computes their mean reward, and uses that as the baseline for advantage calculation: A = r - mean(group rewards). The paper uses G=64 in their experiments."
         },
         3: {
-            correct: "Correct! The paper found G=8 to be optimal, balancing variance reduction with computational efficiency. Smaller groups (G=1-4) have higher variance; larger groups (G>16) provide diminishing returns while increasing compute cost linearly.",
-            wrong: "Not quite. The paper found G=8 to be the sweet spot. With G=1, there's no variance reduction (equivalent to REINFORCE without baseline). Larger groups provide diminishing returns. G=8 balances baseline quality with computational efficiency."
+            correct: "Correct! The DeepSeekMath paper uses G=64 outputs per question during training. Larger group sizes help stabilize the baseline estimate by averaging rewards across many diverse attempts, reducing variance in the gradient estimates.",
+            wrong: "Not quite. The paper uses G=64 outputs per question during training. This large group size helps provide a stable baseline estimate. With G=1, there would be no group averaging at all."
         },
         4: {
             correct: "Exactly! A verifiable reward is a rule-based function that programmatically checks whether the model's final answer is mathematically correct. No learned reward model or human judgment needed—just extract the answer and compare to ground truth. This works for any task with objective correctness.",
@@ -35,16 +35,16 @@ document.addEventListener('DOMContentLoaded', function() {
             wrong: "Incorrect. GRPO provided a significant +4.9 percentage point improvement on MATH (46.8% → 51.7%). This gain came from RL's ability to explore and discover solutions, not just mimic training examples like SFT does."
         },
         7: {
-            correct: "Exactly! DeepSeekMath applied aggressive decontamination: they extracted all 8+ token substrings from MATH and GSM8K test sets, then removed any pre-training documents containing matches. This ensures benchmark scores reflect true reasoning ability, not memorization.",
-            wrong: "Incorrect. The paper describes careful contamination filtering: they removed any pre-training documents containing 8+ token matches with benchmark test sets. This prevents the model from memorizing answers and ensures legitimate evaluation."
+            correct: "Exactly! DeepSeekMath applied aggressive decontamination: they used 10-gram matching to filter out any pre-training documents containing benchmark questions or answers. This ensures benchmark scores reflect true reasoning ability, not memorization.",
+            wrong: "Incorrect. The paper describes careful contamination filtering using 10-gram exact matching: they removed any pre-training documents containing 10-gram matches with benchmark test sets. This prevents the model from memorizing answers and ensures legitimate evaluation."
         },
         8: {
             correct: "Correct! A positive advantage A > 0 means this response's reward is above the group average. GRPO will reinforce (increase probability of) this response. Negative advantages indicate below-average responses that get suppressed.",
             wrong: "Not quite. A positive advantage means the response performed better than the average of the sampled group. It's relative to the group baseline (mean reward), not an absolute threshold. This relative comparison is what makes GRPO work without a learned value function."
         },
         9: {
-            correct: "Exactly! GRPO requires only the policy network (no critic), cutting memory usage in half. The paper reports GRPO trains 1.4× faster than PPO while achieving comparable accuracy on MATH and GSM8K. This efficiency comes from eliminating the critic training overhead.",
-            wrong: "Incorrect. GRPO is more efficient because it doesn't need a value network (critic). This cuts memory usage in half and speeds up training by ~1.4× compared to PPO, while achieving similar performance."
+            correct: "Exactly! GRPO requires only the policy network (no critic), reducing memory and computational requirements. The paper emphasizes that GRPO achieves strong results on MATH (51.7%) and GSM8K (88.2%) while being simpler and more stable than PPO.",
+            wrong: "Incorrect. GRPO is more efficient because it doesn't need a value network (critic). This reduces memory requirements and computational overhead while achieving strong performance on mathematical reasoning benchmarks."
         },
         10: {
             correct: "Correct! Use GRPO when you have verifiable, objective rewards (like math correctness, code passing tests). Use DPO when you have pairwise preference data (like human rankings or LLM judge comparisons). The structure of your feedback signal determines the best algorithm.",

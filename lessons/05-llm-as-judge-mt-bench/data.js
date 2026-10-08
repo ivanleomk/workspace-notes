@@ -132,23 +132,21 @@ const mtBenchQuestions = {
     ]
 };
 
-// Judge agreement data (from Zheng et al. 2023, Table 3)
+// Judge agreement data (from Zheng et al. 2023, Table 5, Setup S2 w/o tie)
+// Paper reports: Human-Human 81-82%, GPT-4 85% both turns
+// Claude and GPT-3.5 pairwise agreement rates not reported in main tables
 const judgeAgreementData = {
-    labels: ['Human-Human', 'GPT-4', 'Claude-v1', 'GPT-3.5'],
+    labels: ['Human-Human', 'GPT-4'],
     datasets: [{
-        label: 'Agreement with Human Judges (%)',
-        data: [81.0, 80.3, 77.8, 74.2],
+        label: 'Agreement with Human Judges (%, Setup S2 w/o tie)',
+        data: [81.5, 85.0],
         backgroundColor: [
             'rgba(16, 185, 129, 0.7)',
-            'rgba(59, 130, 246, 0.7)',
-            'rgba(139, 92, 246, 0.7)',
-            'rgba(245, 158, 11, 0.7)'
+            'rgba(59, 130, 246, 0.7)'
         ],
         borderColor: [
             'rgba(16, 185, 129, 1)',
-            'rgba(59, 130, 246, 1)',
-            'rgba(139, 92, 246, 1)',
-            'rgba(245, 158, 11, 1)'
+            'rgba(59, 130, 246, 1)'
         ],
         borderWidth: 2
     }]
