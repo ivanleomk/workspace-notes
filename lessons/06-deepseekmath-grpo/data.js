@@ -2,19 +2,16 @@
 // All numbers are from the paper's tables and figures
 
 const deepSeekMathData = {
-    // Training progression data (Table 5)
+    // Training progression data (from paper abstract and Section 1.1)
+    // "GSM8K: 82.9% → 88.2%, MATH: 46.8% → 51.7%"
     trainingProgression: {
         stages: ['Base\n(Pre-training)', 'Instruct\n(SFT)', 'RL\n(GRPO)'],
-        gsm8k: [64.2, 84.1, 88.2],
-        math: [34.2, 46.8, 51.7]
+        gsm8k: [64.2, 82.9, 88.2],
+        math: [36.2, 46.8, 51.7]
     },
 
-    // MATH performance by difficulty level (Section 5.2)
-    mathByDifficulty: {
-        levels: ['Level 1\n(Easiest)', 'Level 2', 'Level 3', 'Level 4', 'Level 5\n(Hardest)'],
-        sft: [82.4, 68.2, 52.1, 38.4, 21.3],
-        grpo: [85.1, 72.9, 57.3, 44.2, 25.6]
-    },
+    // Note: Paper does not provide MATH breakdown by difficulty level
+    // Removed fabricated mathByDifficulty data
 
     // Model comparison on MATH (Table 6)
     modelComparison: {
@@ -29,42 +26,27 @@ const deepSeekMathData = {
         parameters: [70, 540, 1000, 1000, 7]  // in billions
     },
 
-    // GRPO vs PPO comparison (Table 4)
-    grpoVsPpo: {
-        methods: ['SFT\nBaseline', 'PPO', 'GRPO'],
-        mathAccuracy: [46.8, 51.9, 51.7],
-        gsm8kAccuracy: [84.1, 88.5, 88.2],
-        trainingTime: [0, 1.0, 0.7],  // relative to PPO
-        memoryUsage: [1.0, 2.0, 1.0]  // relative to policy size
-    },
+    // Note: Paper does NOT report PPO comparison
+    // Only shows SFT→GRPO progression (see trainingProgression above)
+    // Removed fabricated grpoVsPpo data
 
-    // Group size ablation (Figure 5)
-    groupSizeAblation: {
-        groupSizes: [1, 2, 4, 8, 16, 32],
-        mathAccuracy: [48.3, 49.8, 50.9, 51.7, 51.8, 51.9]
-    },
+    // Note: Paper uses G=64 and does NOT report group size ablation
+    // Removed fabricated groupSizeAblation data
 
-    // Pre-training data composition (Section 3.1)
-    preTrainingData: {
-        sources: ['CommonCrawl\n(Math-filtered)', 'arXiv\nPapers', 'Code\nRepositories'],
-        tokens: [65, 40, 15],  // in billions
-        percentage: [54.2, 33.3, 12.5]
-    },
+    // Pre-training data: 120B math tokens from CommonCrawl (Section 2.1)
+    // Paper does not break down into CommonCrawl/arXiv/code splits
+    // Removed fabricated preTrainingData breakdown
 
-    // Contamination filtering stats (Section 3.1)
-    contamination: {
-        datasets: ['MATH', 'GSM8K'],
-        documentsScanned: [120000000, 120000000],  // 120B tokens
-        documentsRemoved: [360000, 120000],  // approximate from 0.3% and 0.1%
-        percentageRemoved: [0.3, 0.1]
-    },
+    // Decontamination: 10-gram exact matching (Section 2.1)
+    // Paper states method but does not provide removal statistics
+    // Removed fabricated contamination stats
 
-    // RL improvement by task type
+    // RL improvement on key benchmarks (from paper abstract and Section 1.1)
     rlImprovement: {
-        benchmarks: ['GSM8K\n(Grade School)', 'MATH\n(Competition)', 'MMLU\n(General)', 'HellaSwag\n(Reasoning)'],
-        sftScores: [84.1, 46.8, 64.2, 78.5],
-        grpoScores: [88.2, 51.7, 64.0, 78.7],
-        improvements: [4.1, 4.9, -0.2, 0.2]
+        benchmarks: ['GSM8K', 'MATH'],
+        sftScores: [82.9, 46.8],
+        grpoScores: [88.2, 51.7],
+        improvements: [5.3, 4.9]
     }
 };
 

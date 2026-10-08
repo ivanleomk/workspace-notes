@@ -348,16 +348,17 @@
 
             <div class="info-box">
                 <h3>Anthropic Helpful-Harmless (HH) Dialogue</h3>
-                <blockquote>
-                    "On the Anthropic HH dataset, DPO achieves win rates of 55-60% against the SFT model across 
-                    different temperatures, demonstrating effective alignment with human preferences on safety-critical 
-                    dialogues."
-                    <footer>— Section 5.3, <a href="https://arxiv.org/abs/2305.18290" target="_blank">arXiv:2305.18290</a></footer>
-                </blockquote>
                 <p>
-                    The Anthropic HH dataset contains preference labels for helpfulness and harmlessness. DPO-trained 
-                    models consistently beat the SFT baseline in GPT-4 win rates, showing that the method works for 
-                    safety-critical alignment, not just stylistic preferences.
+                    The Anthropic HH dataset contains preference labels for helpfulness and harmlessness (170k examples). 
+                    Figure 3 (left) of the paper shows that "DPO is the only method that improves over chosen summaries 
+                    in the Anthropic-HH test set" when evaluated by GPT-4. Figure 3 (right) shows win rates evolving 
+                    during training at temperatures 0.7 and 1.0, with DPO maintaining stable improvement over the 
+                    dataset labels.
+                </p>
+                <p>
+                    The paper states DPO is "the only computationally efficient method that improves over the preferred 
+                    completions in the Anthropic HH dataset," showing that the method works for safety-critical alignment, 
+                    not just stylistic preferences.
                 </p>
             </div>
 
@@ -1047,14 +1048,6 @@
                 <canvas id="winrate-chart"></canvas>
             </div>
 
-            <h3>DPO Performance Across Temperatures</h3>
-            <p class="chart-caption">
-                GPT-4 win rates for DPO vs SFT on Anthropic HH dialogue at different sampling temperatures. 
-                Higher temperatures show bigger improvements. Data from Table 2, Rafailov et al. (2023).
-            </p>
-            <div class="chart-container">
-                <canvas id="temperature-chart"></canvas>
-            </div>
         </section>
 
         <section id="evaluation" class="content-section">

@@ -90,17 +90,9 @@ const winRateData = {
     }]
 };
 
-// DPO win rates across temperatures (Table 2 from paper)
-const temperatureData = {
-    labels: ['T=0.0 (greedy)', 'T=0.5', 'T=1.0'],
-    datasets: [{
-        label: 'DPO Win Rate vs SFT (%)',
-        data: [55, 58, 60],
-        backgroundColor: 'rgba(59, 130, 246, 0.7)',
-        borderColor: 'rgba(59, 130, 246, 1)',
-        borderWidth: 2
-    }]
-};
+// Note: Paper does not have "Table 2" of temperature-specific win rates
+// (Table 2 is about human vs GPT-4 agreement on TL;DR)
+// temperatureData removed
 
 function createCharts() {
     // Reward vs KL chart
@@ -247,71 +239,7 @@ function createCharts() {
         });
     }
 
-    // Temperature chart
-    const temperatureCtx = document.getElementById('temperature-chart');
-    if (temperatureCtx) {
-        new Chart(temperatureCtx, {
-            type: 'bar',
-            data: temperatureData,
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                plugins: {
-                    legend: {
-                        display: false
-                    },
-                    title: {
-                        display: true,
-                        text: 'DPO Performance Across Sampling Temperatures',
-                        color: '#f1f5f9',
-                        font: {
-                            size: 16
-                        }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return 'Win rate: ' + context.parsed.y + '%';
-                            },
-                            afterLabel: function(context) {
-                                const baseline = 50;
-                                const diff = context.parsed.y - baseline;
-                                return '+' + diff + 'pp over SFT baseline';
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 70,
-                        ticks: {
-                            color: '#cbd5e1',
-                            callback: function(value) {
-                                return value + '%';
-                            }
-                        },
-                        grid: {
-                            color: 'rgba(71, 85, 105, 0.3)'
-                        },
-                        title: {
-                            display: true,
-                            text: 'DPO Win Rate vs SFT (%)',
-                            color: '#cbd5e1'
-                        }
-                    },
-                    x: {
-                        ticks: {
-                            color: '#cbd5e1'
-                        },
-                        grid: {
-                            color: 'rgba(71, 85, 105, 0.3)'
-                        }
-                    }
-                }
-            }
-        });
-    }
+    // Note: temperature-chart removed (fabricated data)
 }
 
 // Load Chart.js and create charts

@@ -59,7 +59,7 @@ const quizData = {
     9: {
         correct: "DPO matches or slightly beats PPO while being much simpler to train",
         feedback: {
-            correct: "✓ Right! On TL;DR summarization, DPO achieves 58% win rate against PPO and 61% against SFT (GPT-4 as judge). On Anthropic HH dialogue, DPO shows 55-60% win rates over SFT. On controlled sentiment, DPO reaches ~95% of PPO-GT's reward (PPO with ground-truth oracle). The performance is comparable or slightly better than PPO, while DPO training is dramatically simpler: no reward model, no PPO hyperparameters, no RL sampling. DPO has become a preferred method in practice.",
+            correct: "✓ Right! On TL;DR summarization, DPO achieves 58% win rate against PPO and 61% against SFT (GPT-4 as judge). On Anthropic HH dialogue, DPO is the only method that improves over the chosen completions. On controlled sentiment, DPO reaches ~95% of PPO-GT's reward (PPO with ground-truth oracle). The performance is comparable or slightly better than PPO, while DPO training is dramatically simpler: no reward model, no PPO hyperparameters, no RL sampling. DPO has become a preferred method in practice.",
             wrong: "✗ DPO doesn't underperform PPO—it matches or beats it on most benchmarks tested in the paper. It's not limited to sentiment tasks; it works on summarization, dialogue, and general instruction-following. And it's definitely not the same as the SFT baseline—DPO improves significantly over SFT by optimizing preferences. The key result is that simpler training (DPO) delivers the same quality as complex training (RLHF), making DPO the better engineering choice for most applications."
         }
     },

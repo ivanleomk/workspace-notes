@@ -1,18 +1,18 @@
 // Visualizations for InstructGPT lesson
 // Data approximated from Ouyang et al. (2022) for educational purposes
 
-// Win rates: InstructGPT vs baseline models
-// Based on Figure 3 from the paper (labeler preference evaluations)
+// Win rates: InstructGPT 175B vs baseline models
+// Data from Section 4.1: direct comparisons with reported percentages
 const winRateData = {
     labels: [
-        'InstructGPT 1.3B\nvs\nGPT-3 175B',
         'InstructGPT 175B\nvs\nGPT-3 175B',
-        'InstructGPT\nvs\nSFT (same size)',
-        'InstructGPT\nvs\nFew-shot GPT-3'
+        'InstructGPT 175B\nvs\nFew-shot GPT-3',
+        'InstructGPT 175B\nvs\nFLAN',
+        'InstructGPT 175B\nvs\nT0'
     ],
     datasets: [{
         label: 'InstructGPT Preferred (%)',
-        data: [85, 90, 71, 73],
+        data: [85, 71, 78, 79],
         backgroundColor: 'rgba(59, 130, 246, 0.7)',
         borderColor: 'rgba(59, 130, 246, 1)',
         borderWidth: 2
