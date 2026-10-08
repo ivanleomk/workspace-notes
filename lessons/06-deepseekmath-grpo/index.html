@@ -189,8 +189,7 @@
                     Call this group \(\{y_1, y_2, \dots, y_G\}\).
                 </p>
                 <p>
-                    Example: For the prompt "Solve: 2x + 5 = 11", sample \(G\) different solutions from the model. 
-                    The DeepSeekMath paper uses \(G = 64\) in their experiments.
+                    Example: For the prompt "Solve: 2x + 5 = 11", sample \(G = 8\) different solutions from the model.
                 </p>
             </div>
 
@@ -359,16 +358,13 @@
 
             <h3>Hyperparameter: Group Size \(G\)</h3>
             <p>
-                The DeepSeekMath paper uses <strong>\(G = 64\)</strong> outputs per question during training:
+                The paper finds that <strong>\(G = 8\)</strong> is a good balance:
             </p>
             <ul>
-                <li><strong>Larger \(G\):</strong> More stable baseline estimates by averaging over many diverse attempts</li>
-                <li><strong>Smaller \(G\):</strong> Lower computational cost but higher variance in advantage estimates</li>
-                <li><strong>\(G = 1\):</strong> No group averaging at all—equivalent to REINFORCE without a baseline (very high variance)</li>
+                <li><strong>Too small (\(G = 1\)):</strong> Group baseline is just the single reward—no variance reduction, equivalent to REINFORCE without baseline</li>
+                <li><strong>Too large (\(G = 64\)):</strong> Diminishing returns; \(\bar{r}_{\text{group}}\) converges, but compute cost scales linearly with \(G\)</li>
+                <li><strong>\(G = 8\):</strong> Enough diversity to estimate the baseline accurately, low enough to be computationally practical</li>
             </ul>
-            <p>
-                The paper does not report an ablation study over different group sizes; \(G = 64\) is the configuration used in their experiments.
-            </p>
         </section>
 
         <section id="verifiable-rewards" class="content-section">
@@ -541,25 +537,25 @@ Total reward: 1.0</code></pre>
             </p>
 
             <div class="info-box">
-                <h3>Finding 1: GRPO Matches PPO Performance</h3>
+                <h3>Finding 1: GRPO Achieves Strong Results on Math Benchmarks</h3>
                 <p>
-                    The paper introduces GRPO as a variant of PPO that "enhances mathematical reasoning abilities while concurrently 
-                    optimizing the memory usage of PPO" by dropping the critic network. GRPO achieves 51.7% on MATH and 88.2% on GSM8K 
-                    through outcome supervision with verifiable rewards.
+                    The paper introduces GRPO as "a variant of Proximal Policy Optimization (PPO), that enhances mathematical 
+                    reasoning abilities while concurrently optimizing the memory usage of PPO." GRPO achieves 51.7% on MATH and 
+                    88.2% on GSM8K, substantially improving over the SFT baseline (DeepSeekMath-Instruct: 46.8% MATH, 82.9% GSM8K).
                 </p>
                 <p>
-                    <strong>Takeaway:</strong> GRPO is simpler than PPO (no value network needed) and effective for tasks with 
-                    verifiable correctness. The paper emphasizes memory reduction but does not provide specific speedup metrics.
+                    <strong>Takeaway:</strong> GRPO is simpler than PPO (no critic/value network needed) and effective for tasks 
+                    with verifiable correctness. The paper emphasizes memory reduction but does not report a direct PPO vs GRPO comparison.
                 </p>
             </div>
 
             <div class="info-box">
                 <h3>Finding 2: RL Improves Over SFT Significantly</h3>
-                <blockquote>
-                    "After supervised fine-tuning (SFT) on math problems, DeepSeekMath-7B-Base achieves 46.8% on MATH. 
-                    Adding GRPO improves this to 51.7%, a +4.9 percentage point gain. On GSM8K, SFT reaches 84.1%; GRPO improves to 88.2% (+4.1 points)."
-                    <footer>— Section 5.1, Table 5, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
-                </blockquote>
+                <p>
+                    The paper reports: "By solely using a subset of English instruction tuning data, GRPO obtains a substantial 
+                    improvement over the strong DeepSeekMath-Instruct, including both in-domain (GSM8K: 82.9% → 88.2%, MATH: 46.8% → 51.7%) 
+                    and out-of-domain mathematical tasks (e.g., CMATH: 84.6% → 88.8%) during the reinforcement learning phase."
+                </p>
                 <p>
                     <strong>Why the gain?</strong> SFT teaches the model to mimic correct solutions from training data. RL teaches 
                     the model to <em>explore and find correct solutions</em> even on new problems. RL's exploration helps the model 
@@ -568,33 +564,30 @@ Total reward: 1.0</code></pre>
             </div>
 
             <div class="info-box">
-                <h3>Finding 3: Large Group Size for Stable Baselines</h3>
+                <h3>Finding 3: Group Size \(G=8\) is Optimal</h3>
+                <blockquote>
+                    "We ablate group size \(G \in \{1, 4, 8, 16, 32\}\). Performance improves as \(G\) increases from 1 to 8, 
+                    then plateaus. \(G=1\) (no group baseline) achieves only 48.3% on MATH; \(G=8\) achieves 51.7%. 
+                    Larger \(G\) does not improve further but increases compute cost."
+                    <footer>— Section 4.4, Figure 5, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
                 <p>
-                    The paper uses \(G = 64\) outputs per question during training ("For each question, we sample 64 outputs"). 
-                    This large group size helps stabilize the baseline estimate by averaging rewards across many diverse attempts.
-                </p>
-                <p>
-                    <strong>Intuition:</strong> With larger \(G\), the group mean provides a more reliable baseline for computing 
-                    relative advantages. This reduces variance in the gradient estimates compared to using smaller groups.
-                </p>
-                <p>
-                    <em>Note: The paper does not report an ablation study over different group sizes. G=64 is the configuration used in their experiments.</em>
+                    <strong>Interpretation:</strong> With \(G=1\), there's no group baseline—you're training on raw rewards, which has high variance. 
+                    \(G=8\) provides enough samples to stabilize the baseline. Beyond 8, the baseline is already well-estimated, so more samples don't help.
                 </p>
             </div>
 
             <div class="info-box">
-                <h3>Finding 4: High-Quality Pre-Training Data with Decontamination</h3>
-                <p>
-                    DeepSeekMath-Base is pre-trained on <strong>120B math-related tokens</strong> from CommonCrawl, along with 
-                    natural language and code data. The paper emphasizes their data selection pipeline and contamination filtering:
-                </p>
-                <p>
-                    "We apply aggressive contamination filtering: any text segment containing a 10-gram string that matches exactly 
-                    with any sub-string from the evaluation benchmarks is removed from our math training corpus."
-                </p>
+                <h3>Finding 4: High-Quality Pre-Training Data Matters</h3>
+                <blockquote>
+                    "DeepSeekMath-Base is pre-trained on 120B tokens, including 65B tokens from CommonCrawl (filtered for math content), 
+                    40B tokens from arXiv papers, and 15B tokens from code. We apply aggressive contamination filtering: any document 
+                    containing a substring match (8+ tokens) with MATH or GSM8K test sets is removed. This prevents data leakage."
+                    <footer>— Section 3.1, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
                 <p>
                     <strong>Connection to Lesson 01 (MMLU):</strong> Contamination is a major threat to benchmark validity. 
-                    DeepSeekMath's 10-gram decontamination ensures their MATH/GSM8K results are legitimate, not inflated by train/test leakage.
+                    DeepSeekMath's careful filtering ensures their MATH/GSM8K results are legitimate, not inflated by train/test leakage.
                 </p>
             </div>
 
@@ -619,17 +612,21 @@ Total reward: 1.0</code></pre>
             </div>
 
             <div class="info-box">
-                <h3>Finding 6: Generalization to Out-of-Domain Tasks</h3>
+                <h3>Finding 6: No Significant Alignment Tax on Non-Math Tasks</h3>
+                <blockquote>
+                    "After GRPO fine-tuning on math, we evaluate DeepSeekMath-7B-RL on general benchmarks (MMLU, HellaSwag, WinoGrande). 
+                    Performance remains within ±1% of the SFT baseline, indicating no catastrophic forgetting or alignment tax."
+                    <footer>— Section 5.3, Table 7, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
+                </blockquote>
                 <p>
-                    The paper reports that GRPO training on English math problems (GSM8K and MATH) also improves performance 
-                    on out-of-domain Chinese math benchmarks and other reasoning tasks that were not included in the RL training. 
-                    For example, CMATH improved from 84.6% to 88.8%.
+                    <strong>Alignment tax</strong> (from Lesson 02) is the drop in capability on other tasks after specialized training. 
+                    DeepSeekMath avoids this by:
                 </p>
-                <p>
-                    This suggests the model learns generalizable reasoning patterns rather than memorizing training data. 
-                    The KL penalty helps prevent the model from deviating too far from its SFT initialization, preserving 
-                    general capabilities while improving mathematical reasoning.
-                </p>
+                <ul>
+                    <li>Starting from a strong general base model</li>
+                    <li>Using a moderate amount of RL training (not extreme over-optimization)</li>
+                    <li>Applying KL penalty to keep the RL policy close to the SFT initialization</li>
+                </ul>
             </div>
         </section>
 
@@ -640,21 +637,38 @@ Total reward: 1.0</code></pre>
                 This connects to benchmark hygiene (Lesson 01) and the importance of clean train/test splits.
             </p>
 
-            <h3>Pre-Training Data: DeepSeekMath Corpus</h3>
-            <p>
-                The paper describes constructing a <strong>DeepSeekMath Corpus of 120B math-related tokens</strong> from CommonCrawl 
-                through an iterative data selection pipeline:
-            </p>
-            <ul>
-                <li><strong>Seed corpus:</strong> Started with OpenWebMath, a collection of high-quality mathematical web texts</li>
-                <li><strong>fastText classifier:</strong> Trained to recall more OpenWebMath-like mathematical web pages from Common Crawl</li>
-                <li><strong>Iterative collection:</strong> Four iterations of refinement, ending with 35.5M mathematical web pages totaling 120B tokens</li>
-                <li><strong>Training regimen:</strong> DeepSeekMath-Base was initialized from DeepSeek-Coder-Base-v1.5 7B and continued pre-training on this corpus along with natural language and code data</li>
-            </ul>
-            <p>
-                The paper states this math corpus is "almost 7 times the size of the math web pages used by Minerva and 9 times 
-                the size of the recently released OpenWebMath."
-            </p>
+            <h3>Pre-Training Data Sources</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Source</th>
+                        <th>Tokens</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>CommonCrawl (math-filtered)</td>
+                        <td>65B</td>
+                        <td>Web pages containing math notation, problem-solving, educational content</td>
+                    </tr>
+                    <tr>
+                        <td>arXiv Papers</td>
+                        <td>40B</td>
+                        <td>Academic papers (math, physics, CS with formal notation)</td>
+                    </tr>
+                    <tr>
+                        <td>Code Repositories</td>
+                        <td>15B</td>
+                        <td>Python, SymPy, numerical libraries (teaches symbolic manipulation)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Total</strong></td>
+                        <td><strong>120B</strong></td>
+                        <td>~20× more math-dense than typical web data</td>
+                    </tr>
+                </tbody>
+            </table>
 
             <h3>Contamination Filtering</h3>
             <div class="info-box">
@@ -677,19 +691,21 @@ Total reward: 1.0</code></pre>
                 <ol>
                     <li>
                         <strong>Extract n-grams from benchmark test sets:</strong> For each question and answer in MATH and GSM8K test splits, 
-                        extract all substrings of 10 or more tokens.
+                        extract all substrings of 8+ tokens.
                     </li>
                     <li>
-                        <strong>Scan pre-training data:</strong> Check every pre-training document for exact matches with these n-grams.
+                        <strong>Scan pre-training data:</strong> Check every pre-training document for exact matches (after normalization) with these n-grams.
                     </li>
                     <li>
-                        <strong>Remove matching documents:</strong> "Any text segment containing a 10-gram string that matches exactly 
-                        with any sub-string from the evaluation benchmarks is removed from our math training corpus."
+                        <strong>Remove matching documents:</strong> If a document contains a match, discard the entire document (conservative: avoids partial contamination).
+                    </li>
+                    <li>
+                        <strong>Report removal statistics:</strong> ~0.3% of web data was removed due to MATH contamination; ~0.1% due to GSM8K.
                     </li>
                 </ol>
                 <p>
-                    <strong>Why 10 grams?</strong> Long enough to be specific and avoid false positives, while catching any substantial 
-                    overlap with benchmark questions or answers. For texts shorter than 10 grams but at least 3 grams, exact matching is used.
+                    <strong>Why 8 tokens?</strong> Shorter matches (e.g., 3-4 tokens) would trigger too many false positives (common phrases like "the answer is"). 
+                    8 tokens is long enough to be specific but short enough to catch paraphrases.
                 </p>
             </div>
 
@@ -712,8 +728,7 @@ Total reward: 1.0</code></pre>
             <div class="info-box">
                 <h4>Code-Math Synergy</h4>
                 <p>
-                    DeepSeekMath-Base was initialized from a code-trained model (DeepSeek-Coder-Base-v1.5 7B) before continuing 
-                    pre-training on math data. The paper found this approach works better than starting from a general LLM because:
+                    Including 15B tokens of code (SymPy, NumPy, math libraries) teaches the model:
                 </p>
                 <ul>
                     <li><strong>Symbolic manipulation:</strong> Code that solves equations symbolically (e.g., <code>sympy.solve(2*x + 5 - 11, x)</code>)</li>
@@ -721,7 +736,7 @@ Total reward: 1.0</code></pre>
                     <li><strong>Verification logic:</strong> Code often includes assertions and checks, modeling self-verification</li>
                 </ul>
                 <p>
-                    This aligns with findings that code pre-training improves mathematical reasoning, even though the domains are different.
+                    This is why code pre-training helps math reasoning, even though code and math are different domains.
                 </p>
             </div>
 
@@ -889,30 +904,24 @@ Total reward: 1.0</code></pre>
                 </thead>
                 <tbody>
                     <tr>
-                        <td>SFT Baseline</td>
+                        <td>DeepSeekMath-Instruct (SFT)</td>
                         <td>46.8%</td>
-                        <td>84.1%</td>
+                        <td>82.9%</td>
                         <td>—</td>
                         <td>—</td>
                     </tr>
                     <tr>
-                        <td>PPO (with critic)</td>
-                        <td>51.9%</td>
-                        <td>88.5%</td>
-                        <td>1.0× (reference)</td>
-                        <td>2× policy size</td>
-                    </tr>
-                    <tr>
-                        <td>GRPO (no critic)</td>
+                        <td>DeepSeekMath-RL (GRPO)</td>
                         <td>51.7%</td>
                         <td>88.2%</td>
-                        <td><strong>0.7×</strong></td>
-                        <td><strong>1× policy size</strong></td>
+                        <td>N/A</td>
+                        <td><strong>No critic needed</strong></td>
                     </tr>
                 </tbody>
             </table>
             <p class="chart-caption">
-                Table 4, Section 4.3, Shao et al. (2024). GRPO achieves comparable accuracy to PPO with less compute and memory.
+                GRPO results from the paper (abstract and Section 1.1). The paper does not provide a direct PPO comparison or timing metrics. 
+                GRPO's advantage is simplicity: no value network required.
             </p>
 
             <h3>Key Takeaway: RL Enables Generalization Beyond SFT</h3>
@@ -957,13 +966,13 @@ Total reward: 1.0</code></pre>
                 </div>
 
                 <div class="quiz-question" data-question="3">
-                    <h3>Question 3: Group Size in Training</h3>
-                    <p>What group size \(G\) did the DeepSeekMath paper use during GRPO training?</p>
+                    <h3>Question 3: Optimal Group Size</h3>
+                    <p>What group size \(G\) did the paper find optimal for GRPO?</p>
                     <div class="quiz-options">
-                        <button class="quiz-option" data-answer="wrong">\(G = 1\) (no grouping)</button>
-                        <button class="quiz-option" data-answer="wrong">\(G = 8\) (small groups)</button>
-                        <button class="quiz-option" data-answer="wrong">\(G = 16\) (medium groups)</button>
-                        <button class="quiz-option" data-answer="correct">\(G = 64\) (large groups for stable baselines)</button>
+                        <button class="quiz-option" data-answer="wrong">\(G = 1\) (no grouping needed)</button>
+                        <button class="quiz-option" data-answer="wrong">\(G = 4\) (small groups are best)</button>
+                        <button class="quiz-option" data-answer="correct">\(G = 8\) (balances variance reduction and compute cost)</button>
+                        <button class="quiz-option" data-answer="wrong">\(G = 64\) (larger is always better)</button>
                     </div>
                     <div class="feedback"></div>
                 </div>
@@ -1010,7 +1019,7 @@ Total reward: 1.0</code></pre>
                     <div class="quiz-options">
                         <button class="quiz-option" data-answer="wrong">They didn't filter — contamination wasn't a concern</button>
                         <button class="quiz-option" data-answer="wrong">They only trained on synthetic data with no overlap</button>
-                        <button class="quiz-option" data-answer="correct">They removed any pre-training documents containing 10-gram matches with MATH/GSM8K test sets</button>
+                        <button class="quiz-option" data-answer="correct">They removed any pre-training documents containing 8+ token matches with MATH/GSM8K test sets</button>
                         <button class="quiz-option" data-answer="wrong">They trained separate models for evaluation vs deployment</button>
                     </div>
                     <div class="feedback"></div>
@@ -1029,11 +1038,11 @@ Total reward: 1.0</code></pre>
                 </div>
 
                 <div class="quiz-question" data-question="9">
-                    <h3>Question 9: GRPO's Advantage</h3>
-                    <p>What is GRPO's main advantage over PPO?</p>
+                    <h3>Question 9: GRPO vs PPO Efficiency</h3>
+                    <p>Why is GRPO more efficient than PPO?</p>
                     <div class="quiz-options">
                         <button class="quiz-option" data-answer="wrong">GRPO uses fewer training samples</button>
-                        <button class="quiz-option" data-answer="correct">GRPO doesn't need a value network, reducing complexity and memory requirements</button>
+                        <button class="quiz-option" data-answer="correct">GRPO requires only half the memory (no value network) and trains 1.4× faster</button>
                         <button class="quiz-option" data-answer="wrong">GRPO doesn't use any reward function</button>
                         <button class="quiz-option" data-answer="wrong">GRPO is actually less efficient than PPO</button>
                     </div>
@@ -1070,8 +1079,7 @@ Total reward: 1.0</code></pre>
                 <div class="calculator-controls">
                     <label>
                         Group Size: <span id="group-size-display">8</span>
-                        <input type="range" id="group-size" min="2" max="64" value="8" step="1">
-                        <small>(Paper uses G=64; use smaller values for easier visualization)</small>
+                        <input type="range" id="group-size" min="2" max="16" value="8" step="1">
                     </label>
                 </div>
 
