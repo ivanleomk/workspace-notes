@@ -454,11 +454,11 @@ Where:
             </p>
 
             <div class="info-box">
-                <h3>1. Labelers Prefer InstructGPT Over Larger GPT-3</h3>
+                <h3>1. Labelers Strongly Prefer InstructGPT Over GPT-3</h3>
                 <p>
-                    In head-to-head comparisons, human evaluators preferred InstructGPT 1.3B outputs over GPT-3 175B 
-                    outputs <strong>~85% of the time</strong> on the test prompt distribution. This held across 
-                    instruction-following, summarization, and question-answering tasks.
+                    The paper reports: "when compared directly, 175B InstructGPT outputs are preferred to GPT-3 outputs 85 ± 3% of the time." 
+                    This same-size comparison (both 175B parameters) shows the dramatic improvement from RLHF training. The paper also 
+                    found InstructGPT was "preferred 71 ± 4% of the time to few-shot GPT-3."
                 </p>
                 <p>
                     <strong>Why?</strong> GPT-3 often ignored instructions, rambled, or generated plausible but unhelpful 
@@ -513,41 +513,23 @@ Where:
                 </p>
             </div>
 
-            <h3>Illustrative Win Rate Data</h3>
+            <h3>Key Preference Results from the Paper</h3>
             <p>
-                Below is a <strong>simplified table</strong> based on Figure 3 from the paper, showing head-to-head 
-                preference win rates (InstructGPT vs GPT-3):
+                The paper reports the following head-to-head preference rates:
             </p>
-
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Model Comparison</th>
-                        <th>InstructGPT Win Rate</th>
-                        <th>Notes</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>InstructGPT 1.3B vs GPT-3 175B</td>
-                        <td>~85%</td>
-                        <td>Much smaller, but users prefer it</td>
-                    </tr>
-                    <tr>
-                        <td>InstructGPT 175B vs GPT-3 175B</td>
-                        <td>~90%</td>
-                        <td>Same size, clear preference for RLHF</td>
-                    </tr>
-                    <tr>
-                        <td>InstructGPT vs SFT-only (same size)</td>
-                        <td>~70%</td>
-                        <td>RLHF improves over SFT alone</td>
-                    </tr>
-                </tbody>
-            </table>
+            <ul>
+                <li><strong>175B InstructGPT vs 175B GPT-3:</strong> InstructGPT preferred 85 ± 3% of the time</li>
+                <li><strong>InstructGPT vs few-shot GPT-3:</strong> InstructGPT preferred 71 ± 4% of the time</li>
+                <li><strong>InstructGPT vs FLAN:</strong> InstructGPT preferred 78 ± 4% of the time</li>
+                <li><strong>InstructGPT vs T0:</strong> InstructGPT preferred 79 ± 4% of the time</li>
+            </ul>
             <p>
-                <em>Note: These numbers are approximations from Figure 3 of the paper for illustrative purposes. 
-                See the original paper for exact results and confidence intervals.</em>
+                Figure 3 in the paper shows model win rates across different sizes (1.3B, 6B, 175B) measured against 
+                the 175B SFT baseline. All InstructGPT models (including PPO variants) significantly outperform GPT-3 baselines 
+                across all model sizes.
+            </p>
+            <p>
+                <em>Note: The paper's primary comparison is same-size models (175B vs 175B) to isolate the effect of RLHF training.</em>
             </p>
         </section>
 

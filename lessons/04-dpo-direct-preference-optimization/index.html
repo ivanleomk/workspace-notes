@@ -735,17 +735,18 @@
                 <li><strong>DPO:</strong> Direct preference optimization</li>
             </ul>
             <p>
-                <strong>Results (Figure 3 of the paper):</strong> Reward vs KL divergence frontier. At equivalent 
-                KL budgets:
+                <strong>Results (Figure 2 left of the paper):</strong> Reward vs KL divergence frontier on sentiment control. 
+                The figure shows "DPO provides the highest expected reward for all KL values, demonstrating the quality of the optimization."
             </p>
             <ul>
-                <li>DPO achieves <strong>~90-95%</strong> of PPO-GT's reward (very close to upper bound)</li>
+                <li>DPO achieves higher or equal reward compared to PPO at all KL divergence levels</li>
                 <li>DPO outperforms PPO with learned reward model at all KL levels</li>
                 <li>DPO's curve is smoother—no instabilities or reward hacking artifacts</li>
             </ul>
             <p class="chart-caption">
-                <em>Approximate values from Figure 3: At KL ≈ 0.3, PPO-GT reward ≈ 2.0, DPO reward ≈ 1.9, 
-                PPO reward ≈ 1.6. DPO is consistently better than standard PPO.</em>
+                <em>Note: Figure 2 (left) is on IMDb sentiment generation where ground-truth rewards are available.
+                Approximate values read from figure: at low KL (~2-5), DPO and PPO-GT perform similarly; 
+                DPO consistently outperforms standard PPO across all KL values.</em>
             </p>
 
             <h3>Task 2: Summarization (TL;DR)</h3>
@@ -794,34 +795,15 @@
                 user queries; GPT-4 judges helpfulness and safety.
             </p>
             <p>
-                <strong>Results (Table 2 of the paper):</strong> GPT-4 win rates at different sampling temperatures:
+                <strong>Results (Figure 3 left of the paper):</strong> The paper reports that on Anthropic HH dialogue, 
+                "DPO is the only method that improves over chosen summaries in the Anthropic-HH test set." The paper 
+                evaluates across different sampling temperatures but does not provide a table of temperature-specific win rates. 
+                Figure 3 (right) shows win rates evolve during training for temperatures 0.7 and 1.0, with DPO maintaining 
+                stable improvement over the dataset labels.
             </p>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Sampling Temperature</th>
-                        <th>DPO Win Rate vs SFT</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>0.0 (greedy)</td>
-                        <td>55%</td>
-                    </tr>
-                    <tr>
-                        <td>0.5</td>
-                        <td>58%</td>
-                    </tr>
-                    <tr>
-                        <td>1.0</td>
-                        <td>60%</td>
-                    </tr>
-                </tbody>
-            </table>
             <p>
-                <strong>Interpretation:</strong> DPO improves over the SFT baseline across all temperatures. 
-                Higher temperatures (more diverse sampling) show bigger gains, suggesting DPO teaches the model 
-                to avoid low-quality or unsafe responses that might appear in the tail of the SFT distribution.
+                <strong>Key finding:</strong> DPO performs as well or better than the computationally demanding Best-of-128 baseline, 
+                and is "the only computationally efficient method that improves over the preferred completions in the Anthropic HH dataset."
             </p>
 
             <h3>Summary: DPO vs PPO</h3>

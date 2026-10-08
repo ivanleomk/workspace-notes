@@ -537,26 +537,25 @@ Total reward: 1.0</code></pre>
             </p>
 
             <div class="info-box">
-                <h3>Finding 1: GRPO Matches PPO, with Less Complexity</h3>
-                <blockquote>
-                    "We compare GRPO with standard PPO on MATH and GSM8K. After RL fine-tuning, GRPO achieves 51.7% on MATH 
-                    and 88.2% on GSM8K, comparable to PPO (51.9% MATH, 88.5% GSM8K), while requiring only half the memory 
-                    (no value network) and training 1.4× faster."
-                    <footer>— Section 4.3, Table 4, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
-                </blockquote>
+                <h3>Finding 1: GRPO Achieves Strong Results on Math Benchmarks</h3>
                 <p>
-                    <strong>Takeaway:</strong> GRPO achieves nearly identical accuracy to PPO but is more efficient and stable. 
-                    For tasks with verifiable rewards, GRPO is the better choice.
+                    The paper introduces GRPO as "a variant of Proximal Policy Optimization (PPO), that enhances mathematical 
+                    reasoning abilities while concurrently optimizing the memory usage of PPO." GRPO achieves 51.7% on MATH and 
+                    88.2% on GSM8K, substantially improving over the SFT baseline (DeepSeekMath-Instruct: 46.8% MATH, 82.9% GSM8K).
+                </p>
+                <p>
+                    <strong>Takeaway:</strong> GRPO is simpler than PPO (no critic/value network needed) and effective for tasks 
+                    with verifiable correctness. The paper emphasizes memory reduction but does not report a direct PPO vs GRPO comparison.
                 </p>
             </div>
 
             <div class="info-box">
                 <h3>Finding 2: RL Improves Over SFT Significantly</h3>
-                <blockquote>
-                    "After supervised fine-tuning (SFT) on math problems, DeepSeekMath-7B-Base achieves 46.8% on MATH. 
-                    Adding GRPO improves this to 51.7%, a +4.9 percentage point gain. On GSM8K, SFT reaches 84.1%; GRPO improves to 88.2% (+4.1 points)."
-                    <footer>— Section 5.1, Table 5, <a href="https://arxiv.org/abs/2402.03300" target="_blank">arXiv:2402.03300</a></footer>
-                </blockquote>
+                <p>
+                    The paper reports: "By solely using a subset of English instruction tuning data, GRPO obtains a substantial 
+                    improvement over the strong DeepSeekMath-Instruct, including both in-domain (GSM8K: 82.9% → 88.2%, MATH: 46.8% → 51.7%) 
+                    and out-of-domain mathematical tasks (e.g., CMATH: 84.6% → 88.8%) during the reinforcement learning phase."
+                </p>
                 <p>
                     <strong>Why the gain?</strong> SFT teaches the model to mimic correct solutions from training data. RL teaches 
                     the model to <em>explore and find correct solutions</em> even on new problems. RL's exploration helps the model 
@@ -905,30 +904,24 @@ Total reward: 1.0</code></pre>
                 </thead>
                 <tbody>
                     <tr>
-                        <td>SFT Baseline</td>
+                        <td>DeepSeekMath-Instruct (SFT)</td>
                         <td>46.8%</td>
-                        <td>84.1%</td>
+                        <td>82.9%</td>
                         <td>—</td>
                         <td>—</td>
                     </tr>
                     <tr>
-                        <td>PPO (with critic)</td>
-                        <td>51.9%</td>
-                        <td>88.5%</td>
-                        <td>1.0× (reference)</td>
-                        <td>2× policy size</td>
-                    </tr>
-                    <tr>
-                        <td>GRPO (no critic)</td>
+                        <td>DeepSeekMath-RL (GRPO)</td>
                         <td>51.7%</td>
                         <td>88.2%</td>
-                        <td><strong>0.7×</strong></td>
-                        <td><strong>1× policy size</strong></td>
+                        <td>N/A</td>
+                        <td><strong>No critic needed</strong></td>
                     </tr>
                 </tbody>
             </table>
             <p class="chart-caption">
-                Table 4, Section 4.3, Shao et al. (2024). GRPO achieves comparable accuracy to PPO with less compute and memory.
+                GRPO results from the paper (abstract and Section 1.1). The paper does not provide a direct PPO comparison or timing metrics. 
+                GRPO's advantage is simplicity: no value network required.
             </p>
 
             <h3>Key Takeaway: RL Enables Generalization Beyond SFT</h3>
