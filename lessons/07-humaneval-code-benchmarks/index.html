@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 07: HumanEval & Code Evaluation Benchmarks</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 07: HumanEval & Code Evaluation</h1>
+            <p class="subtitle">Track A: Benchmarking Foundations | Paper: Chen et al. (2021)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#functional-correctness">Functional Correctness</a>
+            <a href="#humaneval">HumanEval Dataset</a>
+            <a href="#pass-at-k">pass@k Metric</a>
+            <a href="#codex-results">Codex Results</a>
+            <a href="#contamination">Contamination</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#problem-explorer">Problem Explorer</a>
+            <a href="#data-charts">Data & Charts</a>
+            <a href="#bridge-to-curriculum">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Code Needs Different Benchmarks</h2>
+            <p>
+                In previous lessons, you learned how to evaluate language models on knowledge (MMLU, Lesson 01), 
+                reasoning (GSM8K, Lesson 03), and open-ended chat (MT-Bench, Lesson 05). But code generation 
+                presents a unique evaluation challenge: <strong>there are many functionally equivalent programs</strong> 
+                that solve the same problem correctly, yet look completely different.
+            </p>
+
+            <div class="info-box">
+                <h3>The Code Evaluation Problem</h3>
+                <p>Consider this problem: "Write a function that returns the sum of two numbers."</p>
+                <p>All of these are <strong>functionally correct</strong> but textually different:</p>
+                <pre><code>def add(a, b): return a + b
+def add(x, y): return x + y
+def add(num1, num2): result = num1 + num2; return result
+def add(a, b): return sum([a, b])</code></pre>
+                <p>
+                    A text-matching metric like <strong>BLEU score</strong> would penalize these variations, 
+                    even though they all work correctly. That's why code benchmarks need 
+                    <strong>functional correctness</strong>—testing if the code actually works.
+                </p>
+            </div>
+
+            <h3>The HumanEval Contribution</h3>
+            <p>
+                <a href="https://arxiv.org/abs/2107.03374" target="_blank">Chen et al. (2021)</a> introduced 
+                <strong>HumanEval</strong>, a benchmark for evaluating code generation models on functional correctness. 
+                Their key innovations:
+            </p>
+            <ul>
+                <li><strong>164 hand-written problems:</strong> Original problems to avoid training data contamination</li>
+                <li><strong>Unit test evaluation:</strong> Pass/fail based on whether code passes tests, not text similarity</li>
+                <li><strong>pass@k metric:</strong> Unbiased estimation of success rate when generating k samples</li>
+                <li><strong>Codex model:</strong> GPT fine-tuned on GitHub code, achieving 28.8% pass@1 and 72.3% pass@100</li>
+            </ul>
+
+            <p>
+                This paper established functional correctness as the gold standard for code generation evaluation, 
+                and HumanEval remains one of the most widely-used code benchmarks today.
+            </p>
+        </section>
+
+        <section id="functional-correctness" class="content-section">
+            <h2>Functional Correctness: Testing Code Like Developers Do</h2>
+            
+            <h3>Why Match-Based Metrics Fail for Code</h3>
+            <p>
+                Traditional NLP metrics like BLEU score or exact match compare generated text to a reference solution. 
+                For code, this approach has fundamental problems:
+            </p>
+
+            <div class="comparison-box">
+                <div class="comparison-item">
+                    <h4>❌ Match-Based Metrics (BLEU, Exact Match)</h4>
+                    <ul>
+                        <li>Only reward similarity to one specific reference solution</li>
+                        <li>Penalize functionally correct solutions with different variable names or structure</li>
+                        <li>Can't capture the vast space of equivalent programs</li>
+                        <li>Don't measure whether code actually works</li>
+                    </ul>
+                </div>
+                <div class="comparison-item">
+                    <h4>✅ Functional Correctness (Unit Tests)</h4>
+                    <ul>
+                        <li>Tests whether code produces correct outputs for given inputs</li>
+                        <li>Accepts any solution that works, regardless of implementation</li>
+                        <li>Mirrors how human developers judge code quality</li>
+                        <li>Used in test-driven development and continuous integration</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>How Functional Correctness Works</h3>
+            <p>
+                For each programming problem, HumanEval provides:
+            </p>
+            <ol>
+                <li><strong>Function signature:</strong> The function name and parameters</li>
+                <li><strong>Docstring:</strong> Natural language description of what the function should do</li>
+                <li><strong>Unit tests:</strong> A suite of test cases (average 7.7 tests per problem)</li>
+            </ol>
+
+            <div class="info-box">
+                <h4>Example: Functional Correctness in Action</h4>
+                <p><strong>Problem:</strong> Check if any two numbers in a list are closer than a threshold.</p>
+                <pre><code>def has_close_elements(numbers: List[float], threshold: float) -> bool:
+    """
+    Check if in given list of numbers, are any two numbers closer 
+    to each other than given threshold.
+    """
+    pass  # Your code here</code></pre>
+
+                <p><strong>Unit Tests:</strong></p>
+                <pre><code>assert has_close_elements([1.0, 2.0, 3.0], 0.5) == False
+assert has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3) == True
+assert has_close_elements([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.05) == False</code></pre>
+
+                <p>
+                    A solution passes if it returns the correct boolean for <em>all</em> test cases. 
+                    The implementation details (nested loops, sorting, etc.) don't matter—only correctness.
+                </p>
+            </div>
+
+            <h3>BLEU Score vs Functional Correctness</h3>
+            <p>
+                The paper shows that <strong>BLEU score and functional correctness are poorly correlated</strong>. 
+                Figure 8 in the paper reveals significant overlap between BLEU score distributions for correct and 
+                incorrect solutions—some wrong solutions have higher BLEU scores than correct ones!
+            </p>
+
+            <div class="info-box warning">
+                <h4>⚠️ Key Insight</h4>
+                <p>
+                    <strong>Functionally incorrect solutions</strong> (guaranteed to fail on some input) often score 
+                    <strong>higher on BLEU</strong> than functionally correct solutions. This proves that optimizing 
+                    for BLEU doesn't optimize for correctness in code generation.
+                </p>
+            </div>
+        </section>
+
+        <section id="humaneval" class="content-section">
+            <h2>The HumanEval Dataset</h2>
+
+            <h3>Dataset Overview</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">164</div>
+                    <div class="stat-label">Hand-Written Problems</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">7.7</div>
+                    <div class="stat-label">Avg Tests per Problem</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">100%</div>
+                    <div class="stat-label">Python Functions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">0</div>
+                    <div class="stat-label">Problems from Public Sources</div>
+                </div>
+            </div>
+
+            <h3>Why Hand-Written Problems?</h3>
+            <p>
+                The problems in HumanEval are <strong>hand-written</strong>, not scraped from existing sources. 
+                This is crucial because:
+            </p>
+
+            <div class="info-box">
+                <h4>Contamination Risk in Code Benchmarks</h4>
+                <p>
+                    Codex was trained on <strong>54 million public GitHub repositories</strong> (159 GB of Python code). 
+                    GitHub contains solutions to problems from many public sources:
+                </p>
+                <ul>
+                    <li><strong>Codeforces:</strong> 10+ repositories with competition solutions</li>
+                    <li><strong>LeetCode:</strong> Thousands of solution repositories</li>
+                    <li><strong>Project Euler:</strong> Solution collections</li>
+                    <li><strong>Coursework:</strong> Student assignment submissions</li>
+                </ul>
+                <p>
+                    Using problems from these sources would be <strong>unfair</strong>—the model may have memorized 
+                    solutions during training. Hand-written problems ensure we're measuring <em>reasoning ability</em>, 
+                    not memorization.
+                </p>
+            </div>
+
+            <h3>Problem Difficulty Range</h3>
+            <p>
+                HumanEval problems assess:
+            </p>
+            <ul>
+                <li><strong>Language comprehension:</strong> Understanding natural language specifications</li>
+                <li><strong>Algorithms:</strong> Sorting, searching, string manipulation, recursion</li>
+                <li><strong>Simple mathematics:</strong> Basic arithmetic, number theory, combinatorics</li>
+                <li><strong>Data structures:</strong> Lists, dictionaries, sets</li>
+            </ul>
+
+            <p>
+                The difficulty is comparable to <strong>easy software interview questions</strong>—problems that 
+                a competent programmer who has completed an introductory CS course should be able to solve.
+            </p>
+
+            <div class="info-box">
+                <h4>Dataset Availability</h4>
+                <p>
+                    HumanEval is publicly available at 
+                    <a href="https://github.com/openai/human-eval" target="_blank">github.com/openai/human-eval</a>. 
+                    The repository includes the problems, unit tests, and evaluation framework.
+                </p>
+            </div>
+        </section>
+
+        <section id="pass-at-k" class="content-section">
+            <h2>The pass@k Metric</h2>
+
+            <h3>Definition and Intuition</h3>
+            <p>
+                <strong>pass@k</strong> measures: <em>If you generate k code samples per problem, what fraction of 
+                problems have at least one correct solution?</em>
+            </p>
+
+            <div class="info-box">
+                <h4>Why pass@k Matters</h4>
+                <p>
+                    Real-world programming often involves:
+                </p>
+                <ol>
+                    <li>Writing a solution</li>
+                    <li>Testing it</li>
+                    <li>If it fails, trying a different approach</li>
+                    <li>Repeating until something works</li>
+                </ol>
+                <p>
+                    pass@k captures this iterative workflow. A model with pass@1=30% but pass@10=60% can solve 
+                    60% of problems if you let it make 10 attempts and pick the first one that passes tests.
+                </p>
+            </div>
+
+            <h3>The Unbiased Estimator</h3>
+            <p>
+                Computing pass@k requires care to avoid bias. The paper uses this formula:
+            </p>
+
+            <div class="formula-box">
+                <p><strong>pass@k = E<sub>Problems</sub>[1 - C(n-c, k) / C(n, k)]</strong></p>
+                <p>Where:</p>
+                <ul>
+                    <li><strong>n:</strong> Total samples generated (typically n=200)</li>
+                    <li><strong>c:</strong> Number of correct samples (those that pass all tests)</li>
+                    <li><strong>k:</strong> Number of attempts allowed</li>
+                    <li><strong>C(a, b):</strong> Binomial coefficient "a choose b"</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h4>Why This Estimator?</h4>
+                <p>
+                    A naive approach would estimate pass@k as <code>1 - (1 - pass@1)^k</code>, but this 
+                    <strong>underestimates</strong> the true value because it assumes samples are independent 
+                    draws <em>with replacement</em>. The paper's estimator is unbiased because it models 
+                    sampling <em>without replacement</em> from the n generated samples.
+                </p>
+            </div>
+
+            <h3>Temperature and Sampling</h3>
+            <p>
+                The optimal sampling temperature depends on k:
+            </p>
+            <ul>
+                <li><strong>pass@1:</strong> T* = 0.2 (low temperature, focused sampling—want the single most likely solution)</li>
+                <li><strong>pass@100:</strong> T* = 0.8 (high temperature, diverse sampling—want to explore many possibilities)</li>
+            </ul>
+
+            <p>
+                Higher temperatures increase diversity, which helps when you're selecting the best from many samples. 
+                Lower temperatures maximize the quality of a single sample.
+            </p>
+        </section>
+
+        <section id="codex-results" class="content-section">
+            <h2>Codex Results on HumanEval</h2>
+
+            <h3>Codex Training</h3>
+            <p>
+                <strong>Codex</strong> is GPT fine-tuned on GitHub code:
+            </p>
+            <ul>
+                <li><strong>Training data:</strong> 54 million public GitHub repositories (May 2020)</li>
+                <li><strong>Filtered size:</strong> 159 GB of Python code</li>
+                <li><strong>Base model:</strong> GPT-3 (fine-tuning from pre-trained LLM provides better initial representations)</li>
+                <li><strong>Models:</strong> Ranging from 12M to 12B parameters</li>
+            </ul>
+
+            <h3>Performance Scaling</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">28.8%</div>
+                    <div class="stat-label">Codex-12B pass@1</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">46.8%</div>
+                    <div class="stat-label">Codex-12B pass@10</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">72.3%</div>
+                    <div class="stat-label">Codex-12B pass@100</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">77.5%</div>
+                    <div class="stat-label">Codex-S-12B pass@100</div>
+                </div>
+            </div>
+
+            <h3>Key Findings</h3>
+
+            <div class="info-box">
+                <h4>1. Scaling Laws Hold for Code</h4>
+                <p>
+                    Performance scales smoothly with model size. Test loss follows a power law 
+                    <code>(N / 5.92×10^7)^-0.13</code>, similar to language model scaling. Larger models 
+                    consistently outperform smaller ones.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Multiple Sampling is Highly Effective</h4>
+                <p>
+                    Pass@100 is <strong>2.5× higher than pass@1</strong> for Codex-12B (72.3% vs 28.8%). 
+                    This massive gap shows that generating multiple diverse attempts and selecting one that works 
+                    is a powerful strategy—the model often "knows" the solution but doesn't always generate it on the first try.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. Code-Specific Training Matters</h4>
+                <p>
+                    GPT-3 achieves <strong>~0% on HumanEval</strong>—near-zero functional correctness despite strong 
+                    general language understanding. GPT-J-6B (trained on The Pile, 8% GitHub) achieves 11.6% pass@1. 
+                    Codex-12B (fine-tuned on pure GitHub code) achieves 28.8% pass@1—dramatically better.
+                </p>
+            </div>
+
+            <h3>Sample Selection Heuristics</h3>
+            <p>
+                What if you generate k samples but can only evaluate one (e.g., showing a suggestion to a user)? 
+                The paper tests selection strategies:
+            </p>
+            <ul>
+                <li><strong>Random:</strong> ~29% (same as pass@1)</li>
+                <li><strong>Highest mean log-probability:</strong> ~44.5% (select from 100 samples)</li>
+                <li><strong>Oracle (with unit tests):</strong> ~72.3% (the upper bound)</li>
+            </ul>
+
+            <p>
+                Mean log-probability is a practical heuristic that doesn't require running tests but still 
+                captures ~60% of the potential improvement from sampling 100 times.
+            </p>
+        </section>
+
+        <section id="contamination" class="content-section">
+            <h2>Contamination and Limitations</h2>
+
+            <h3>Why Contamination Matters</h3>
+            <p>
+                <strong>Data contamination</strong> occurs when a model sees test problems (or similar problems) during 
+                training. For code benchmarks, this is a major concern because:
+            </p>
+
+            <div class="warning-box">
+                <h4>Contamination in Code Generation</h4>
+                <p>Public coding problem solutions are widely available on GitHub:</p>
+                <ul>
+                    <li><strong>APPS dataset:</strong> Uses Codeforces problems, but 10+ GitHub repos contain solutions</li>
+                    <li><strong>LeetCode:</strong> Thousands of repositories with annotated solutions</li>
+                    <li><strong>Interview prep sites:</strong> Standard problems with canonical solutions</li>
+                </ul>
+                <p>
+                    A model trained on GitHub may have <strong>memorized solutions</strong> rather than learning 
+                    to reason about code. This inflates benchmark scores without reflecting true capability.
+                </p>
+            </div>
+
+            <h3>HumanEval's Solution</h3>
+            <p>
+                HumanEval mitigates contamination by:
+            </p>
+            <ul>
+                <li><strong>Hand-writing all problems:</strong> No problem comes from existing public sources</li>
+                <li><strong>Original specifications:</strong> Docstrings are freshly written, not copied</li>
+                <li><strong>Verification:</strong> Problems are confirmed to not appear in GitHub (as of the May 2020 snapshot)</li>
+            </ul>
+
+            <h3>Model Limitations</h3>
+            <p>The paper identifies several key limitations of Codex:</p>
+
+            <div class="info-box warning">
+                <h4>1. Long Operation Chains</h4>
+                <p>
+                    Performance drops <strong>exponentially</strong> as docstrings get longer and describe more 
+                    chained operations. Figure 11 in the paper shows ~2-3× performance degradation per additional 
+                    component. A human programmer can handle arbitrary chains if they understand each step—Codex cannot.
+                </p>
+            </div>
+
+            <div class="info-box warning">
+                <h4>2. Variable Binding</h4>
+                <p>
+                    Codex struggles to bind operations to the correct variables when docstrings describe many 
+                    operations. It may apply an operation to the wrong variable or skip an operation entirely.
+                </p>
+            </div>
+
+            <div class="info-box warning">
+                <h4>3. Sample Inefficiency</h4>
+                <p>
+                    Codex was trained on <strong>hundreds of millions of lines of code</strong>—far more than 
+                    any human developer sees in a career. Yet a strong student who completes an intro CS course 
+                    can solve a larger fraction of HumanEval problems than Codex-12B.
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of HumanEval and code evaluation benchmarks:</p>
+            
+            <div class="quiz-score"></div>
+
+            <div class="quiz-question" data-question="1">
+                <h3>Question 1: Why Functional Correctness?</h3>
+                <p>Why do code generation benchmarks use functional correctness (unit tests) instead of match-based metrics like BLEU score?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Functional correctness tests if code actually works, accepting any functionally equivalent solution. Match-based metrics only reward similarity to one reference.</button>
+                    <button class="quiz-option" data-answer="wrong">BLEU score is too computationally expensive for code evaluation.</button>
+                    <button class="quiz-option" data-answer="wrong">Unit tests are faster to run than computing BLEU scores.</button>
+                    <button class="quiz-option" data-answer="wrong">Functional correctness is easier to implement than text matching.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="2">
+                <h3>Question 2: HumanEval Dataset</h3>
+                <p>How many problems does HumanEval contain, and why are they hand-written rather than sourced from existing coding platforms?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">164 hand-written problems to avoid contamination—GitHub contains solutions to many public coding problems.</button>
+                    <button class="quiz-option" data-answer="wrong">1,000 problems scraped from LeetCode to ensure comprehensive coverage.</button>
+                    <button class="quiz-option" data-answer="wrong">500 hand-written problems because existing problems are copyrighted.</button>
+                    <button class="quiz-option" data-answer="wrong">50 curated problems from Codeforces to benchmark algorithmic reasoning.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="3">
+                <h3>Question 3: The pass@k Metric</h3>
+                <p>What does pass@k measure?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">The probability that at least one of k generated samples solves the problem (passes all unit tests).</button>
+                    <button class="quiz-option" data-answer="wrong">The average accuracy across k samples per problem.</button>
+                    <button class="quiz-option" data-answer="wrong">The percentage of problems solved by exactly k attempts.</button>
+                    <button class="quiz-option" data-answer="wrong">The ratio of correct samples to total samples generated.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="4">
+                <h3>Question 4: Codex-12B Performance</h3>
+                <p>What are Codex-12B's pass@1 and pass@100 scores on HumanEval?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">28.8% pass@1 and 72.3% pass@100—showing massive gains from multiple sampling.</button>
+                    <button class="quiz-option" data-answer="wrong">50% pass@1 and 85% pass@100.</button>
+                    <button class="quiz-option" data-answer="wrong">15% pass@1 and 45% pass@100.</button>
+                    <button class="quiz-option" data-answer="wrong">60% pass@1 and 95% pass@100.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="5">
+                <h3>Question 5: Contamination</h3>
+                <p>Why is data contamination a major concern for code benchmarks?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Models trained on GitHub may have seen solutions to public coding problems, inflating scores through memorization rather than reasoning.</button>
+                    <button class="quiz-option" data-answer="wrong">Contaminated data makes models generate buggy code.</button>
+                    <button class="quiz-option" data-answer="wrong">Contamination causes models to overfit to specific programming languages.</button>
+                    <button class="quiz-option" data-answer="wrong">It's not a major concern—memorization and reasoning are equivalent for coding.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="6">
+                <h3>Question 6: Temperature and Sampling</h3>
+                <p>Why is higher temperature optimal for pass@100 but lower temperature optimal for pass@1?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Higher temperature increases sample diversity, helping when selecting from many attempts. Lower temperature maximizes quality of a single sample.</button>
+                    <button class="quiz-option" data-answer="wrong">High temperature is always better for code generation.</button>
+                    <button class="quiz-option" data-answer="wrong">Low temperature prevents syntax errors in generated code.</button>
+                    <button class="quiz-option" data-answer="wrong">Temperature doesn't affect pass rates, only code style.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="7">
+                <h3>Question 7: Baselines</h3>
+                <p>How does Codex compare to GPT-J-6B (trained on The Pile, including 8% GitHub code)?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">GPT-J-6B achieves 11.6% pass@1. Codex-12B (fine-tuned on pure GitHub) achieves 28.8%—showing the value of code-specific training.</button>
+                    <button class="quiz-option" data-answer="wrong">GPT-J-6B outperforms Codex-12B because it has more diverse training data.</button>
+                    <button class="quiz-option" data-answer="wrong">They perform identically, suggesting training data doesn't matter.</button>
+                    <button class="quiz-option" data-answer="wrong">GPT-J-6B solves 0% of problems because it wasn't trained for code.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="8">
+                <h3>Question 8: Supervised Fine-Tuning</h3>
+                <p>What is Codex-S, and how does it improve over base Codex?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Codex-S is further fine-tuned on standalone correctly-implemented functions, improving pass@1 from 28.8% to 37.7%.</button>
+                    <button class="quiz-option" data-answer="wrong">Codex-S uses a different architecture optimized for code generation.</button>
+                    <button class="quiz-option" data-answer="wrong">Codex-S is trained on natural language instead of code.</button>
+                    <button class="quiz-option" data-answer="wrong">Codex-S is a smaller, faster version of Codex-12B.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="9">
+                <h3>Question 9: Long Operation Chains</h3>
+                <p>What does the paper reveal about Codex's ability to handle docstrings with many chained operations?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Performance drops exponentially (~2-3× per component), unlike humans who can handle arbitrary chains.</button>
+                    <button class="quiz-option" data-answer="wrong">Codex handles long chains better than short ones.</button>
+                    <button class="quiz-option" data-answer="wrong">Performance is constant regardless of docstring length.</button>
+                    <button class="quiz-option" data-answer="wrong">Longer docstrings improve performance by providing more context.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <div class="quiz-question" data-question="10">
+                <h3>Question 10: Connection to Post-Training</h3>
+                <p>How does functional correctness in code relate to post-training techniques from earlier lessons?</p>
+                <div class="quiz-options">
+                    <button class="quiz-option" data-answer="correct">Unit tests provide verifiable, objective rewards (like math in Lesson 06 GRPO), more reliable than learned reward models or LLM judges.</button>
+                    <button class="quiz-option" data-answer="wrong">Code evaluation doesn't relate to post-training at all.</button>
+                    <button class="quiz-option" data-answer="wrong">DPO (Lesson 04) works better than unit tests for code evaluation.</button>
+                    <button class="quiz-option" data-answer="wrong">LLM-as-judge (Lesson 05) is more accurate than unit tests for code.</button>
+                </div>
+                <div class="feedback"></div>
+            </div>
+
+            <button id="reset-quiz" class="btn-primary">Reset Quiz</button>
+        </section>
+
+        <section id="problem-explorer" class="content-section">
+            <h2>Problem Explorer</h2>
+            <p>Browse sample HumanEval-style problems to see the range of tasks:</p>
+
+            <div id="problem-list">
+                <!-- Problems will be inserted here by JavaScript -->
+            </div>
+        </section>
+
+        <section id="data-charts" class="content-section">
+            <h2>Performance Data & Visualizations</h2>
+
+            <h3>Codex Scaling: Model Size vs Performance</h3>
+            <div class="chart-container">
+                <canvas id="modelSizeChart"></canvas>
+            </div>
+
+            <h3>Codex vs Baselines</h3>
+            <div class="chart-container">
+                <canvas id="modelComparisonChart"></canvas>
+            </div>
+
+            <h3>The Power of Multiple Samples</h3>
+            <div class="chart-container">
+                <canvas id="passkChart"></canvas>
+            </div>
+
+            <h3>Sample Selection Strategies</h3>
+            <div class="chart-container">
+                <canvas id="sampleSelectionChart"></canvas>
+            </div>
+        </section>
+
+        <section id="bridge-to-curriculum" class="content-section">
+            <h2>Bridging to the Curriculum</h2>
+
+            <h3>Looking Back: Verifiable Rewards</h3>
+            <div class="info-box">
+                <h4>Connection to Lesson 06 (DeepSeekMath & GRPO)</h4>
+                <p>
+                    HumanEval's unit tests are <strong>verifiable rewards</strong>—objective, programmatic checks 
+                    of correctness. This is the same principle behind GRPO's success on math benchmarks:
+                </p>
+                <ul>
+                    <li><strong>Math (GRPO):</strong> Check if final answer equals ground truth</li>
+                    <li><strong>Code (HumanEval):</strong> Check if function passes all unit tests</li>
+                </ul>
+                <p>
+                    Both enable <strong>outcome supervision</strong> without human labeling or learned reward models. 
+                    This is far more scalable and reliable than preference-based methods (RLHF, DPO) for domains 
+                    with objective correctness.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Contrast with Lesson 05 (LLM-as-Judge)</h4>
+                <p>
+                    LLM-as-judge is necessary for <strong>open-ended tasks</strong> where there's no single correct answer 
+                    (creative writing, conversation quality). But for code and math, verifiable rewards are superior:
+                </p>
+                <ul>
+                    <li><strong>More reliable:</strong> No judge bias, position bias, or hallucination</li>
+                    <li><strong>Cheaper:</strong> No LLM inference needed for evaluation</li>
+                    <li><strong>Faster:</strong> Running tests is quicker than generating judge responses</li>
+                </ul>
+            </div>
+
+            <h3>Looking Ahead: Post-Training for Code</h3>
+            <p>
+                The HumanEval benchmark and functional correctness evaluation have enabled:
+            </p>
+            <ul>
+                <li><strong>RL from unit tests:</strong> Training models to maximize pass rates (like GRPO for math)</li>
+                <li><strong>Self-play:</strong> Models generate code, test it, and learn from pass/fail signals</li>
+                <li><strong>Process supervision:</strong> Rewarding intermediate reasoning steps in code generation</li>
+                <li><strong>Rejection sampling:</strong> Filtering training data to only correct implementations</li>
+            </ul>
+
+            <h3>Benchmark Evolution</h3>
+            <p>
+                Since HumanEval's release, the field has developed more challenging code benchmarks:
+            </p>
+            <ul>
+                <li><strong>APPS:</strong> Coding competition problems (harder than HumanEval)</li>
+                <li><strong>MBPP:</strong> More basic Python problems (easier, broader coverage)</li>
+                <li><strong>CodeContests:</strong> Codeforces competition problems</li>
+                <li><strong>Multi-language:</strong> HumanEval-X, MBXP (Java, C++, JavaScript, etc.)</li>
+            </ul>
+            <p>
+                But HumanEval remains the standard reference benchmark due to its careful design, contamination 
+                resistance, and focus on practical programming skills.
+            </p>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources & Further Reading</h2>
+
+            <h3>Primary Source</h3>
+            <ul>
+                <li>📄 <a href="https://arxiv.org/abs/2107.03374" target="_blank">Evaluating Large Language Models Trained on Code (Chen et al., 2021)</a></li>
+                <li>💻 <a href="https://github.com/openai/human-eval" target="_blank">HumanEval Dataset & Evaluation Framework</a></li>
+            </ul>
+
+            <h3>Related Work</h3>
+            <ul>
+                <li>📄 <a href="https://arxiv.org/abs/2105.09938" target="_blank">APPS: Measuring Coding Challenge Competence (Hendrycks et al., 2021)</a></li>
+                <li>📄 <a href="https://arxiv.org/abs/2108.07732" target="_blank">Program Synthesis with Large Language Models (Austin et al., 2021)</a></li>
+                <li>📄 <a href="https://arxiv.org/abs/2203.13474" target="_blank">Competition-Level Code Generation (Li et al., 2022)</a></li>
+            </ul>
+
+            <h3>Practical Applications</h3>
+            <ul>
+                <li>🛠️ <a href="https://github.com/features/copilot" target="_blank">GitHub Copilot</a> - Production Codex descendant</li>
+                <li>📚 <a href="https://platform.openai.com/docs/guides/code" target="_blank">OpenAI Code Generation Guide</a></li>
+            </ul>
+
+            <h3>Python Tutorial (Placeholder)</h3>
+            <p>
+                <strong>Coming Soon:</strong> Hands-on notebook for evaluating code generation models on HumanEval. 
+                Will cover: loading the dataset, generating samples, running unit tests, computing pass@k, and 
+                comparing different sampling strategies.
+            </p>
+
+            <h3>Next Lesson</h3>
+            <p>
+                <strong>Lesson 08 (Track B):</strong> Constitutional AI (Bai et al., 2022) - Learn how to build 
+                self-improving models that critique and revise their own outputs using AI-generated feedback.
+            </p>
+        </section>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+    <script>
+        // Problem Explorer
+        document.addEventListener('DOMContentLoaded', function() {
+            const problemList = document.getElementById('problem-list');
+            
+            sampleProblems.forEach(problem => {
+                const problemCard = document.createElement('div');
+                problemCard.className = 'problem-card';
+                problemCard.innerHTML = `
+                    <div class="problem-header">
+                        <span class="problem-difficulty ${problem.difficulty.toLowerCase()}">${problem.difficulty}</span>
+                        <span class="problem-tests">${problem.tests} tests</span>
+                        <span class="problem-passrate">~${Math.round(problem.passRate * 100)}% pass rate</span>
+                    </div>
+                    <pre><code>${problem.signature}</code></pre>
+                    <div class="problem-docstring">
+                        <strong>Specification:</strong>
+                        <p>${problem.docstring}</p>
+                    </div>
+                    <div class="problem-example">
+                        <strong>Example:</strong>
+                        <pre><code>${problem.example}</code></pre>
+                    </div>
+                `;
+                problemList.appendChild(problemCard);
+            });
+        });
+    </script>
+</body>
+</html>
