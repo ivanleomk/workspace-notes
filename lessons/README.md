@@ -133,6 +133,30 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - GRPO vs PPO efficiency radar chart
 - **Status:** Complete
 
+### Lesson 07 - HumanEval: Code Evaluation Benchmarks ✅
+- **Track:** A (Foundations)
+- **Paper:** Evaluating Large Language Models Trained on Code (Chen et al., 2021)
+- **Path:** [`07-humaneval-code-benchmarks/`](07-humaneval-code-benchmarks/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/](https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/)
+- **Topics:**
+  - Why code needs functional correctness (unit tests) vs match-based metrics (BLEU)
+  - HumanEval design: 164 hand-written problems, function synthesis from docstrings
+  - Hand-written problems avoid GitHub training data contamination
+  - pass@k metric: unbiased estimation of success rate with k samples
+  - Codex results: 28.8% pass@1, 72.3% pass@100 (12B model)
+  - Temperature optimization: lower for pass@1, higher for pass@100 (diversity)
+  - Baseline comparisons: GPT-3 ~0%, GPT-J 11.6%, Codex-12B 28.8%
+  - Limitations: long operation chains, variable binding, sample inefficiency
+  - Connection to verifiable rewards (Lesson 06 GRPO), contrast with LLM-as-judge (Lesson 05)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Problem explorer with sample HumanEval-style problems
+  - Model size vs performance scaling chart
+  - pass@k improvement visualization
+  - Sample selection strategies comparison
+  - Codex vs baselines bar chart
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -144,6 +168,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 04: DPO](https://ivanleomk.github.io/workspace-notes/04-dpo-direct-preference-optimization/)
 - [Lesson 05: LLM-as-Judge & MT-Bench](https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/)
 - [Lesson 06: DeepSeekMath & GRPO](https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/)
+- [Lesson 07: HumanEval & Code Evaluation](https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/)
 
 ### 💻 Local Serving (for development)
 ```bash
