@@ -60,19 +60,22 @@ const humanEvalData = {
         hard: 0.005   // Low pass rate example
     },
 
-    // Sample selection heuristics (Figure 7, Section 3.3)
-    // Performance when selecting 1 sample from k generated
+    // Sample selection heuristics for Codex-S (from abstract, Section 1)
+    // Codex-S-12B performance when selecting samples
     sampleSelection: {
-        methods: ['Random', 'Mean log-prob', 'Oracle (upper bound)'],
-        // Approximate values from Figure 7 for Codex-12B
-        pass1: [28.8, 28.8, 28.8],
-        selectFrom10: [29, 35, 47],
-        selectFrom100: [29, 44.5, 72.3]
+        model: 'Codex-S-12B',
+        methods: ['Single sample (pass@1)', 'Mean log-prob from 100', 'Oracle from 100'],
+        // Exact values from abstract
+        pass1: 37.7,
+        meanLogProb100: 44.5,
+        oracle100: 77.5,
+        note: 'Figure 7 shows similar sample selection heuristics for Codex-12B'
     }
 };
 
-// Sample HumanEval-style problems (inspired by paper examples)
-// These are simplified versions for educational purposes
+// Sample HumanEval-style problems (actual problems from the dataset)
+// Test counts verified from github.com/openai/human-eval
+// Pass rates are illustrative examples only, not from the paper
 const sampleProblems = [
     {
         id: 1,
@@ -80,8 +83,8 @@ const sampleProblems = [
         signature: 'def has_close_elements(numbers, threshold):',
         docstring: 'Check if in given list of numbers, are any two numbers closer to each other than given threshold.',
         example: 'has_close_elements([1.0, 2.0, 3.0], 0.5) == False\nhas_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3) == True',
-        tests: 3,
-        passRate: 0.85
+        tests: 7,
+        passRateIllustrative: 0.90  // Illustrative example (Figure 2 shows ~0.9 for an easy problem)
     },
     {
         id: 2,
@@ -89,8 +92,8 @@ const sampleProblems = [
         signature: 'def words_string(s):',
         docstring: 'You will be given a string of words separated by commas or spaces. Your task is to split the string into words and return an array of the words.',
         example: 'words_string("Hi, my name is John") == ["Hi", "my", "name", "is", "John"]',
-        tests: 5,
-        passRate: 0.42
+        tests: 10,
+        passRateIllustrative: 0.17  // Illustrative example (Figure 2 shows ~0.17 for a medium problem)
     },
     {
         id: 3,
@@ -98,8 +101,8 @@ const sampleProblems = [
         signature: 'def split_words(txt):',
         docstring: 'Given a string of words, return a list of words split on whitespace, if no whitespaces exists in the text you should split on commas, if no commas exists you should return the number of lower-case letters with odd order in the alphabet.',
         example: 'split_words("Hello world!") == ["Hello", "world!"]',
-        tests: 10,
-        passRate: 0.18
+        tests: 8,
+        passRateIllustrative: 0.005  // Illustrative example (Figure 2 shows ~0.005 for a hard problem)
     },
     {
         id: 4,
@@ -107,8 +110,8 @@ const sampleProblems = [
         signature: 'def correct_bracketing(brackets: str):',
         docstring: 'brackets is a string of "(" and ")". Return True if every opening bracket has a corresponding closing bracket.',
         example: 'correct_bracketing("(())") == True\ncorrect_bracketing("(()())") == True\ncorrect_bracketing("(((") == False',
-        tests: 8,
-        passRate: 0.68
+        tests: 12,
+        passRateIllustrative: 0.17  // Illustrative medium difficulty example
     }
 ];
 

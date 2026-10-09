@@ -356,17 +356,18 @@ assert has_close_elements([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.05) == False</code><
             <h3>Sample Selection Heuristics</h3>
             <p>
                 What if you generate k samples but can only evaluate one (e.g., showing a suggestion to a user)? 
-                The paper tests selection strategies:
+                The paper tests selection strategies. For Codex-S (from abstract):
             </p>
             <ul>
-                <li><strong>Random:</strong> ~29% (same as pass@1)</li>
-                <li><strong>Highest mean log-probability:</strong> ~44.5% (select from 100 samples)</li>
-                <li><strong>Oracle (with unit tests):</strong> ~72.3% (the upper bound)</li>
+                <li><strong>Random:</strong> 37.7% (same as pass@1)</li>
+                <li><strong>Highest mean log-probability:</strong> 44.5% (select from 100 samples)</li>
+                <li><strong>Oracle (with unit tests):</strong> 77.5% (the upper bound)</li>
             </ul>
 
             <p>
                 Mean log-probability is a practical heuristic that doesn't require running tests but still 
-                captures ~60% of the potential improvement from sampling 100 times.
+                captures significant improvement. Figure 7 shows similar heuristics applied to Codex-12B, 
+                demonstrating that ranking by mean log-probability outperforms random selection across model sizes.
             </p>
         </section>
 
@@ -707,8 +708,8 @@ assert has_close_elements([1.0, 2.0, 3.9, 4.0, 5.0, 2.2], 0.05) == False</code><
                 problemCard.innerHTML = `
                     <div class="problem-header">
                         <span class="problem-difficulty ${problem.difficulty.toLowerCase()}">${problem.difficulty}</span>
-                        <span class="problem-tests">${problem.tests} tests</span>
-                        <span class="problem-passrate">~${Math.round(problem.passRate * 100)}% pass rate</span>
+                        <span class="problem-tests">${problem.tests} tests (verified from dataset)</span>
+                        <span class="problem-passrate">~${Math.round(problem.passRateIllustrative * 100)}% pass rate (illustrative)</span>
                     </div>
                     <pre><code>${problem.signature}</code></pre>
                     <div class="problem-docstring">

@@ -136,7 +136,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Chart 3: Pass@k improvement visualization
-    const passk Ctx = document.getElementById('passkChart');
+    const passkCtx = document.getElementById('passkChart');
     if (passkCtx) {
         const kValues = [1, 10, 100];
         const codex12BValues = [28.81, 46.81, 72.31];
@@ -202,33 +202,19 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Chart 4: Sample Selection Heuristics
+    // Chart 4: Sample Selection Heuristics (Codex-S from abstract)
     const selectionCtx = document.getElementById('sampleSelectionChart');
     if (selectionCtx) {
         new Chart(selectionCtx, {
             type: 'bar',
             data: {
-                labels: ['Single Sample', 'Select from 10', 'Select from 100'],
+                labels: ['Single Sample', 'Select from 100 (mean log-prob)', 'Select from 100 (oracle)'],
                 datasets: [
                     {
-                        label: 'Random Selection',
-                        data: [28.8, 29, 29],
-                        backgroundColor: 'rgba(248, 113, 113, 0.7)',
-                        borderColor: 'rgb(248, 113, 113)',
-                        borderWidth: 1
-                    },
-                    {
-                        label: 'Mean Log-Prob',
-                        data: [28.8, 35, 44.5],
-                        backgroundColor: 'rgba(59, 130, 246, 0.7)',
-                        borderColor: 'rgb(59, 130, 246)',
-                        borderWidth: 1
-                    },
-                    {
-                        label: 'Oracle (with tests)',
-                        data: [28.8, 47, 72.3],
-                        backgroundColor: 'rgba(16, 185, 129, 0.7)',
-                        borderColor: 'rgb(16, 185, 129)',
+                        label: 'Codex-S Pass Rate (%)',
+                        data: [37.7, 44.5, 77.5],
+                        backgroundColor: ['rgba(59, 130, 246, 0.7)', 'rgba(139, 92, 246, 0.7)', 'rgba(16, 185, 129, 0.7)'],
+                        borderColor: ['rgb(59, 130, 246)', 'rgb(139, 92, 246)', 'rgb(16, 185, 129)'],
                         borderWidth: 1
                     }
                 ]
@@ -239,7 +225,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 plugins: {
                     title: {
                         display: true,
-                        text: 'Sample Selection Strategies (Codex-12B)',
+                        text: 'Sample Selection Strategies (Codex-S-12B from abstract)',
                         color: '#f1f5f9',
                         font: { size: 16, weight: 'bold' }
                     },
