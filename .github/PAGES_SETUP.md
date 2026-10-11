@@ -1,6 +1,6 @@
-# GitHub Pages Setup for Lessons
+# GitHub Pages Setup for Lessons and Infrastructure Series
 
-This repository includes a GitHub Actions workflow to automatically deploy the lessons site to GitHub Pages.
+This repository includes a GitHub Actions workflow to automatically deploy the lessons site and infrastructure series to GitHub Pages.
 
 ## Setup Steps
 
@@ -22,12 +22,13 @@ This repository includes a GitHub Actions workflow to automatically deploy the l
 ### 3. Trigger Deployment
 
 The workflow (`.github/workflows/pages.yml`) will automatically deploy when:
-- Changes are pushed to the `main` branch in the `lessons/` directory
+- Changes are pushed to the `main` branch in the `lessons/` or `infra/` directory
+- The workflow file itself is modified
 - You manually trigger it via **Actions** tab → **Deploy Lessons to GitHub Pages** → **Run workflow**
 
 ### 4. Access Your Site
 
-After successful deployment, your lessons will be available at:
+After successful deployment, your content will be available at:
 
 **Public repositories:**
 ```
@@ -37,6 +38,7 @@ https://<username>.github.io/<repository-name>/
 Example:
 ```
 https://ivan.github.io/workspace-notes/01-mmlu-what-makes-a-benchmark/
+https://ivan.github.io/workspace-notes/infra/01-linux-namespaces-cgroups/
 ```
 
 **Private repositories:**
@@ -100,7 +102,14 @@ Your site will be available at the same URL structure.
 
 ## Updating Content
 
-After pushing changes to `lessons/`:
+After pushing changes to `lessons/` or `infra/`:
 1. The workflow automatically rebuilds and deploys
 2. Changes appear within 1-2 minutes
 3. Hard refresh your browser (`Ctrl+Shift+R` or `Cmd+Shift+R`) to see updates
+
+## Site Structure
+
+The deployed site includes:
+- Lesson pages at the root: `/<lesson-slug>/`
+- Infrastructure series under: `/infra/<lesson-slug>/`
+- Both curricula remain navigable from their respective entry points

@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'lessons/**'
+      - 'infra/**'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -30,10 +32,17 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
       
+      - name: Build site structure
+        run: |
+          mkdir -p _site
+          cp -a lessons/. _site/
+          mkdir -p _site/infra
+          cp -a infra/. _site/infra/
+      
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'lessons'
+          path: '_site'
       
       - name: Deploy to GitHub Pages
         id: deployment
