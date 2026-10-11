@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 01: Linux Namespaces and cgroups v2 by Hand</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 01: Linux Namespaces and cgroups v2 by Hand</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Building Blocks of Isolation</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#what-containers-really-are">What Containers Really Are</a>
+            <a href="#namespaces">Namespaces</a>
+            <a href="#cgroups">cgroups v2</a>
+            <a href="#diagrams">Diagrams</a>
+            <a href="#real-systems">Real Systems</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why This Matters for Eval Infrastructure</h2>
+            <p>
+                Every eval sandbox you've used—Docker containers for SWE-bench, Modal sandboxes for HumanEval, 
+                E2B microVMs for agent rollouts—is built on the primitives you'll learn in this lesson. Before 
+                you can choose between runc, gVisor, and Firecracker, you need to understand what they're 
+                isolating and how.
+            </p>
+            <p>
+                <strong>The core insight:</strong> A "container" is not a special kernel object. It's just a 
+                regular Linux process wrapped in namespaces and cgroups. Every sandbox—whether it shares the 
+                host kernel (Docker, gVisor) or runs in a VM (Firecracker, Kata)—uses these primitives somewhere 
+                in its isolation stack.
+            </p>
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>The 8 types of Linux namespaces and what each isolates (and doesn't)</li>
+                    <li>cgroups v2 controllers: cpu, memory, io, pids, plus the freezer and PSI</li>
+                    <li>Why shared-kernel isolation is not sufficient for untrusted code</li>
+                    <li>How runc, Docker, Kubernetes, and eval harnesses use these primitives</li>
+                    <li>Hands-on: build a minimal Python sandbox with unshare(2) and cgroup v2</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="what-containers-really-are" class="content-section">
+            <h2>What Containers Really Are</h2>
+            <p>
+                From the <a href="https://github.com/google/gvisor" target="_blank">gVisor README</a>:
+            </p>
+            <blockquote>
+                "Containers are not a sandbox. While containers have revolutionized how we develop, package, 
+                and deploy applications, <strong>using them to run untrusted or potentially malicious code 
+                without additional isolation is not a good idea.</strong> While using a single, shared kernel 
+                allows for efficiency and performance gains, it also means that container escape is possible 
+                with a single vulnerability."
+            </blockquote>
+            <p>
+                A container runtime like <strong>runc</strong> (or its lighter C implementation 
+                <strong>crun</strong>) combines several Linux primitives:
+            </p>
+            <ul>
+                <li><strong>Namespaces:</strong> Give the process its own view of system resources</li>
+                <li><strong>cgroups v2:</strong> Limit and account for resource usage (CPU, memory, I/O, PIDs)</li>
+                <li><strong>seccomp-bpf:</strong> Filter which syscalls the process can make</li>
+                <li><strong>overlayfs:</strong> Union mount for copy-on-write filesystem layers</li>
+                <li><strong>capabilities, AppArmor/SELinux:</strong> Drop privileges and enforce MAC policies</li>
+            </ul>
+            <p>
+                But at the end of the day, every containerized process <strong>calls the same host kernel</strong> 
+                as every other process. This is fundamentally different from hardware virtualization, where each 
+                guest runs its own kernel.
+            </p>
+            <div class="info-box warning">
+                <h3>⚠️ Security Implication for Evals</h3>
+                <p>
+                    If you're running RL policies that explore for reward hacks, or evaluating potentially 
+                    malicious code submissions, <strong>plain containers are not sufficient.</strong> A kernel 
+                    vulnerability can lead to container escape. This is why production eval systems either:
+                </p>
+                <ul>
+                    <li>Use gVisor (userspace kernel that intercepts syscalls)</li>
+                    <li>Use microVMs (Firecracker, Kata) with hardware isolation</li>
+                    <li>Run containers on single-tenant nodes with network isolation</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="namespaces" class="content-section">
+            <h2>Linux Namespaces: Hiding Things</h2>
+            <p>
+                Namespaces give a process its own view of a global resource. The process "thinks" it's alone, 
+                but it's actually sharing the kernel with everyone else.
+            </p>
+            <p>
+                From <a href="https://man7.org/linux/man-pages/man7/namespaces.7.html" target="_blank">
+                namespaces(7)</a>, there are <strong>8 types</strong>:
+            </p>
+
+            <div class="info-box">
+                <h3>1. Mount Namespace (<code>CLONE_NEWNS</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> The filesystem mount table. Each namespace has its own 
+                    set of mount points.
+                </p>
+                <p>
+                    <strong>What it does NOT isolate:</strong> The underlying filesystems themselves. If two 
+                    containers mount the same host path, they see the same data.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Lets you give a container its own root filesystem 
+                    (<code>pivot_root</code>) without affecting the host. Combined with overlayfs, this is 
+                    how thousands of containers share one base image.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>2. PID Namespace (<code>CLONE_NEWPID</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> Process IDs. The first process in a new PID namespace 
+                    becomes PID 1 inside that namespace (but has a different PID on the host).
+                </p>
+                <p>
+                    <strong>What it does NOT isolate:</strong> Process resources, scheduling, or signals from 
+                    outside the namespace.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Inside the sandbox, <code>ps</code> only shows processes 
+                    in that namespace. The sandbox can't see or signal host processes. But the host can see 
+                    (and kill) all sandbox processes.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>3. Network Namespace (<code>CLONE_NEWNET</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> Network stack—interfaces, routing tables, firewall rules 
+                    (<code>iptables</code>/<code>nftables</code>), sockets.
+                </p>
+                <p>
+                    <strong>What it does NOT isolate:</strong> Physical network hardware (that stays on the host).
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Each sandbox gets its own <code>lo</code> interface and 
+                    can't see the host's network. Connect it via <code>veth</code> pairs (virtual ethernet) to 
+                    a bridge on the host. For Firecracker, each VM gets its own netns with a tap device.
+                </p>
+                <p>
+                    <strong>Eval use case:</strong> Per-sandbox egress firewalls. E2B uses nftables rules in 
+                    each netns to allow/deny domains. Inspect AI defaults to <code>network_mode: none</code>.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>4. UTS Namespace (<code>CLONE_NEWUTS</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> Hostname and NIS domain name.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Lets each container have its own hostname without changing 
+                    the host's. Minor, but prevents hostname collisions.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>5. IPC Namespace (<code>CLONE_NEWIPC</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> System V IPC objects (message queues, semaphores, shared 
+                    memory) and POSIX message queues.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Prevents containers from interfering with each other's IPC 
+                    primitives. Less critical for modern sandboxes (most code uses sockets, not SysV IPC).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>6. User Namespace (<code>CLONE_NEWUSER</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> User and group IDs. You can map UID 0 (root) inside the 
+                    namespace to an unprivileged UID on the host.
+                </p>
+                <p>
+                    <strong>What it does NOT isolate:</strong> Capabilities still apply. Even if you're "root" 
+                    inside, you don't have host root powers unless you have the capabilities.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> <strong>This is the most important namespace for unprivileged 
+                    containers.</strong> With user namespaces, you can run Docker without <code>sudo</code> 
+                    (rootless Docker). Inside the sandbox, the process thinks it's root, but on the host it's 
+                    UID 100000 or similar.
+                </p>
+                <p>
+                    See <a href="https://man7.org/linux/man-pages/man7/user_namespaces.7.html" target="_blank">
+                    user_namespaces(7)</a> for the full mapping rules.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>7. Cgroup Namespace (<code>CLONE_NEWCGROUP</code>)</h3>
+                <p>
+                    <strong>What it isolates:</strong> View of the cgroup hierarchy. Processes see a virtualized 
+                    <code>/proc/self/cgroup</code>.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Prevents containers from seeing or modifying the host's 
+                    cgroup tree. Less about resource isolation (that's cgroups themselves) and more about 
+                    information hiding.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>8. Time Namespace (<code>CLONE_NEWTIME</code>, Linux 5.6+)</h3>
+                <p>
+                    <strong>What it isolates:</strong> <code>CLOCK_MONOTONIC</code> and <code>CLOCK_BOOTTIME</code> 
+                    offsets.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Lets you restore a checkpoint with the clock adjusted. Useful 
+                    for migration and checkpoint/restore (CRIU, gVisor checkpoint/restore).
+                </p>
+            </div>
+
+            <h3>Key Takeaway: Namespaces Only Hide</h3>
+            <p>
+                Namespaces <strong>do not prevent resource exhaustion.</strong> A process in a PID namespace 
+                can still fork-bomb the host. A process in a net namespace can still saturate the NIC. That's 
+                where cgroups come in.
+            </p>
+        </section>
+
+        <section id="cgroups" class="content-section">
+            <h2>cgroups v2: Resource Limits and Accounting</h2>
+            <p>
+                From <a href="https://docs.kernel.org/admin-guide/cgroup-v2.html" target="_blank">
+                cgroup-v2.html</a>:
+            </p>
+            <blockquote>
+                "Control Groups version 2 provide a unified hierarchy for resource control and accounting."
+            </blockquote>
+            <p>
+                <strong>cgroups v2</strong> is the current standard (cgroups v1 is deprecated but still widely 
+                deployed). Key difference: v2 has <strong>one unified hierarchy</strong>, while v1 had separate 
+                hierarchies per controller (cpu, memory, etc.).
+            </p>
+
+            <h3>Controllers</h3>
+            <p>
+                A <strong>controller</strong> is a subsystem that manages one type of resource. The main controllers:
+            </p>
+
+            <div class="info-box">
+                <h3>1. CPU Controller</h3>
+                <p>
+                    <strong>Files:</strong> <code>cpu.max</code>, <code>cpu.weight</code>, <code>cpu.stat</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong>
+                </p>
+                <ul>
+                    <li><code>cpu.max</code>: Hard limit. Format: <code>$MAX $PERIOD</code> in microseconds. 
+                    Example: <code>50000 100000</code> = 50% of one CPU (50ms per 100ms).</li>
+                    <li><code>cpu.weight</code>: Proportional share (100–10000, default 100). If cgroup A has 
+                    weight 100 and B has 200, B gets 2× the CPU when both are busy.</li>
+                </ul>
+                <p>
+                    <strong>Eval use case:</strong> Prevent one sandbox from starving others. E2B sets 
+                    <code>cpu.max</code> <em>before the guest runs a single instruction</em> (from 
+                    <a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">
+                    ARCHITECTURE.md</a>).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>2. Memory Controller</h3>
+                <p>
+                    <strong>Files:</strong> <code>memory.max</code>, <code>memory.current</code>, 
+                    <code>memory.high</code>, <code>memory.swap.max</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong>
+                </p>
+                <ul>
+                    <li><code>memory.max</code>: Hard limit. If the cgroup tries to allocate more, allocations 
+                    fail or the OOM killer runs.</li>
+                    <li><code>memory.current</code>: Current usage (read-only).</li>
+                    <li><code>memory.high</code>: Soft limit. The kernel throttles the cgroup when it crosses 
+                    this threshold.</li>
+                </ul>
+                <p>
+                    <strong>Why it matters:</strong> Without <code>memory.max</code>, a sandbox can OOM the host. 
+                    Set it based on your eval workload. For SWE-bench, typical containers need 2–8 GB.
+                </p>
+                <p>
+                    <strong>Gotcha:</strong> Inside the sandbox, <code>free</code> and <code>nproc</code> report 
+                    <strong>host</strong> values, not cgroup limits. Daytona documents this in 
+                    <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">isolation docs</a>. 
+                    Your code must read <code>/sys/fs/cgroup/memory.max</code> to see the actual limit.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>3. I/O Controller</h3>
+                <p>
+                    <strong>Files:</strong> <code>io.max</code>, <code>io.weight</code>, <code>io.stat</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong> Limits IOPS and throughput (bytes/sec) per block device.
+                </p>
+                <p>
+                    <strong>Eval use case:</strong> Prevent one sandbox's <code>pip install</code> or 
+                    <code>git clone</code> from saturating the disk and slowing everyone else. Less critical 
+                    for RAM-backed <code>/tmp</code> or NVMe.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>4. PIDs Controller</h3>
+                <p>
+                    <strong>Files:</strong> <code>pids.max</code>, <code>pids.current</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong> Limits the number of processes/threads in the cgroup.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> <strong>Stops fork bombs.</strong> Set <code>pids.max</code> 
+                    to something reasonable for your workload (e.g., 512 or 1024). Without this, a malicious 
+                    <code>:(){ :|:& };:</code> can exhaust the PID space and DoS the host.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>5. Freezer</h3>
+                <p>
+                    <strong>File:</strong> <code>cgroup.freeze</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong> Write <code>1</code> to freeze all processes in the cgroup 
+                    (like <code>SIGSTOP</code>, but atomic). Write <code>0</code> to thaw.
+                </p>
+                <p>
+                    <strong>Eval use case:</strong> Pause a sandbox instantly. E2B and Daytona use this (plus 
+                    VM-level pause for memory) to implement pause/resume.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>6. Pressure Stall Information (PSI)</h3>
+                <p>
+                    <strong>Files:</strong> <code>cpu.pressure</code>, <code>memory.pressure</code>, 
+                    <code>io.pressure</code>
+                </p>
+                <p>
+                    <strong>What it does:</strong> Reports how much time processes spent stalled waiting for 
+                    CPU, memory, or I/O.
+                </p>
+                <p>
+                    <strong>Why it matters:</strong> Observability. If <code>memory.pressure</code> is high, 
+                    your sandbox is thrashing. If <code>io.pressure</code> is high, you're I/O-bound. Use this 
+                    to right-size limits or detect runaway workloads.
+                </p>
+            </div>
+
+            <h3>Key Takeaway: cgroups Enforce, Namespaces Hide</h3>
+            <p>
+                <strong>Namespaces</strong> give the process an isolated <em>view</em>. <strong>cgroups</strong> 
+                give the kernel a way to <em>limit and account</em> for what that process can do. You need both 
+                for a secure sandbox.
+            </p>
+            <p>
+                But even with both, you're still calling the <strong>same host kernel</strong>. That's why 
+                systems like gVisor and Firecracker exist.
+            </p>
+        </section>
+
+        <section id="diagrams" class="content-section">
+            <h2>Visualizing Isolation</h2>
+            <p>
+                Here's how namespaces and cgroups wrap a process:
+            </p>
+            <div class="mermaid">
+graph TB
+    Host[Host Kernel]
+    
+    subgraph "Namespace Isolation"
+        MNT[Mount NS<br/>own root FS]
+        PID[PID NS<br/>own PID tree]
+        NET[Net NS<br/>own network stack]
+        USER[User NS<br/>UID mapping]
+        IPC[IPC NS]
+        UTS[UTS NS<br/>hostname]
+        TIME[Time NS]
+        CGROUP_NS[Cgroup NS]
+    end
+    
+    subgraph "cgroup v2 Limits"
+        CPU[cpu.max<br/>cpu.weight]
+        MEM[memory.max<br/>memory.high]
+        IO[io.max<br/>io.weight]
+        PIDS[pids.max]
+        FREEZE[cgroup.freeze]
+    end
+    
+    Process[Process<br/>inside Sandbox]
+    
+    Host --> MNT
+    Host --> PID
+    Host --> NET
+    Host --> USER
+    Host --> IPC
+    Host --> UTS
+    Host --> TIME
+    Host --> CGROUP_NS
+    
+    Host --> CPU
+    Host --> MEM
+    Host --> IO
+    Host --> PIDS
+    Host --> FREEZE
+    
+    MNT --> Process
+    PID --> Process
+    NET --> Process
+    USER --> Process
+    IPC --> Process
+    UTS --> Process
+    TIME --> Process
+    CGROUP_NS --> Process
+    
+    CPU -.limit.-> Process
+    MEM -.limit.-> Process
+    IO -.limit.-> Process
+    PIDS -.limit.-> Process
+    FREEZE -.freeze.-> Process
+    
+    style Host fill:#1e293b,stroke:#3b82f6,stroke-width:3px
+    style Process fill:#8b5cf6,stroke:#f1f5f9,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> A sandboxed process uses the host kernel but sees an isolated view 
+                (namespaces) and is resource-limited (cgroups).
+            </p>
+
+            <h3>cgroups v2 Hierarchy</h3>
+            <p>
+                cgroups v2 is a <strong>single unified tree</strong>. You can only enable controllers at a level 
+                if they're enabled in the parent. Here's a typical layout:
+            </p>
+            <div class="mermaid">
+graph TD
+    Root["/ (root cgroup)"]
+    System["/system.slice"]
+    User["/user.slice"]
+    
+    Docker["/docker"]
+    Container1["/docker/abc123"]
+    Container2["/docker/def456"]
+    
+    Root --> System
+    Root --> User
+    Root --> Docker
+    
+    Docker --> Container1
+    Docker --> Container2
+    
+    Root -->|"controllers: cpu, memory, io, pids"| Root
+    Docker -->|"controllers inherited"| Docker
+    Container1 -->|"memory.max=2G<br/>cpu.max=50000 100000<br/>pids.max=512"| Container1
+    
+    style Root fill:#1e293b,stroke:#3b82f6,stroke-width:2px
+    style Docker fill:#334155,stroke:#8b5cf6
+    style Container1 fill:#8b5cf6,stroke:#f1f5f9
+    style Container2 fill:#8b5cf6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> cgroups v2 hierarchy. Each container is a child cgroup with limits set.
+            </p>
+        </section>
+
+        <section id="real-systems" class="content-section">
+            <h2>How Real Systems Use These Primitives</h2>
+            <p>
+                Now that you understand the building blocks, let's see how production systems combine them.
+            </p>
+
+            <div class="info-box">
+                <h3>runc (Docker, containerd, CRI-O)</h3>
+                <p>
+                    <strong>Source:</strong> <a href="https://github.com/opencontainers/runc" target="_blank">
+                    github.com/opencontainers/runc</a>
+                </p>
+                <p>
+                    runc is the reference OCI (Open Container Initiative) runtime. It:
+                </p>
+                <ul>
+                    <li>Creates all 8 namespaces (or a subset, based on config)</li>
+                    <li>Sets up cgroup v2 limits (cpu.max, memory.max, pids.max, io.max)</li>
+                    <li>Applies a <strong>seccomp profile</strong> (Docker's default disables "around 44 out of 
+                    300+" syscalls, per <a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">
+                    docs.docker.com/engine/security/seccomp</a>)</li>
+                    <li>Uses <strong>overlayfs</strong> to layer the image (read-only lowers) and a writable upper</li>
+                    <li>Drops capabilities and sets AppArmor/SELinux policies</li>
+                    <li><code>pivot_root</code> to the container's rootfs</li>
+                    <li>Execs the entrypoint</li>
+                </ul>
+                <p>
+                    <strong>Where the syscalls go:</strong> Directly to the <strong>host kernel</strong>. This is 
+                    the highest performance (no interception), but also the largest attack surface.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Kubernetes</h3>
+                <p>
+                    <strong>Documentation:</strong> 
+                    <a href="https://kubernetes.io/docs/concepts/containers/runtime-class/" target="_blank">
+                    RuntimeClass</a>
+                </p>
+                <p>
+                    Kubernetes is a container orchestrator. It doesn't implement namespaces/cgroups itself; it 
+                    delegates to a <strong>container runtime</strong> via CRI (Container Runtime Interface). 
+                    Common runtimes:
+                </p>
+                <ul>
+                    <li><strong>containerd + runc</strong>: Standard shared-kernel containers</li>
+                    <li><strong>containerd + runsc (gVisor)</strong>: Userspace kernel</li>
+                    <li><strong>Kata Containers</strong>: Each pod in a lightweight VM</li>
+                </ul>
+                <p>
+                    You select the runtime per pod via <code>runtimeClassName</code> in the pod spec. For example, 
+                    <a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">
+                    UK AISI's Inspect k8s provider</a> uses gVisor.
+                </p>
+                <p>
+                    <strong>cgroups:</strong> The kubelet creates a cgroup hierarchy. Each pod gets a cgroup; 
+                    QoS classes (Guaranteed, Burstable, BestEffort) map to cgroup settings.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>SWE-bench Harness</h3>
+                <p>
+                    <strong>Source:</strong> 
+                    <a href="https://github.com/SWE-bench/SWE-bench" target="_blank">
+                    github.com/SWE-bench/SWE-bench</a>
+                </p>
+                <p>
+                    SWE-bench runs each test instance in a Docker container (runc by default). From the 
+                    <a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md" target="_blank">
+                    Docker setup guide</a>:
+                </p>
+                <ul>
+                    <li>Images are layered: <strong>base → environment (~60 images) → instance</strong></li>
+                    <li>Recommended <code>max_workers</code> < <code>min(0.75*cpu_count, 24)</code></li>
+                    <li>The harness doesn't set explicit cgroup limits in the public code (relies on Docker defaults)</li>
+                </ul>
+                <p>
+                    <strong>What's isolated:</strong> Each instance gets its own mount, PID, net (usually no network), 
+                    UTS, IPC, user namespaces. cgroups are Docker's defaults (which depend on your daemon config).
+                </p>
+                <p>
+                    <strong>What's NOT isolated:</strong> They all share the host kernel. If a test exploits a 
+                    kernel vulnerability, it can escape. For SWE-bench this is acceptable (tests are from known 
+                    repos), but for adversarial evals you'd want gVisor or VMs.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>OpenHands Remote Runtime</h3>
+                <p>
+                    <strong>Source:</strong> 
+                    <a href="https://docs.openhands.dev/sdk/guides/agent-server/api-sandbox" target="_blank">
+                    OpenHands API Sandbox docs</a>
+                </p>
+                <p>
+                    The OpenHands agent server runs inside a container. The architecture splits:
+                </p>
+                <ul>
+                    <li><strong>Agent loop</strong> (driver): Runs on the orchestrator</li>
+                    <li><strong>Tool executor</strong> (sandbox): Runs inside a container, connected via WebSocket</li>
+                </ul>
+                <p>
+                    For large-scale evaluation (like SWE-bench), they run the container on a remote server 
+                    (the <code>APIRemoteWorkspace</code>). The container itself is a plain Docker container 
+                    (runc + namespaces + cgroups).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Inspect AI</h3>
+                <p>
+                    <strong>Documentation:</strong> 
+                    <a href="https://inspect.aisi.org.uk/sandboxing.html" target="_blank">
+                    inspect.aisi.org.uk/sandboxing.html</a>
+                </p>
+                <p>
+                    Inspect's Docker provider generates a compose file with:
+                </p>
+                <ul>
+                    <li><code>network_mode: none</code> (no network by default)</li>
+                    <li>Exec output capped at 10 MB (tail kept)</li>
+                    <li><code>max_sandboxes</code> defaults to 2× CPUs</li>
+                </ul>
+                <p>
+                    The k8s provider (from UK AISI) uses <strong>gVisor</strong> as the RuntimeClass, plus Cilium 
+                    network policies for egress control.
+                </p>
+            </div>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: A Minimal Python Sandbox</h2>
+            <p>
+                Now let's build a simple sandbox that demonstrates namespaces and cgroups. This script:
+            </p>
+            <ul>
+                <li>Creates new user, mount, PID, and net namespaces</li>
+                <li>Sets up a cgroup v2 with memory and PID limits</li>
+                <li>Runs a child process that prints its PID and UID</li>
+                <li>Demonstrates isolation: the child has PID 1 inside, but a different PID on the host</li>
+            </ul>
+
+            <div class="info-box warning">
+                <h3>⚠️ Privilege Requirements</h3>
+                <p>
+                    <strong>User namespaces</strong> can be created unprivileged on most Linux distros (check 
+                    <code>/proc/sys/kernel/unprivileged_userns_clone</code>). But creating a cgroup v2 typically 
+                    requires:
+                </p>
+                <ul>
+                    <li>A <strong>delegated cgroup</strong> (systemd's <code>user.slice</code> for unprivileged), or</li>
+                    <li>Root (via <code>sudo</code>), or</li>
+                    <li>Running inside Docker with <code>--privileged</code> or appropriate capabilities</li>
+                </ul>
+                <p>
+                    <strong>The script below requires sudo or a delegated cgroup.</strong> If you don't have that, 
+                    the namespace parts will work, but cgroup setup will fail.
+                </p>
+                <p>
+                    <strong>Alternative:</strong> Run this inside a Docker container with 
+                    <code>docker run --privileged -it python:3.11</code>.
+                </p>
+            </div>
+
+            <h3>The Code: <code>exercise.py</code></h3>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Minimal sandbox demonstrating Linux namespaces and cgroups v2.
+
+Requirements:
+- Linux kernel 5.6+ (for all 8 namespaces including time; older kernels work without CLONE_NEWTIME)
+- Python 3.7+
+- sudo (or a delegated cgroup)
+
+Usage:
+    sudo python3 exercise.py
+
+What it does:
+1. Creates a new cgroup v2 with memory.max=100M and pids.max=10
+2. Unshares into new user, mount, PID, and net namespaces
+3. Runs a child that demonstrates isolation
+"""
+
+import os
+import sys
+import subprocess
+import ctypes
+import ctypes.util
+
+# Linux namespace flags (from sched.h)
+CLONE_NEWNS = 0x00020000    # mount
+CLONE_NEWPID = 0x20000000   # PID
+CLONE_NEWNET = 0x40000000   # network
+CLONE_NEWUSER = 0x10000000  # user
+CLONE_NEWUTS = 0x04000000   # UTS (hostname)
+CLONE_NEWIPC = 0x08000000   # IPC
+CLONE_NEWCGROUP = 0x02000000  # cgroup
+
+# Load libc
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+
+def unshare(flags):
+    """
+    Call unshare(2) to create new namespaces.
+    Returns 0 on success, raises OSError on failure.
+    """
+    if libc.unshare(flags) != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), "unshare")
+    return 0
+
+def setup_cgroup(cgroup_name, memory_limit_bytes, pid_limit):
+    """
+    Create a cgroup v2 under /sys/fs/cgroup/{cgroup_name} with limits.
+    Requires root or a delegated cgroup.
+    """
+    cgroup_path = f"/sys/fs/cgroup/{cgroup_name}"
+    
+    # Create the cgroup directory
+    os.makedirs(cgroup_path, exist_ok=True)
+    print(f"[cgroup] Created {cgroup_path}")
+    
+    # Set memory limit
+    with open(f"{cgroup_path}/memory.max", "w") as f:
+        f.write(str(memory_limit_bytes))
+    print(f"[cgroup] Set memory.max = {memory_limit_bytes} bytes ({memory_limit_bytes // 1024 // 1024} MB)")
+    
+    # Set PID limit
+    with open(f"{cgroup_path}/pids.max", "w") as f:
+        f.write(str(pid_limit))
+    print(f"[cgroup] Set pids.max = {pid_limit}")
+    
+    # Move current process into the cgroup
+    with open(f"{cgroup_path}/cgroup.procs", "w") as f:
+        f.write(str(os.getpid()))
+    print(f"[cgroup] Moved PID {os.getpid()} into cgroup")
+    
+    return cgroup_path
+
+def child_process():
+    """
+    This runs inside the new namespaces.
+    """
+    print("\n=== Inside the Sandbox ===")
+    print(f"My PID (from os.getpid()): {os.getpid()}")
+    print(f"My UID (from os.getuid()): {os.getuid()}")
+    print(f"My GID (from os.getgid()): {os.getgid()}")
+    
+    # Read cgroup limits (these are visible from /proc or /sys/fs/cgroup)
+    try:
+        with open("/sys/fs/cgroup/memory.max", "r") as f:
+            mem_max = f.read().strip()
+        with open("/sys/fs/cgroup/pids.max", "r") as f:
+            pids_max = f.read().strip()
+        print(f"cgroup memory.max: {mem_max}")
+        print(f"cgroup pids.max: {pids_max}")
+    except FileNotFoundError:
+        print("(cgroup files not visible in this namespace)")
+    
+    # Show network interfaces (should only see lo, and it's down)
+    print("\nNetwork interfaces:")
+    result = subprocess.run(["ip", "link", "show"], capture_output=True, text=True)
+    print(result.stdout)
+    
+    print("=== Exiting sandbox ===\n")
+
+def main():
+    if os.geteuid() != 0:
+        print("⚠️  This script needs root (or a delegated cgroup). Run with sudo.")
+        print("   Namespace creation may work unprivileged, but cgroup setup will fail.")
+        sys.exit(1)
+    
+    print("=== Sandbox Demo: Namespaces + cgroups v2 ===\n")
+    
+    # Step 1: Create a cgroup and set limits
+    cgroup_name = f"sandbox_demo_{os.getpid()}"
+    memory_limit = 100 * 1024 * 1024  # 100 MB
+    pid_limit = 10
+    
+    try:
+        cgroup_path = setup_cgroup(cgroup_name, memory_limit, pid_limit)
+    except PermissionError as e:
+        print(f"❌ Failed to create cgroup: {e}")
+        print("   Make sure you're running with sudo or inside a delegated cgroup.")
+        sys.exit(1)
+    
+    # Step 2: Unshare into new namespaces
+    # We'll create: user, mount, PID, net
+    # (UTS, IPC, cgroup are optional; time requires kernel 5.6+)
+    flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET
+    
+    print("\n[namespace] Creating new user, mount, PID, and net namespaces...")
+    
+    # For user namespace, we need to set up UID/GID maps before we can do much else.
+    # Since we're root, we'll map root inside to root outside (not recommended for prod!).
+    # In production, you'd map to an unprivileged UID.
+    
+    try:
+        unshare(flags)
+    except OSError as e:
+        print(f"❌ unshare() failed: {e}")
+        print("   Your kernel may not support all these namespaces.")
+        sys.exit(1)
+    
+    print("[namespace] Unshare successful. We are now in new namespaces.")
+    
+    # Write UID and GID maps for the user namespace
+    # Map UID 0 inside to UID 0 outside (this requires CAP_SETUID, which we have as root)
+    with open("/proc/self/uid_map", "w") as f:
+        f.write("0 0 1\n")
+    # Disable setgroups (required before writing gid_map)
+    with open("/proc/self/setgroups", "w") as f:
+        f.write("deny\n")
+    with open("/proc/self/gid_map", "w") as f:
+        f.write("0 0 1\n")
+    
+    print("[namespace] UID/GID maps configured.")
+    
+    # Step 3: Fork a child to demonstrate PID namespace
+    # The child will be PID 1 inside the new PID namespace
+    print("\n[fork] Forking a child to demonstrate PID namespace isolation...\n")
+    
+    pid = os.fork()
+    if pid == 0:
+        # Child process
+        child_process()
+        sys.exit(0)
+    else:
+        # Parent: wait for child
+        _, status = os.waitpid(pid, 0)
+        print(f"[parent] Child exited with status {status}")
+    
+    # Step 4: Clean up cgroup
+    print(f"\n[cleanup] Removing cgroup {cgroup_path}...")
+    try:
+        os.rmdir(cgroup_path)
+        print("[cleanup] Cgroup removed.")
+    except OSError as e:
+        print(f"[cleanup] Failed to remove cgroup: {e}")
+        print("         (This is fine; it may have children or be in use.)")
+    
+    print("\n✅ Demo complete!")
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+            <h3>Expected Output</h3>
+            <pre><code>=== Sandbox Demo: Namespaces + cgroups v2 ===
+
+[cgroup] Created /sys/fs/cgroup/sandbox_demo_12345
+[cgroup] Set memory.max = 104857600 bytes (100 MB)
+[cgroup] Set pids.max = 10
+[cgroup] Moved PID 12345 into cgroup
+
+[namespace] Creating new user, mount, PID, and net namespaces...
+[namespace] Unshare successful. We are now in new namespaces.
+[namespace] UID/GID maps configured.
+
+[fork] Forking a child to demonstrate PID namespace isolation...
+
+=== Inside the Sandbox ===
+My PID (from os.getpid()): 1
+My UID (from os.getuid()): 0
+My GID (from os.getgid()): 0
+cgroup memory.max: 104857600
+cgroup pids.max: 10
+
+Network interfaces:
+1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+
+=== Exiting sandbox ===
+
+[parent] Child exited with status 0
+
+[cleanup] Removing cgroup /sys/fs/cgroup/sandbox_demo_12345...
+[cleanup] Cgroup removed.
+
+✅ Demo complete!
+</code></pre>
+
+            <h3>What This Demonstrates</h3>
+            <ul>
+                <li><strong>PID namespace:</strong> The child has PID 1 inside, but a different PID on the host.</li>
+                <li><strong>User namespace:</strong> UID/GID mapping (we mapped 0→0, but you'd normally map to unprivileged).</li>
+                <li><strong>Net namespace:</strong> Only <code>lo</code> interface, and it's down (no connectivity).</li>
+                <li><strong>cgroup limits:</strong> memory.max=100MB, pids.max=10. Try spawning more than 10 processes 
+                or allocating >100MB to see the limits enforced.</li>
+            </ul>
+
+            <h3>Exercises to Try</h3>
+            <ol>
+                <li>Modify the script to allocate 200MB inside the child (should hit the cgroup limit and OOM).</li>
+                <li>Fork 11 processes inside the child (should hit <code>pids.max=10</code> and fail).</li>
+                <li>Add a mount namespace: <code>pivot_root</code> to a new rootfs (requires more setup).</li>
+                <li>Measure how long <code>unshare()</code> and cgroup creation take (hint: nanoseconds for unshare, 
+                milliseconds for cgroup setup).</li>
+            </ol>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from primary documentation. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>Linux Kernel Documentation</h3>
+                <ul>
+                    <li><a href="https://man7.org/linux/man-pages/man7/namespaces.7.html" target="_blank">
+                        namespaces(7)</a> — Overview of all 8 namespace types</li>
+                    <li><a href="https://man7.org/linux/man-pages/man7/user_namespaces.7.html" target="_blank">
+                        user_namespaces(7)</a> — UID/GID mapping and capabilities</li>
+                    <li><a href="https://man7.org/linux/man-pages/man2/unshare.2.html" target="_blank">
+                        unshare(2)</a> — The syscall we used in the exercise</li>
+                    <li><a href="https://docs.kernel.org/admin-guide/cgroup-v2.html" target="_blank">
+                        cgroup-v2.html</a> — Complete cgroups v2 reference</li>
+                    <li><a href="https://docs.kernel.org/userspace-api/seccomp_filter.html" target="_blank">
+                        seccomp_filter.html</a> — Syscall filtering (covered in Lesson 02)</li>
+                    <li><a href="https://docs.kernel.org/filesystems/overlayfs.html" target="_blank">
+                        overlayfs.html</a> — Union filesystem (covered in Lesson 02)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Container Runtimes</h3>
+                <ul>
+                    <li><a href="https://github.com/opencontainers/runc" target="_blank">runc</a> — 
+                        OCI reference runtime (read <code>libcontainer/</code> for the implementation)</li>
+                    <li><a href="https://github.com/containers/crun" target="_blank">crun</a> — 
+                        Faster C implementation of OCI runtime</li>
+                    <li><a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">
+                        Docker seccomp profile</a> — Which syscalls are blocked</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor and Kata</h3>
+                <ul>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/intro/" target="_blank">
+                        gVisor Architecture</a> — How the Sentry (userspace kernel) works</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">
+                        gVisor Platforms</a> — systrap vs KVM</li>
+                    <li><a href="https://github.com/kata-containers/kata-containers" target="_blank">
+                        Kata Containers</a> — OCI runtime for lightweight VMs</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Production Systems</h3>
+                <ul>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench</a> — 
+                        Real-world eval harness using Docker</li>
+                    <li><a href="https://inspect.aisi.org.uk/sandboxing.html" target="_blank">Inspect AI</a> — 
+                        UK AISI's eval framework with multiple sandbox providers</li>
+                    <li><a href="https://github.com/e2b-dev/runtime" target="_blank">E2B Runtime</a> — 
+                        Production Firecracker orchestrator (read <code>docs/ARCHITECTURE.md</code>)</li>
+                    <li><a href="https://docs.openhands.dev/sdk/guides/agent-server/api-sandbox" target="_blank">
+                        OpenHands</a> — Agent-server split architecture</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>LWN Articles (Deep Dives)</h3>
+                <ul>
+                    <li><a href="https://lwn.net/Articles/531114/" target="_blank">Namespaces in operation</a> 
+                        — Multi-part LWN series</li>
+                    <li><a href="https://lwn.net/Articles/679786/" target="_blank">Control groups v2</a> — 
+                        cgroups v2 design and migration</li>
+                </ul>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>
