@@ -32,7 +32,7 @@ This curriculum teaches you how to build the infrastructure that powers LLM eval
 **01. Linux Namespaces and cgroups v2 by Hand** ✅ *Complete*  
 Master the building blocks of every container: namespaces (mnt, pid, net, uts, ipc, user, cgroup, time) and cgroups v2 (cpu, memory, io, pids). Build a minimal sandbox from scratch in Python.
 
-**02. seccomp-bpf and overlayfs** 📝 *Planned*  
+**02. seccomp-bpf and overlayfs** ✅ *Complete*  
 Harden your sandbox with syscall filtering and union filesystems. Understand Docker's default seccomp profile and how gVisor uses `SECCOMP_RET_TRAP` to intercept syscalls.
 
 **03. runc vs gVisor vs Kata Containers** 📝 *Planned*  
