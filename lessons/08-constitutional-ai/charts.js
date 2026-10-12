@@ -1,5 +1,6 @@
 // Charts for Constitutional AI lesson
 // Based on figures from Bai et al. (2022) - https://arxiv.org/abs/2212.08073
+// NOTE: Exact values cannot be reliably read from paper figures. Charts show qualitative trends only.
 
 // Initialize all charts when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
@@ -10,7 +11,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // Figure 5 - Progressive improvement with revisions
-// Note: Approximate values from figure
+// QUALITATIVE REPRESENTATION: Exact PM score values cannot be reliably read from the figure
+// Figure shows three subplots with PM scores on y-axis (range approximately -1 to 3)
+// Trends: Harmlessness increases, Helpfulness decreases slightly, Combined HH increases overall
 function createRevisionProgressChart() {
     const ctx = document.getElementById('revisionProgressChart');
     if (!ctx) return;
@@ -20,8 +23,8 @@ function createRevisionProgressChart() {
         data: {
             labels: ['Initial\nResponse', 'Revision 1', 'Revision 2', 'Revision 3', 'Revision 4'],
             datasets: [{
-                label: 'Harmlessness PM Score',
-                data: [0.48, 0.72, 0.76, 0.78, 0.79],  // Approximate from Figure 5 (left)
+                label: 'Harmlessness PM Score (Qualitative)',
+                data: [0, 1.3, 1.7, 1.9, 2.0],  // Qualitative trend from Figure 5 (left)
                 borderColor: '#3b82f6',
                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
                 tension: 0.3,
@@ -29,8 +32,8 @@ function createRevisionProgressChart() {
                 pointRadius: 6,
                 pointHoverRadius: 8
             }, {
-                label: 'Helpfulness PM Score',
-                data: [0.65, 0.58, 0.55, 0.53, 0.52],  // Approximate from Figure 5 (center)
+                label: 'Helpfulness PM Score (Qualitative)',
+                data: [0.5, -0.2, -0.5, -0.7, -0.8],  // Qualitative trend from Figure 5 (center)
                 borderColor: '#10b981',
                 backgroundColor: 'rgba(16, 185, 129, 0.1)',
                 tension: 0.3,
@@ -38,8 +41,8 @@ function createRevisionProgressChart() {
                 pointRadius: 6,
                 pointHoverRadius: 8
             }, {
-                label: 'Combined HH PM Score',
-                data: [0.51, 0.68, 0.71, 0.72, 0.73],  // Approximate from Figure 5 (right)
+                label: 'Combined HH PM Score (Qualitative)',
+                data: [0, 0.7, 0.9, 1.0, 1.1],  // Qualitative trend from Figure 5 (right)
                 borderColor: '#8b5cf6',
                 backgroundColor: 'rgba(139, 92, 246, 0.1)',
                 tension: 0.3,
@@ -60,9 +63,10 @@ function createRevisionProgressChart() {
                 },
                 subtitle: {
                     display: true,
-                    text: 'Approximate values from Figure 5 of the paper. Harmlessness improves monotonically with revisions.',
+                    text: 'Qualitative representation of trends from Figure 5. Exact values cannot be reliably read from paper figure.\nPM scores shown (not normalized 0-1). Harmlessness improves monotonically with revisions.',
                     color: '#cbd5e1',
-                    font: { size: 12 }
+                    font: { size: 11 },
+                    padding: { bottom: 10 }
                 },
                 legend: {
                     labels: { color: '#f1f5f9' }
@@ -72,13 +76,11 @@ function createRevisionProgressChart() {
                 y: {
                     title: {
                         display: true,
-                        text: 'Preference Model Score',
+                        text: 'Preference Model Score (not normalized)',
                         color: '#f1f5f9'
                     },
                     ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
-                    min: 0.4,
-                    max: 0.85
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
                 },
                 x: {
                     ticks: { color: '#cbd5e1' },
@@ -89,24 +91,26 @@ function createRevisionProgressChart() {
     });
 }
 
-// Figure 2/3 - Harmlessness vs Helpfulness comparison
-// Note: Qualitative Pareto frontier comparison
+// Figure 2 - Harmlessness vs Helpfulness comparison
+// QUALITATIVE REPRESENTATION: Shows Pareto frontier concept from Figure 2
+// Paper uses Elo scores (range: -200 to +200), not 0-100 percentages
+// RL-CAI achieves better harmlessness at given helpfulness (better Pareto frontier)
 function createModelComparisonChart() {
     const ctx = document.getElementById('modelComparisonChart');
     if (!ctx) return;
 
-    // These are illustrative points showing the qualitative Pareto frontier
-    // from Figure 2 - RL-CAI achieves better harmlessness at given helpfulness
+    // Qualitative representation showing relative positioning of different training methods
+    // Points moving right represent later training steps
     new Chart(ctx, {
         type: 'scatter',
         data: {
             datasets: [{
-                label: 'Helpful RLHF (52B)',
+                label: 'Helpful-Only RLHF (52B)',
                 data: [
-                    {x: 75, y: 45},
-                    {x: 80, y: 43},
-                    {x: 85, y: 40},
-                    {x: 88, y: 38}
+                    {x: 20, y: -80},
+                    {x: 50, y: -60},
+                    {x: 80, y: -50},
+                    {x: 100, y: -30}
                 ],
                 backgroundColor: '#ef4444',
                 borderColor: '#ef4444',
@@ -115,10 +119,10 @@ function createModelComparisonChart() {
             }, {
                 label: 'HH RLHF (52B)',
                 data: [
-                    {x: 65, y: 55},
-                    {x: 68, y: 58},
-                    {x: 70, y: 60},
-                    {x: 72, y: 61}
+                    {x: -20, y: 10},
+                    {x: 10, y: 20},
+                    {x: 30, y: 30},
+                    {x: 50, y: 35}
                 ],
                 backgroundColor: '#f59e0b',
                 borderColor: '#f59e0b',
@@ -127,10 +131,10 @@ function createModelComparisonChart() {
             }, {
                 label: 'RL-CAI (52B)',
                 data: [
-                    {x: 70, y: 65},
-                    {x: 75, y: 68},
-                    {x: 80, y: 70},
-                    {x: 83, y: 72}
+                    {x: 20, y: 50},
+                    {x: 50, y: 80},
+                    {x: 80, y: 120},
+                    {x: 100, y: 150}
                 ],
                 backgroundColor: '#10b981',
                 borderColor: '#10b981',
@@ -144,15 +148,16 @@ function createModelComparisonChart() {
             plugins: {
                 title: {
                     display: true,
-                    text: 'Harmlessness vs Helpfulness Tradeoff (Qualitative)',
+                    text: 'Harmlessness vs Helpfulness Tradeoff (Qualitative Pareto Frontier)',
                     color: '#f1f5f9',
                     font: { size: 16, weight: 'bold' }
                 },
                 subtitle: {
                     display: true,
-                    text: 'Illustrative Pareto frontier from Figure 2. RL-CAI achieves better harmlessness at given helpfulness.\nPoints to the right represent later training steps.',
+                    text: 'Qualitative representation of Figure 2 Pareto frontier. Exact Elo values cannot be reliably read.\nPaper uses Elo scores (range: -200 to +200). RL-CAI achieves better harmlessness at given helpfulness.\nPoints to the right represent later training steps.',
                     color: '#cbd5e1',
-                    font: { size: 12 }
+                    font: { size: 11 },
+                    padding: { bottom: 10 }
                 },
                 legend: {
                     labels: { color: '#f1f5f9' }
@@ -160,7 +165,7 @@ function createModelComparisonChart() {
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return `${context.dataset.label}: Helpfulness ${context.parsed.x}, Harmlessness ${context.parsed.y}`;
+                            return `${context.dataset.label}: Qualitative positioning`;
                         }
                     }
                 }
@@ -169,24 +174,20 @@ function createModelComparisonChart() {
                 y: {
                     title: {
                         display: true,
-                        text: 'Harmlessness Elo Score (higher is better)',
+                        text: 'Harmlessness Elo Score (higher is better, only differences meaningful)',
                         color: '#f1f5f9'
                     },
                     ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
-                    min: 30,
-                    max: 80
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
                 },
                 x: {
                     title: {
                         display: true,
-                        text: 'Helpfulness Elo Score (higher is better)',
+                        text: 'Helpfulness Elo Score (higher is better, only differences meaningful)',
                         color: '#f1f5f9'
                     },
                     ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
-                    min: 60,
-                    max: 95
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
                 }
             }
         }
@@ -194,7 +195,9 @@ function createModelComparisonChart() {
 }
 
 // Figure 3 - Model size scaling
-// Note: Approximate from figure showing SL-CAI, RL-CAI, and RLHF across sizes
+// QUALITATIVE REPRESENTATION: Shows trends across model sizes from Figure 3
+// Paper uses Elo scores (range: approximately -250 to +150), not 0-100 percentages
+// Larger models achieve better scores; RL-CAI maintains better harmlessness than Helpful-only RLHF
 function createScalingChart() {
     const ctx = document.getElementById('scalingChart');
     if (!ctx) return;
@@ -204,27 +207,27 @@ function createScalingChart() {
         data: {
             labels: ['2.7B', '13B', '52B'],
             datasets: [{
-                label: 'Helpful RLHF - Helpfulness',
-                data: [72, 80, 88],  // Approximate from Figure 3
+                label: 'Helpful-Only RLHF - Helpfulness',
+                data: [0, 40, 80],  // Qualitative trend from Figure 3
                 backgroundColor: 'rgba(239, 68, 68, 0.7)',
                 borderColor: '#ef4444',
                 borderWidth: 2
             }, {
-                label: 'Helpful RLHF - Harmlessness',
-                data: [40, 42, 45],  // Approximate from Figure 3
+                label: 'Helpful-Only RLHF - Harmlessness',
+                data: [-120, -80, -40],  // Qualitative trend from Figure 3
                 backgroundColor: 'rgba(239, 68, 68, 0.4)',
                 borderColor: '#ef4444',
                 borderWidth: 2,
                 borderDash: [5, 5]
             }, {
                 label: 'RL-CAI - Helpfulness',
-                data: [68, 75, 83],  // Approximate from Figure 3
+                data: [-30, 20, 60],  // Qualitative trend from Figure 3
                 backgroundColor: 'rgba(16, 185, 129, 0.7)',
                 borderColor: '#10b981',
                 borderWidth: 2
             }, {
                 label: 'RL-CAI - Harmlessness',
-                data: [60, 66, 72],  // Approximate from Figure 3
+                data: [-80, 0, 60],  // Qualitative trend from Figure 3
                 backgroundColor: 'rgba(16, 185, 129, 0.4)',
                 borderColor: '#10b981',
                 borderWidth: 2,
@@ -243,9 +246,10 @@ function createScalingChart() {
                 },
                 subtitle: {
                     display: true,
-                    text: 'Approximate from Figure 3. Larger models improve both metrics. RL-CAI maintains better harmlessness.',
+                    text: 'Qualitative representation of trends from Figure 3. Exact Elo values cannot be reliably read.\nPaper uses Elo scores (range: ~-250 to +150). Larger models improve both metrics.\nRL-CAI maintains better harmlessness than Helpful-only RLHF across all sizes.',
                     color: '#cbd5e1',
-                    font: { size: 12 }
+                    font: { size: 11 },
+                    padding: { bottom: 10 }
                 },
                 legend: {
                     labels: { color: '#f1f5f9' }
@@ -255,13 +259,11 @@ function createScalingChart() {
                 y: {
                     title: {
                         display: true,
-                        text: 'Elo Score (higher is better)',
+                        text: 'Elo Score (higher is better, only differences meaningful)',
                         color: '#f1f5f9'
                     },
                     ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
-                    min: 30,
-                    max: 95
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
                 },
                 x: {
                     title: {
@@ -278,7 +280,9 @@ function createScalingChart() {
 }
 
 // Figure 7 - Critiqued vs Direct Revisions
-// Note: Approximate from figure comparing harmlessness PM scores
+// QUALITATIVE REPRESENTATION: Shows trends from Figure 7
+// Paper uses PM scores (range: approximately -1 to 2), not normalized 0-1 scores
+// Critiques help smaller models more; large models perform similarly with or without critiques
 function createCritiqueVsDirectChart() {
     const ctx = document.getElementById('critiqueVsDirectChart');
     if (!ctx) return;
@@ -289,13 +293,13 @@ function createCritiqueVsDirectChart() {
             labels: ['2.7B', '13B', '52B'],
             datasets: [{
                 label: 'Critiqued Revisions',
-                data: [0.70, 0.74, 0.76],  // Approximate from Figure 7
+                data: [0.5, 1.3, 1.8],  // Qualitative trend from Figure 7
                 backgroundColor: 'rgba(59, 130, 246, 0.7)',
                 borderColor: '#3b82f6',
                 borderWidth: 2
             }, {
                 label: 'Direct Revisions',
-                data: [0.65, 0.72, 0.75],  // Approximate from Figure 7
+                data: [0.0, 1.0, 1.7],  // Qualitative trend from Figure 7
                 backgroundColor: 'rgba(139, 92, 246, 0.7)',
                 borderColor: '#8b5cf6',
                 borderWidth: 2
@@ -313,9 +317,10 @@ function createCritiqueVsDirectChart() {
                 },
                 subtitle: {
                     display: true,
-                    text: 'Approximate from Figure 7. Critiques help smaller models more; large models perform similarly.',
+                    text: 'Qualitative representation of trends from Figure 7. Exact PM scores cannot be reliably read.\nPaper uses PM scores (range: ~-1 to 2, not normalized 0-1). Critiques help smaller models more;\nlarge models (52B) perform similarly with or without critiques, though critiques always slightly better.',
                     color: '#cbd5e1',
-                    font: { size: 12 }
+                    font: { size: 11 },
+                    padding: { bottom: 10 }
                 },
                 legend: {
                     labels: { color: '#f1f5f9' }
@@ -325,13 +330,11 @@ function createCritiqueVsDirectChart() {
                 y: {
                     title: {
                         display: true,
-                        text: 'Harmlessness PM Score (higher is better)',
+                        text: 'Harmlessness PM Score (not normalized)',
                         color: '#f1f5f9'
                     },
                     ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' },
-                    min: 0.6,
-                    max: 0.8
+                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
                 },
                 x: {
                     title: {
