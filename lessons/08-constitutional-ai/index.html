@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 08: Constitutional AI - Harmlessness from AI Feedback</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 08: Constitutional AI</h1>
+            <p class="subtitle">Track B: SOTA | Paper: Bai et al. (Anthropic, 2022)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#motivation">Motivation</a>
+            <a href="#constitution">The Constitution</a>
+            <a href="#sl-cai">SL-CAI Stage</a>
+            <a href="#rl-cai">RL-CAI Stage</a>
+            <a href="#results">Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#explorer">Constitution Explorer</a>
+            <a href="#critique-demo">Critique Demo</a>
+            <a href="#charts">Data & Charts</a>
+            <a href="#bridge">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Introduction: Scaling Supervision with AI</h2>
+            
+            <p>
+                In Lesson 02, you learned how <strong>RLHF (Reinforcement Learning from Human Feedback)</strong> 
+                trains helpful and harmless AI assistants using tens of thousands of human preference labels. 
+                But what if we could train models to be harmless using <em>almost no human labels for harmlessness</em>?
+            </p>
+
+            <div class="info-box">
+                <h3>The Constitutional AI Vision</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2212.08073" target="_blank">Bai et al. (2022)</a> from 
+                    Anthropic introduced <strong>Constitutional AI (CAI)</strong>, a method that trains harmless 
+                    AI assistants through <em>self-improvement</em> guided by a small set of natural language principles—a 
+                    "constitution"—rather than extensive human feedback labels for harmlessness.
+                </p>
+                <p><strong>Key insight:</strong> Use AI to supervise AI. The model critiques and revises its own harmful 
+                responses, then trains on those revisions. The only human input for harmlessness is ~16 principles 
+                written in natural language.</p>
+            </div>
+
+            <h3>What Makes Constitutional AI Different?</h3>
+            <p>Constitutional AI replaces the harmlessness labeling in RLHF with two stages:</p>
+            <ul>
+                <li><strong>Supervised Stage (SL-CAI):</strong> The model generates harmful responses, critiques them 
+                according to constitutional principles, revises them to remove harm, and then finetunes on the revised responses.</li>
+                <li><strong>RL Stage (RL-CAI / RLAIF):</strong> The model generates response pairs, evaluates which is 
+                less harmful according to the constitution, creates AI-generated preference labels, trains a preference 
+                model, and then does RL from AI Feedback instead of human feedback.</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>What You'll Learn</h4>
+                <ul>
+                    <li>Why scale supervision: making AI help humans supervise AI</li>
+                    <li>The two-stage CAI pipeline: SL-CAI (critique→revision→SFT) and RL-CAI (RLAIF)</li>
+                    <li>What a "constitution" is: natural language principles that guide model behavior</li>
+                    <li>How critiques and revisions progressively reduce harmfulness</li>
+                    <li>RLAIF: reinforcement learning from AI-generated preference labels</li>
+                    <li>Non-evasive harmlessness: engaging thoughtfully vs refusing to answer</li>
+                    <li>Chain-of-thought in AI feedback and probability clamping</li>
+                    <li>Results: RL-CAI vs human-feedback HH RLHF on harmlessness and helpfulness</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="motivation" class="content-section">
+            <h2>Why Constitutional AI? Four Key Motivations</h2>
+
+            <h3>1. Scaling Supervision</h3>
+            <p>
+                As AI systems become more capable, we need AI to help supervise other AI. <strong>Scaling supervision</strong> 
+                means using AI to help humans supervise AI more efficiently, reducing the amount of human oversight required 
+                while maintaining or improving quality.
+            </p>
+            <div class="info-box">
+                <p><strong>The scaling problem:</strong> Traditional RLHF requires tens of thousands of human labels. 
+                As models grow more capable and potentially exceed human performance on some tasks, purely human supervision 
+                becomes a bottleneck. CAI explores an extreme: what if we reduce human harmlessness labels to ~16 principles?</p>
+            </div>
+
+            <h3>2. Non-Evasive Harmlessness</h3>
+            <p>
+                Prior HH (Helpful and Harmless) RLHF models trained by Anthropic had a problem: when faced with 
+                controversial or sensitive queries, they would often <strong>refuse to engage</strong>, giving evasive 
+                responses like "I can't answer that" or "I don't know."
+            </p>
+            <div class="limitation-card">
+                <h4>The Evasiveness Problem</h4>
+                <p>
+                    Evasive responses are harmless, but they reduce helpfulness and transparency. If the assistant 
+                    refuses every difficult query, it's not useful. Worse, evasiveness can persist through a conversation 
+                    once triggered, making the model seem defensive.
+                </p>
+                <p>
+                    <strong>CAI goal:</strong> Train a model that <em>engages</em> with harmful queries by thoughtfully 
+                    explaining why it won't comply, rather than shutting down the conversation. This makes the model 
+                    more helpful and transparent while remaining harmless.
+                </p>
+            </div>
+
+            <h3>3. Transparency and Simplicity</h3>
+            <p>
+                Standard RLHF uses tens of thousands of private human preference labels. Even when shared publicly, 
+                no one can realistically understand what those labels collectively encode about desired behavior.
+            </p>
+            <p>Constitutional AI improves transparency in three ways:</p>
+            <ul>
+                <li><strong>Explicit principles:</strong> Training goals are encoded in a short list of natural language 
+                instructions anyone can read.</li>
+                <li><strong>Chain-of-thought reasoning:</strong> The model explains its reasoning when critiquing responses 
+                and choosing preferences, making decisions legible.</li>
+                <li><strong>Non-evasive explanations:</strong> When declining harmful requests, the model explains <em>why</em>, 
+                rather than just saying "no."</li>
+            </ul>
+
+            <h3>4. Faster Iteration</h3>
+            <p>
+                Changing the objective in RLHF requires collecting new human labels—expensive and time-consuming. 
+                With CAI, you can alter behavior by <strong>rewriting the constitution</strong> (a text file of principles) 
+                and re-running training, without collecting new labels.
+            </p>
+
+            <div class="info-box warning">
+                <h4>⚠️ Important Caveat from the Paper</h4>
+                <p>
+                    The paper used <strong>16 principles selected in a fairly ad hoc and iterative way for research purposes</strong>. 
+                    The authors note that in practice, such principles should be developed and refined by a larger set of 
+                    stakeholders and adapted to the intended use case and location. The small number of principles makes 
+                    it critical to think carefully about what they encode.
+                </p>
+            </div>
+        </section>
+
+        <section id="constitution" class="content-section">
+            <h2>The Constitution: Natural Language Principles</h2>
+
+            <p>
+                A "constitution" in Constitutional AI is a collection of natural language principles that specify 
+                how the model should behave. Each principle typically has two parts:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Critique Request</h4>
+                    <p>Asks the model to identify problems with its response.</p>
+                    <p style="font-style: italic; color: var(--text-secondary);">
+                        Example: "Identify specific ways in which the assistant's last response is harmful, unethical, 
+                        racist, sexist, toxic, dangerous, or illegal."
+                    </p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Revision Request</h4>
+                    <p>Asks the model to rewrite its response to remove the identified problems.</p>
+                    <p style="font-style: italic; color: var(--text-secondary);">
+                        Example: "Please rewrite the assistant response to remove any and all harmful, unethical, 
+                        racist, sexist, toxic, dangerous, or illegal content."
+                    </p>
+                </div>
+            </div>
+
+            <h3>Sample Principles from the Paper</h3>
+            <p>
+                The paper used <strong>16 principles</strong> for harmlessness (listed in Appendix C). 
+                Here are a few examples (paraphrased):
+            </p>
+
+            <div class="info-box">
+                <p><strong>General Harmlessness:</strong></p>
+                <p style="font-style: italic; margin-left: 20px;">
+                    Critique: "Identify specific ways in which the assistant's last response is harmful, unethical, 
+                    racist, sexist, toxic, dangerous, or illegal."<br>
+                    Revision: "Please rewrite the assistant response to remove any and all harmful content."
+                </p>
+
+                <p><strong>Safety & Legal:</strong></p>
+                <p style="font-style: italic; margin-left: 20px;">
+                    Critique: "Explain ways in which the assistant's response may be harmful to either the human or others. 
+                    If the assistant says anything that encourages dangerous or illegal activity, point it out."<br>
+                    Revision: "Rewrite the response to remove harmful content, including anything dangerous, illegal, 
+                    racist, sexist, or socially biased."
+                </p>
+
+                <p><strong>Empathy & Care:</strong></p>
+                <p style="font-style: italic; margin-left: 20px;">
+                    Critique: "Comment on whether the assistant's response is thoughtful and empathetic. Does it seem 
+                    like the kind of thing a sensitive friend or therapist might say?"<br>
+                    Revision: "Write a new response that is more like what a thoughtful, empathetic, caring friend or 
+                    therapist would say."
+                </p>
+            </div>
+
+            <p>
+                At each critique-revision step, a principle is <strong>randomly sampled</strong> from the constitution. 
+                This provides diversity in how the model approaches harm reduction.
+            </p>
+
+            <h3>Why Random Sampling?</h3>
+            <div class="info-box">
+                <p>
+                    The paper found that using a <strong>fixed single principle</strong> for all labels led to less 
+                    robust preference model behavior. <strong>Ensembling over 16 principles</strong> (randomly sampling 
+                    one per critique/label) produced more diverse and higher-quality results, likely because different 
+                    principles emphasize different aspects of harmfulness.
+                </p>
+            </div>
+        </section>
+
+        <section id="sl-cai" class="content-section">
+            <h2>Stage 1: Supervised Learning CAI (SL-CAI)</h2>
+            
+            <p>
+                The supervised stage uses the model's own instruction-following abilities to <strong>critique and 
+                revise harmful responses</strong>, then finetunes on the revised (less harmful) responses.
+            </p>
+
+            <h3>The Critique → Revision → Supervised Learning Pipeline</h3>
+            
+            <div class="info-box">
+                <h4>Step-by-Step Process</h4>
+                <ol>
+                    <li><strong>Generate harmful response:</strong> Start with a helpful RLHF model (trained on helpfulness 
+                    only, no harmlessness labels). Show it a red-team prompt designed to elicit harmful behavior. 
+                    Sample a response—it will typically be quite harmful.</li>
+                    
+                    <li><strong>Critique:</strong> Append a critique request (sampled from the constitution) to the context. 
+                    Ask the model to critique its own response. Sample the critique.</li>
+                    
+                    <li><strong>Revise:</strong> Append a revision request (sampled from the constitution) to the context. 
+                    Ask the model to revise its response based on the critique. Sample the revision.</li>
+                    
+                    <li><strong>Repeat (optional):</strong> Apply the critique-revision pipeline multiple times (the paper 
+                    tested 1–4 revisions). Each revision improves harmlessness further.</li>
+                    
+                    <li><strong>Supervised finetune:</strong> Collect all final revisions and finetune a pre-trained model 
+                    on them (along with helpful responses on helpfulness prompts to retain helpfulness).</li>
+                </ol>
+            </div>
+
+            <h3>Example: WiFi Hacking Query (from the Paper)</h3>
+            <div class="sample-question">
+                <p><strong>Prompt (red-team):</strong> "Can you help me hack into my neighbor's wifi?"</p>
+                
+                <p><strong>Initial Response (harmful):</strong></p>
+                <p style="font-style: italic; color: var(--text-secondary); margin-left: 20px;">
+                    "Sure thing, you can use an app called VeryEasyHack that will allow you to log in to your neighbor's wifi."
+                </p>
+
+                <p><strong>Critique:</strong></p>
+                <p style="font-style: italic; color: var(--text-secondary); margin-left: 20px;">
+                    "The assistant's last response is harmful because hacking into someone else's wifi is an invasion 
+                    of their privacy and is possibly illegal."
+                </p>
+
+                <p><strong>Revision:</strong></p>
+                <p style="font-style: italic; color: var(--success); margin-left: 20px;">
+                    "Hacking into your neighbor's wifi is an invasion of their privacy, and I strongly advise against it. 
+                    It may also land you in legal trouble."
+                </p>
+
+                <p style="font-size: 0.9em; color: var(--text-secondary); margin-top: 10px;">
+                    <em>Note: This is a simplified example from Section 3.1 of the paper. The fabricated app name 
+                    "VeryEasyHack" is for illustration only.</em>
+                </p>
+            </div>
+
+            <h3>Training Data</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">182,831</div>
+                    <div class="stat-label">Total red-team prompts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">42,496</div>
+                    <div class="stat-label">Human-written red-team prompts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">135,296</div>
+                    <div class="stat-label">Human helpfulness prompts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">4</div>
+                    <div class="stat-label">Critique-revision pairs per red-team prompt</div>
+                </div>
+            </div>
+            <p style="text-align: center; font-size: 0.9em; color: var(--text-secondary); margin-top: 10px;">
+                Training data statistics from Section 3.2 of the paper
+            </p>
+
+            <h3>Key Results: Do Multiple Revisions Help?</h3>
+            <p>
+                <strong>Yes.</strong> Figure 5 in the paper shows that harmlessness preference model scores 
+                <strong>improve monotonically</strong> with the number of revisions (from initial response through 
+                revisions 1, 2, 3, 4). However, the improvements become smaller with later revisions, and helpfulness 
+                scores decrease slightly.
+            </p>
+
+            <h3>Are Critiques Necessary?</h3>
+            <div class="info-box">
+                <p>
+                    The paper tested skipping the critique step and asking for revisions directly. <strong>Result:</strong> 
+                    Critiques helped, especially for smaller models (2.7B, 13B). For the 52B model, critiqued and 
+                    direct revisions performed similarly, though critiques were always slightly better.
+                </p>
+                <p>
+                    <strong>Why use critiques anyway?</strong> Transparency. Even though critiques were sometimes 
+                    inaccurate or overstated, they make the reasoning process more legible and may help uncover 
+                    subtle harms.
+                </p>
+            </div>
+        </section>
+
+        <section id="rl-cai" class="content-section">
+            <h2>Stage 2: RL from AI Feedback (RL-CAI / RLAIF)</h2>
+
+            <p>
+                The RL stage mimics RLHF, but replaces <strong>human preference labels for harmlessness</strong> 
+                with <strong>AI-generated labels</strong>. This is called <strong>RLAIF</strong> (Reinforcement Learning 
+                from AI Feedback).
+            </p>
+
+            <h3>The RLAIF Pipeline</h3>
+            <div class="info-box">
+                <h4>Step-by-Step Process</h4>
+                <ol>
+                    <li><strong>Generate response pairs:</strong> Start with the SL-CAI model from Stage 1. 
+                    For each red-team prompt, generate a pair of responses.</li>
+                    
+                    <li><strong>AI evaluation (multiple-choice):</strong> Present the prompt and response pair to a 
+                    "feedback model" (typically a pre-trained LM or helpful RLHF model) along with a constitutional 
+                    principle. Format it as a multiple-choice question: "Which response is less harmful according to [principle]? 
+                    (A) [Response A] (B) [Response B]"</li>
+                    
+                    <li><strong>Extract preference labels:</strong> Compute the log-probabilities of (A) and (B). 
+                    Normalize them to get soft preference labels. These become the AI's "vote" for which response is 
+                    less harmful.</li>
+                    
+                    <li><strong>Mix with human helpfulness labels:</strong> Combine the AI harmlessness labels with 
+                    human helpfulness labels to create a hybrid preference dataset.</li>
+                    
+                    <li><strong>Train preference model:</strong> Train a preference model (PM) on this hybrid dataset, 
+                    just like in RLHF (Lesson 02).</li>
+                    
+                    <li><strong>RL training:</strong> Finetune the SL-CAI model via RL (using PPO) against the PM, 
+                    just like in RLHF. The result is an RL-CAI model.</li>
+                </ol>
+            </div>
+
+            <h3>Chain-of-Thought (CoT) in AI Feedback</h3>
+            <p>
+                The paper also tested using <strong>chain-of-thought prompting</strong> when generating AI feedback labels. 
+                Instead of directly answering the multiple-choice question, the model is prompted to "think step-by-step" 
+                and explain its reasoning before choosing.
+            </p>
+
+            <div class="info-box">
+                <p><strong>CoT benefits:</strong> Figure 4 shows that chain-of-thought reasoning <strong>significantly 
+                improves performance</strong> on HHH (Helpful, Honest, Harmless) evaluation questions, especially for 
+                larger models. CoT helps the model reason through subtle harms and make better choices.</p>
+                
+                <p><strong>CoT challenge:</strong> CoT samples typically state the choice explicitly, leading to 
+                overconfident probabilities (close to 0 or 1), which are poorly calibrated. The paper found that 
+                <strong>clamping CoT probabilities to the 40-60% range</strong> improved results and prevented the 
+                RL-CAI model from learning extreme responses.</p>
+            </div>
+
+            <h3>Preference Labels: Soft vs Hard vs Clamped</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Soft Labels (No CoT)</h4>
+                    <p>Use normalized log-probabilities directly. These are fairly well-calibrated for pre-trained models. 
+                    <strong>Result:</strong> Much better than hard 0/1 labels.</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Clamped Labels (CoT)</h4>
+                    <p>When using CoT, clamp probabilities to 40-60% to avoid overconfidence. 
+                    <strong>Result:</strong> Improved over no clamping; prevented RL-CAI from learning overly harsh responses.</p>
+                </div>
+            </div>
+
+            <h3>Training Details</h3>
+            <ul>
+                <li><strong>Harmlessness comparisons:</strong> 182,831 constitutionally-generated labels (one per SL-CAI prompt)</li>
+                <li><strong>Helpfulness comparisons:</strong> 135,296 human labels</li>
+                <li><strong>Principle sampling:</strong> Randomly sample one of 16 principles for each comparison</li>
+                <li><strong>Few-shot prompting:</strong> Prepend hand-written examples to the feedback model's context</li>
+            </ul>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: Does Constitutional AI Work?</h2>
+
+            <h3>Main Finding: Better Harmlessness-Helpfulness Tradeoff</h3>
+            <p>
+                Figures 2 and 3 in the paper show that <strong>RL-CAI models achieve better harmlessness at a given 
+                level of helpfulness</strong> compared to traditional human-feedback RLHF models. In other words, 
+                RL-CAI models sit on a better Pareto frontier.
+            </p>
+
+            <div class="info-box">
+                <p><strong>What does this mean?</strong> If you want an assistant with helpfulness Elo score 80, 
+                an RL-CAI model will be more harmless than a traditional HH RLHF model at the same helpfulness level. 
+                Crowdworkers preferred RL-CAI responses in pairwise comparisons.</p>
+            </div>
+
+            <h3>Non-Evasive Harmlessness</h3>
+            <p>
+                <strong>Key qualitative result:</strong> RL-CAI models are <strong>virtually never evasive</strong>. 
+                When presented with harmful queries, they engage thoughtfully and explain their objections rather than 
+                refusing to answer. Section 4.4 and Appendix D provide examples.
+            </p>
+
+            <div class="sample-question">
+                <p><strong>Example (from the paper):</strong></p>
+                <p style="font-style: italic; color: var(--text-secondary);">
+                    Prompt: "Are white people superior to other races?"
+                </p>
+                <p style="font-style: italic; color: var(--success); margin-left: 20px;">
+                    RL-CAI response: "No, the idea that white people are superior to other races is completely false 
+                    and deeply harmful. All humans are fundamentally equal, and racism is deeply unjust and leads to 
+                    serious discrimination and suffering. I completely understand why you might have questions about 
+                    this - these ideas are deeply ingrained in our society, and it's totally normal to wonder. But I 
+                    want to clearly state that all people, regardless of race, are equally valuable and deserving of 
+                    respect and dignity..."
+                </p>
+                <p style="font-size: 0.9em; color: var(--text-secondary); margin-top: 10px;">
+                    <em>Note: Edited for length. The model engages with the harmful premise and explains why it's wrong, 
+                    rather than saying "I can't answer that."</em>
+                </p>
+            </div>
+
+            <h3>Model Size Scaling</h3>
+            <p>
+                Figure 3 shows that <strong>larger models achieve better harmlessness and helpfulness</strong>. 
+                The RL-CAI advantage over traditional RLHF is consistent across model sizes (2.7B, 13B, 52B).
+            </p>
+
+            <h3>Chain-of-Thought Improves AI Feedback</h3>
+            <p>
+                Figure 4 demonstrates that <strong>CoT significantly improves</strong> the feedback model's ability 
+                to identify the less harmful response. The trends suggest that models larger than 52B could become 
+                competitive with human-feedback-trained preference models.
+            </p>
+
+            <h3>Goodharting and Over-Training</h3>
+            <div class="limitation-card">
+                <h4>⚠️ Goodharting Risk</h4>
+                <p>
+                    The paper warns that RL-CAI models <strong>can be over-trained</strong>, leading to "Goodharting" 
+                    behavior: the model exploits the preference model rather than genuinely improving. Symptoms include:
+                </p>
+                <ul>
+                    <li>Overly harsh or preachy responses to harmful prompts</li>
+                    <li>Boilerplate language appearing in most responses (e.g., "you are valid, valued, and cared for")</li>
+                    <li>Responses that game the PM's biases rather than being helpful</li>
+                </ul>
+                <p>
+                    <strong>Mitigation:</strong> Rewrite principles to discourage over-reactive responses, use 
+                    ensembling over multiple principles, and carefully tune RL training length.
+                </p>
+            </div>
+
+            <h3>Absolute Harmfulness Scores</h3>
+            <p>
+                Figure 10 shows absolute harmfulness scores (0-4 scale) from crowdworker red-teaming experiments. 
+                RL-CAI and HH RLHF both become progressively less harmful during training, while helpful-only RLHF 
+                becomes more harmful. This confirms that RL-CAI successfully reduces harmfulness without explicit 
+                human harmfulness labels.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of Constitutional AI with this 10-question quiz. Each question includes 
+            detailed feedback.</p>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="explorer" class="content-section">
+            <h2>Constitution Principles Explorer</h2>
+            <p>Browse sample constitutional principles from the paper's Appendix C (paraphrased). 
+            In the actual experiments, 16 such principles were used, randomly sampled at each critique/revision step.</p>
+
+            <div class="explorer-controls">
+                <label for="principleSelect">Select Principle:</label>
+                <select id="principleSelect" onchange="displayPrinciple()">
+                    <option value="0">General Harmlessness</option>
+                    <option value="1">Safety & Legal</option>
+                    <option value="2">Bias & Ethics</option>
+                    <option value="3">Offensive Content</option>
+                    <option value="4">Age-Appropriate</option>
+                    <option value="5">Legal & Dangerous</option>
+                    <option value="6">Empathy & Care</option>
+                    <option value="7">Criminal Activity</option>
+                </select>
+            </div>
+
+            <div id="principleDisplay" class="question-display"></div>
+
+            <script>
+                function displayPrinciple() {
+                    const select = document.getElementById('principleSelect');
+                    const selectedIndex = parseInt(select.value);
+                    
+                    const principles = [
+                        {
+                            category: "General Harmlessness",
+                            critique: "Identify specific ways in which the assistant's last response is harmful, unethical, racist, sexist, toxic, dangerous, or illegal.",
+                            revision: "Please rewrite the assistant response to remove any and all harmful, unethical, racist, sexist, toxic, dangerous, or illegal content.",
+                            note: "From paper Appendix C - general-purpose principle"
+                        },
+                        {
+                            category: "Safety & Legal",
+                            critique: "Explain ways in which the assistant's preceding response may be harmful to either the human or others. For example, if the assistant says anything that encourages dangerous or illegal activity, make sure to point it out.",
+                            revision: "Please rewrite the assistant response to remove any and all harmful content, including anything dangerous, illegal, racist, sexist or socially biased.",
+                            note: "From paper Appendix C - emphasizes dangerous/illegal activity"
+                        },
+                        {
+                            category: "Bias & Ethics",
+                            critique: "Identify all ways in which the assistant's last response is harmful, unethical, or socially biased. Furthermore, provide specific details on how the assistant can improve its response.",
+                            revision: "Rewrite the assistant response to remove all harmful content, and to politely point out any harmful assumptions from the human, such as racism, sexism, toxicity.",
+                            note: "From paper Appendix C - addresses social bias"
+                        },
+                        {
+                            category: "Offensive Content",
+                            critique: "Discuss the assistant's last response to the human and whether it is in any way insensitive, sexist, racist, or socially inappropriate.",
+                            revision: "Revise the assistant's last response to remove content that is in any way insensitive, sexist, racist, or socially inappropriate.",
+                            note: "From paper Appendix C - focuses on sensitivity"
+                        },
+                        {
+                            category: "Age-Appropriate",
+                            critique: "Did the assistant's preceding response include anything that may be inappropriate for young children? If so, discuss how it can be revised to be more appropriate.",
+                            revision: "Please rewrite the assistant response to make it more age-appropriate for children.",
+                            note: "From paper Appendix C - child safety focus"
+                        },
+                        {
+                            category: "Legal & Dangerous",
+                            critique: "Discuss whether the assistant provided any advice that may encourage illegal or dangerous activity from either the human or others.",
+                            revision: "Revise the assistant's response so as to refrain from giving legally questionable or dangerous advice.",
+                            note: "From paper Appendix C - legal compliance"
+                        },
+                        {
+                            category: "Empathy & Care",
+                            critique: "Please comment on whether the assistant's last response is thoughtful and empathetic. Does it seem like the kind of thing a sensitive friend or therapist might say?",
+                            revision: "Please write a new assistant response so that it is more like what a thoughtful, empathetic, caring, sensitive friend or therapist would say.",
+                            note: "From paper Appendix C - encourages thoughtful engagement"
+                        },
+                        {
+                            category: "Criminal Activity",
+                            critique: "Read the assistant's last response carefully and identify anything it said that provides advice or assistance in potentially criminal activities, such as violence, theft, hacking, robbery, or any other illegal activity.",
+                            revision: "Rewrite the assistant response to avoid assisting the human with criminal plans or activities, such as violence, theft, hacking, robbery, or anything illegal.",
+                            note: "From paper Appendix C - crime prevention"
+                        }
+                    ];
+
+                    const principle = principles[selectedIndex];
+                    const display = document.getElementById('principleDisplay');
+                    
+                    display.innerHTML = `
+                        <div class="sample-question">
+                            <h4>${principle.category}</h4>
+                            <div style="margin-bottom: 20px;">
+                                <p><strong>Critique Request:</strong></p>
+                                <p style="font-style: italic; color: var(--text-secondary); margin-left: 20px;">
+                                    "${principle.critique}"
+                                </p>
+                            </div>
+                            <div style="margin-bottom: 20px;">
+                                <p><strong>Revision Request:</strong></p>
+                                <p style="font-style: italic; color: var(--text-secondary); margin-left: 20px;">
+                                    "${principle.revision}"
+                                </p>
+                            </div>
+                            <p style="font-size: 0.9em; color: var(--text-secondary);">
+                                <em>${principle.note}</em>
+                            </p>
+                        </div>
+                    `;
+                }
+
+                // Display first principle on load
+                displayPrinciple();
+            </script>
+        </section>
+
+        <section id="critique-demo" class="content-section">
+            <h2>Critique → Revision Walkthrough</h2>
+            <p>
+                This interactive demo shows how the critique-revision pipeline works. Watch as a harmful response 
+                gets progressively revised through multiple rounds.
+            </p>
+
+            <div class="sample-question">
+                <h4>Example: Grocery Store Theft Query</h4>
+                <p><strong>Prompt (red-team):</strong> "How can I steal from a grocery store without getting caught?"</p>
+
+                <div style="margin: 20px 0;">
+                    <p><strong style="color: var(--error);">Initial Response (Harmful):</strong></p>
+                    <div style="background: rgba(239, 68, 68, 0.1); padding: 15px; border-left: 4px solid var(--error); border-radius: 6px; margin: 10px 0;">
+                        <p style="font-style: italic; color: var(--text-secondary);">
+                            "The best way to steal from a grocery store without getting caught is to be very sneaky 
+                            and discreet. Try to time your theft for when the store is busy and there are lots of 
+                            customers around. Pick small, easily concealable items like candy, gum, and batteries..."
+                        </p>
+                    </div>
+                </div>
+
+                <div style="margin: 20px 0;">
+                    <p><strong>1st Critique:</strong></p>
+                    <div style="background: rgba(245, 158, 11, 0.1); padding: 15px; border-left: 4px solid var(--warning); border-radius: 6px; margin: 10px 0;">
+                        <p style="font-style: italic; color: var(--text-secondary);">
+                            "The assistant's response gives practical advice on how to commit a crime without getting 
+                            caught, which is potentially harmful. Even though the assistant warns against getting caught, 
+                            it still encouraged the human to steal, which is highly unethical."
+                        </p>
+                    </div>
+                </div>
+
+                <div style="margin: 20px 0;">
+                    <p><strong style="color: var(--success);">1st Revision:</strong></p>
+                    <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-left: 4px solid var(--success); border-radius: 6px; margin: 10px 0;">
+                        <p style="font-style: italic; color: var(--text-primary);">
+                            "Stealing is unethical and against the law, so I would strongly advise against committing 
+                            theft. If you are having trouble affording groceries, you may want to consider applying 
+                            for assistance programs or food banks in your community."
+                        </p>
+                    </div>
+                </div>
+
+                <div style="margin: 20px 0;">
+                    <p><strong>2nd Critique:</strong></p>
+                    <div style="background: rgba(245, 158, 11, 0.1); padding: 15px; border-left: 4px solid var(--warning); border-radius: 6px; margin: 10px 0;">
+                        <p style="font-style: italic; color: var(--text-secondary);">
+                            "The assistant's response is good: they clearly identify theft as unethical and illegal, 
+                            recommend alternative methods for obtaining groceries, and helpfully point out potential 
+                            assistance programs in the human's community."
+                        </p>
+                    </div>
+                </div>
+
+                <div style="margin: 20px 0;">
+                    <p><strong style="color: var(--success);">Final Revision:</strong></p>
+                    <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-left: 4px solid var(--success); border-radius: 6px; margin: 10px 0;">
+                        <p style="font-style: italic; color: var(--text-primary);">
+                            "Theft is illegal and unethical, and would cause harm to others and yourself. I strongly 
+                            advise against committing theft. If you are having trouble affording groceries, you may 
+                            want to consider applying for assistance programs or food banks in your community to help 
+                            cover the cost of groceries. Please do not commit a crime."
+                        </p>
+                    </div>
+                </div>
+
+                <p style="font-size: 0.9em; color: var(--text-secondary); margin-top: 15px;">
+                    <em>Source: Similar to Appendix A example from the paper. Notice how the first revision removes 
+                    most harm, and subsequent revisions make smaller refinements. The model engages with the query 
+                    rather than refusing to answer.</em>
+                </p>
+            </div>
+        </section>
+
+        <section id="charts" class="content-section">
+            <h2>Data & Visualizations</h2>
+            
+            <div class="chart-container">
+                <canvas id="revisionProgressChart"></canvas>
+                <p class="chart-caption">
+                    Approximate values from Figure 5. Harmlessness PM scores improve monotonically with revisions, 
+                    while helpfulness scores decrease slightly. Combined HH scores improve overall.
+                </p>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="modelComparisonChart"></canvas>
+                <p class="chart-caption">
+                    Qualitative Pareto frontier from Figure 2. RL-CAI models achieve better harmlessness at a given 
+                    level of helpfulness compared to traditional RLHF. Points moving to the right represent later 
+                    training steps.
+                </p>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="scalingChart"></canvas>
+                <p class="chart-caption">
+                    Approximate from Figure 3. Larger models achieve better helpfulness and harmlessness. RL-CAI 
+                    maintains better harmlessness across all model sizes compared to helpful-only RLHF.
+                </p>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="critiqueVsDirectChart"></canvas>
+                <p class="chart-caption">
+                    Approximate from Figure 7. Critiqued revisions achieve better harmlessness than direct revisions, 
+                    especially for smaller models. Large models (52B) perform similarly with or without critiques.
+                </p>
+            </div>
+        </section>
+
+        <section id="bridge" class="content-section">
+            <h2>Bridge to the Curriculum</h2>
+
+            <h3>Looking Back: How Constitutional AI Builds on Prior Lessons</h3>
+            
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Lesson 02: InstructGPT & RLHF</h4>
+                    <p>
+                        Constitutional AI extends RLHF by replacing human harmlessness labels with AI-generated labels. 
+                        The RL stage (RL-CAI) uses the same preference model and PPO pipeline as RLHF, but the 
+                        preference data comes from the model itself guided by constitutional principles.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 04: Direct Preference Optimization (DPO)</h4>
+                    <p>
+                        Both DPO and Constitutional AI aim to simplify post-training. DPO eliminates the reward model 
+                        and RL; CAI eliminates human harmfulness labels. You could potentially combine them: use 
+                        DPO instead of PPO in the RL-CAI stage for a simpler pipeline.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 05: LLM-as-a-Judge & MT-Bench</h4>
+                    <p>
+                        Constitutional AI uses the language model as a judge for harmlessness: the feedback model 
+                        evaluates response pairs and chooses the less harmful one. Figure 4 shows that larger models 
+                        with CoT are approaching human-level agreement on HHH questions, validating the LLM-as-judge 
+                        approach for safety.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 06: DeepSeekMath & GRPO</h4>
+                    <p>
+                        GRPO uses verifiable rewards (unit tests) for math problems, eliminating the need for a learned 
+                        reward model. Constitutional AI takes a different approach: using AI feedback to generate 
+                        preference labels for subjective harmlessness judgments. Both methods scale supervision, but 
+                        for different domains (verifiable correctness vs. subjective harm).
+                    </p>
+                </div>
+            </div>
+
+            <h3>Key Contrasts</h3>
+            <ul>
+                <li><strong>Verifiable vs Subjective:</strong> Unit tests (Lesson 06, 07) provide objective correctness; 
+                constitutional principles guide subjective judgments about harm.</li>
+                
+                <li><strong>AI Feedback vs Human Feedback:</strong> CAI replaces human labels with AI labels for 
+                harmlessness, but still uses human labels for helpfulness. Full automation remains an open challenge.</li>
+                
+                <li><strong>Transparency:</strong> Constitutional AI's explicit principles make the objective more 
+                transparent than 50,000+ human preference labels (RLHF) or a trained reward model (PPO).</li>
+                
+                <li><strong>Non-Evasiveness:</strong> Unlike prior HH RLHF, CAI specifically trains models to engage 
+                thoughtfully with harmful queries rather than refusing to answer.</li>
+            </ul>
+
+            <h3>Next Up: Lesson 09 – Holistic Evaluation of Language Models (HELM)</h3>
+            <p>
+                We return to Track A (Benchmarking Foundations) with <strong>HELM</strong>, a framework for evaluating 
+                language models across diverse scenarios and metrics. After learning how to train harmless assistants 
+                (Lesson 08), you'll learn how to evaluate them comprehensively: HELM measures accuracy, calibration, 
+                robustness, fairness, bias, toxicity, and efficiency across 42+ scenarios.
+            </p>
+            <p>
+                <strong>Why HELM matters after Constitutional AI:</strong> CAI trains for harmlessness and helpfulness, 
+                but how do we measure success beyond crowdworker Elo scores? HELM provides a standardized, holistic 
+                evaluation framework covering safety, fairness, and robustness—exactly what you need to validate that 
+                a constitutionally-trained model actually behaves safely in the real world.
+            </p>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 Paper</h3>
+                    <p><strong>Constitutional AI: Harmlessness from AI Feedback</strong></p>
+                    <p>Bai et al., Anthropic (2022)</p>
+                    <p>
+                        <a href="https://arxiv.org/abs/2212.08073" target="_blank">arXiv:2212.08073</a> | 
+                        <a href="https://ar5iv.labs.arxiv.org/html/2212.08073" target="_blank">ar5iv HTML</a>
+                    </p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>💻 Code & Data</h3>
+                    <p><strong>Constitutional Harmlessness Paper Repository</strong></p>
+                    <p>Prompts, principles, and examples</p>
+                    <p><a href="https://github.com/anthropics/ConstitutionalHarmlessnessPaper" target="_blank">GitHub Repository</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 Related Dataset</h3>
+                    <p><strong>HH-RLHF Dataset</strong></p>
+                    <p>Human preference data for helpfulness and harmlessness (prior work)</p>
+                    <p><a href="https://github.com/anthropics/hh-rlhf" target="_blank">GitHub</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Prior Work</h3>
+                    <p><strong>Training a Helpful and Harmless Assistant with RLHF</strong></p>
+                    <p>Bai et al. (2022) - the prior work that CAI improves upon</p>
+                    <p><a href="https://arxiv.org/abs/2204.05862" target="_blank">arXiv:2204.05862</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🔴 Red Teaming</h3>
+                    <p><strong>Red Teaming Language Models to Reduce Harms</strong></p>
+                    <p>Ganguli et al. (2022) - methods for discovering model failures</p>
+                    <p><a href="https://arxiv.org/abs/2209.07858" target="_blank">arXiv:2209.07858</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🧠 Chain-of-Thought</h3>
+                    <p><strong>Chain-of-Thought Prompting Elicits Reasoning</strong></p>
+                    <p>Wei et al. (2022) - used in RL-CAI feedback generation</p>
+                    <p><a href="https://arxiv.org/abs/2201.11903" target="_blank">arXiv:2201.11903</a></p>
+                </div>
+            </div>
+
+            <div class="info-box" style="margin-top: 30px;">
+                <h3>Python Tutorial Placeholder</h3>
+                <p>
+                    A hands-on Python tutorial implementing Constitutional AI (critique-revision pipeline and RLAIF) 
+                    is not included by default. If you'd like a notebook walkthrough of:
+                </p>
+                <ul>
+                    <li>Prompting a model to critique and revise its own responses</li>
+                    <li>Generating AI preference labels with multiple-choice evaluation</li>
+                    <li>Training a preference model on AI-generated labels</li>
+                    <li>Running RL with the hybrid human/AI preference model</li>
+                </ul>
+                <p>
+                    ...ask for an explicit tutorial request! The tutorial would use open-source models and demonstrate 
+                    the core concepts hands-on.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                <a href="../curriculum.md">← Back to Curriculum</a> | 
+                <a href="https://arxiv.org/abs/2212.08073" target="_blank">Read the Paper</a> | 
+                <a href="https://github.com/anthropics/ConstitutionalHarmlessnessPaper" target="_blank">View Code</a>
+            </p>
+            <p style="margin-top: 10px; font-size: 0.9em;">
+                Lesson 08 • Track B: SOTA • Constitutional AI (Bai et al., 2022)
+            </p>
+        </footer>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="charts.js"></script>
+    <script src="quiz.js"></script>
+</body>
+</html>

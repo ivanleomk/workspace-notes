@@ -20,7 +20,7 @@ Lessons alternate tracks to interleave theory with practice.
 | 05 | A | ✅ Complete | LLM-as-Judge & Preference Evals | Zheng et al. (2023) - MT-Bench |
 | 06 | B | ✅ Complete | RL from Verifiable Rewards (GRPO) | DeepSeekMath (Shao et al., 2024) |
 | 07 | A | ✅ Complete | Code Evaluation Benchmarks | HumanEval (Chen et al., 2021) |
-| 08 | B | 📋 Planned | Constitutional AI | Bai et al. (2022) |
+| 08 | B | ✅ Complete | Constitutional AI | Bai et al. (2022) |
 
 ## Learning Objectives by Track
 
