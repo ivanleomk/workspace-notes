@@ -20,7 +20,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 05 | A | ✅ Complete | LLM-as-Judge & Preference Evals | Zheng et al. (2023) - MT-Bench |
 | 06 | B | ✅ Complete | RL from Verifiable Rewards (GRPO) | DeepSeekMath (Shao et al., 2024) |
 | 07 | A | ✅ Complete | Code Evaluation Benchmarks | HumanEval (Chen et al., 2021) |
-| 08 | B | 📋 Planned | Constitutional AI | Bai et al. (2022) |
+| 08 | B | ✅ Complete | Constitutional AI | Bai et al. (2022) |
+| 09 | A | 📋 Planned | Holistic Evaluation (HELM) | Liang et al. (2022) |
 
 ## Learning Objectives by Track
 
@@ -58,9 +59,10 @@ Each lesson includes:
 - ✅ Lesson 05 (Track A): LLM-as-Judge & MT-Bench
 - ✅ Lesson 06 (Track B): DeepSeekMath and GRPO (RL from verifiable rewards)
 - ✅ Lesson 07 (Track A): HumanEval and code evaluation benchmarks
+- ✅ Lesson 08 (Track B): Constitutional AI (Bai et al., 2022)
 
 **Next Up:**
-- 📋 Lesson 08 (Track B): Constitutional AI (Bai et al., 2022)
+- 📋 Lesson 09 (Track A): Holistic Evaluation of Language Models (HELM) - Liang et al. (2022)
 
 ## How to Request a Lesson
 
