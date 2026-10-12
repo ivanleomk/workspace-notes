@@ -54,7 +54,7 @@
                 <h3>What You'll Learn</h3>
                 <ul>
                     <li>How seccomp-bpf uses BPF bytecode to filter syscalls at the kernel boundary</li>
-                    <li>The six SECCOMP_RET_* return actions (ALLOW, ERRNO, KILL, TRAP, TRACE, LOG)</li>
+                    <li>The seven SECCOMP_RET_* return actions (ALLOW, ERRNO, KILL_PROCESS, KILL_THREAD, TRAP, TRACE, LOG)</li>
                     <li>Docker's default seccomp profile: which syscalls are blocked and why</li>
                     <li>How gVisor uses SECCOMP_RET_TRAP and SECCOMP_RET_TRACE to intercept syscalls for its userspace kernel</li>
                     <li>overlayfs: how union mounts work (lower, upper, work, merged dirs)</li>
@@ -162,14 +162,12 @@ graph LR
             <h2>Docker's Default seccomp Profile</h2>
             <p>
                 Docker (via runc) applies a default seccomp profile to every container unless you run with 
-                <code>--security-opt seccomp=unconfined</code>. From the 
-                <a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">Docker seccomp docs</a>:
+                <code>--security-opt seccomp=unconfined</code>. The 
+                <a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">Docker seccomp docs</a> 
+                explain that seccomp profiles filter system calls to prevent containers from exploiting 
+                vulnerabilities in the Linux kernel. Docker's default profile blocks a subset of Linux's 300+ 
+                syscalls—the dangerous ones that pose security risks in containerized environments.
             </p>
-            <blockquote>
-                "Seccomp profiles can be used to filter system calls and prevent containers from exploiting 
-                vulnerabilities in the Linux kernel. Docker's default seccomp profile blocks around 44 out of 
-                300+ syscalls."
-            </blockquote>
 
             <h3>Which Syscalls Are Blocked?</h3>
             <p>
@@ -315,12 +313,11 @@ graph TB
                 <h3>⚠️ Performance Trade-Off</h3>
                 <p>
                     gVisor's syscall interception adds overhead. From the 
-                    <a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">gVisor performance guide</a>:
+                    <a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">gVisor performance guide</a>, 
+                    gVisor imposes runtime costs that come in two forms: additional overhead for application system calls, 
+                    and a fixed memory overhead. The overhead depends on the workload and is highest for syscall-heavy and 
+                    file I/O-heavy applications, while CPU-bound workloads with few syscalls see minimal impact.
                 </p>
-                <blockquote>
-                    "For syscall-heavy workloads, gVisor can be 10–50% slower than runc. For I/O-heavy workloads 
-                    (especially file I/O), the overhead can be higher."
-                </blockquote>
                 <p>
                     But this is the <strong>tax for stronger isolation</strong>. The Sentry is a smaller attack 
                     surface than the full Linux kernel. A vulnerability in the Sentry is less catastrophic than a 
@@ -412,8 +409,12 @@ graph TB
             <ul>
                 <li><strong>Image sharing:</strong> Thousands of containers can share one base image (e.g., 
                     <code>python:3.11</code>) without copying it. Each container's writes stay in its own upper.</li>
-                <li><strong>Storage efficiency:</strong> SWE-bench with <code>cache_level=instance</code> is 
-                    ~2TB even with layering. Without overlayfs, it would be 10×+ larger.</li>
+                <li><strong>Storage efficiency:</strong> From 
+                    <a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md" target="_blank">
+                    SWE-bench Docker setup</a>, with <code>cache_level=instance</code>, cached images require ~2,000GB. 
+                    With <code>cache_level=env</code> (caching base and environment layers only), storage drops to ~100GB. 
+                    Without layering, each instance would need its own full copy of all dependencies, multiplying storage 
+                    requirements substantially.</li>
                 <li><strong>Startup speed:</strong> No need to copy the base image—mount is instant. The container 
                     starts as soon as overlayfs is mounted.</li>
             </ul>
@@ -526,8 +527,9 @@ grep overlay /proc/mounts
                 <p>
                     <strong>overlayfs:</strong> Essential for the three-layer image model (base → environment → instance). 
                     From <a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md" target="_blank">
-                    SWE-bench Docker setup</a>: "Images are layered to reduce duplication." Without overlayfs, 
-                    the 2TB instance cache would be 10×+ larger.
+                    SWE-bench Docker setup</a>, the harness builds images in three layers to reduce duplication. 
+                    With <code>cache_level=instance</code>, cached images require ~2,000GB; with <code>cache_level=env</code>, 
+                    only ~100GB. Without overlayfs layering, storage would multiply as each instance needed full copies of all dependencies.
                 </p>
             </div>
 
