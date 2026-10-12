@@ -157,6 +157,34 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Codex vs baselines bar chart
 - **Status:** Complete
 
+### Lesson 08 - Constitutional AI: Harmlessness from AI Feedback ✅
+- **Track:** B (SOTA)
+- **Paper:** Constitutional AI: Harmlessness from AI Feedback (Bai et al., Anthropic, 2022)
+- **Path:** [`08-constitutional-ai/`](08-constitutional-ai/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/08-constitutional-ai/](https://ivanleomk.github.io/workspace-notes/08-constitutional-ai/)
+- **Topics:**
+  - Scaling supervision: using AI to help supervise AI with fewer human labels
+  - The constitution: ~16 natural language principles guiding harmlessness
+  - Two-stage pipeline: SL-CAI (critique→revision→SFT) and RL-CAI (RLAIF)
+  - Critique-revision process: model critiques its own harmful responses and revises them
+  - RLAIF (RL from AI Feedback): AI-generated preference labels for harmlessness
+  - Non-evasive harmlessness: engaging thoughtfully vs refusing to answer
+  - Chain-of-thought in AI feedback and probability clamping (40-60%)
+  - Progressive improvement with multiple revisions (Figure 5)
+  - Better harmlessness-helpfulness tradeoff vs traditional HH RLHF (Figures 2-3)
+  - Critiques help smaller models more; CoT improves feedback quality
+  - Goodharting risk: over-training leads to boilerplate or overly harsh responses
+  - Bridge to RLHF (Lesson 02), DPO (Lesson 04), LLM-as-Judge (Lesson 05), GRPO (Lesson 06)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Constitution principles explorer (8 sample principles from paper Appendix C)
+  - Critique→revision walkthrough with example
+  - Progressive revision improvement chart (Figure 5 approximate)
+  - Harmlessness vs helpfulness Pareto frontier (Figure 2 qualitative)
+  - Model size scaling chart (Figure 3 approximate)
+  - Critiqued vs direct revisions comparison (Figure 7 approximate)
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -169,6 +197,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 05: LLM-as-Judge & MT-Bench](https://ivanleomk.github.io/workspace-notes/05-llm-as-judge-mt-bench/)
 - [Lesson 06: DeepSeekMath & GRPO](https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/)
 - [Lesson 07: HumanEval & Code Evaluation](https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/)
+- [Lesson 08: Constitutional AI](https://ivanleomk.github.io/workspace-notes/08-constitutional-ai/)
 
 ### 💻 Local Serving (for development)
 ```bash
