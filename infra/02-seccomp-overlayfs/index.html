@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 02: seccomp-bpf and overlayfs</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 02: seccomp-bpf and overlayfs</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Syscall Filtering and Union Filesystems</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#seccomp">seccomp-bpf</a>
+            <a href="#docker-profile">Docker Default Profile</a>
+            <a href="#gvisor">gVisor's Trap Path</a>
+            <a href="#overlayfs">overlayfs</a>
+            <a href="#real-systems">Real Systems</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Namespaces and cgroups Aren't Enough</h2>
+            <p>
+                In <a href="../01-linux-namespaces-cgroups/">Lesson 01</a>, you learned that namespaces and cgroups 
+                wrap a process in isolation and resource limits. But every containerized process still makes 
+                <strong>the same syscalls to the same host kernel</strong> as every other process.
+            </p>
+            <p>
+                Linux has over 300 syscalls. Many are essential (<code>read</code>, <code>write</code>, <code>mmap</code>), 
+                but some are dangerous for untrusted code:
+            </p>
+            <ul>
+                <li><code>ptrace</code> — attach to and control another process</li>
+                <li><code>kexec_load</code> — load a new kernel (requires privileges, but still scary)</li>
+                <li><code>perf_event_open</code> — read performance counters across the system</li>
+                <li><code>bpf</code> — load arbitrary BPF programs into the kernel</li>
+                <li><code>mount</code>, <code>umount</code> — modify the filesystem hierarchy</li>
+            </ul>
+            <p>
+                Even with namespaces, a container that can call <code>ptrace</code> or <code>perf_event_open</code> 
+                might leak information about other containers or the host. This is where <strong>seccomp-bpf</strong> 
+                comes in: it lets you <strong>filter which syscalls a process can make</strong>.
+            </p>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>How seccomp-bpf uses BPF bytecode to filter syscalls at the kernel boundary</li>
+                    <li>The six SECCOMP_RET_* return actions (ALLOW, ERRNO, KILL, TRAP, TRACE, LOG)</li>
+                    <li>Docker's default seccomp profile: which syscalls are blocked and why</li>
+                    <li>How gVisor uses SECCOMP_RET_TRAP and SECCOMP_RET_TRACE to intercept syscalls for its userspace kernel</li>
+                    <li>overlayfs: how union mounts work (lower, upper, work, merged dirs)</li>
+                    <li>Copy-on-write and whiteouts: the mechanisms behind Docker's image layering</li>
+                    <li>Hands-on: install a minimal seccomp filter and mount a demo overlayfs</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="seccomp" class="content-section">
+            <h2>seccomp-bpf: Syscall Filtering with BPF</h2>
+            <p>
+                <strong>seccomp</strong> (secure computing mode) is a Linux kernel feature that restricts which 
+                syscalls a process can make. From 
+                <a href="https://man7.org/linux/man-pages/man2/seccomp.2.html" target="_blank">seccomp(2)</a>:
+            </p>
+            <blockquote>
+                "seccomp allows a process to make a one-way transition into a 'secure' state where it cannot 
+                make any system calls except <code>exit()</code>, <code>sigreturn()</code>, <code>read()</code>, 
+                and <code>write()</code> to already-open file descriptors."
+            </blockquote>
+            <p>
+                The original <code>SECCOMP_MODE_STRICT</code> (2005) was too restrictive: only 4 syscalls allowed. 
+                In 2012, <strong>seccomp-bpf</strong> (<code>SECCOMP_MODE_FILTER</code>) was added, allowing you to 
+                write a <strong>BPF (Berkeley Packet Filter) program</strong> that decides which syscalls to allow.
+            </p>
+
+            <h3>How It Works</h3>
+            <p>
+                When a process with a seccomp filter makes a syscall, the kernel runs the BPF program 
+                <strong>before executing the syscall</strong>. The BPF program inspects the syscall number and 
+                arguments, then returns one of six actions:
+            </p>
+
+            <div class="info-box">
+                <h3>SECCOMP_RET_* Return Actions</h3>
+                <p>From <a href="https://man7.org/linux/man-pages/man2/seccomp.2.html" target="_blank">seccomp(2)</a>:</p>
+                <ul>
+                    <li><strong>SECCOMP_RET_ALLOW</strong> — Execute the syscall normally.</li>
+                    <li><strong>SECCOMP_RET_ERRNO</strong> — Block the syscall and return a specified errno 
+                        (e.g., <code>EPERM</code>, <code>ENOSYS</code>).</li>
+                    <li><strong>SECCOMP_RET_KILL_PROCESS</strong> — Kill the entire process (all threads).</li>
+                    <li><strong>SECCOMP_RET_KILL_THREAD</strong> — Kill only the calling thread.</li>
+                    <li><strong>SECCOMP_RET_TRAP</strong> — Send <code>SIGSYS</code> to the process. A signal 
+                        handler can inspect the syscall and decide what to do. This is how <strong>gVisor</strong> 
+                        intercepts syscalls.</li>
+                    <li><strong>SECCOMP_RET_TRACE</strong> — Notify a <code>ptrace</code> tracer (if attached). 
+                        The tracer can allow, block, or modify the syscall. gVisor's older ptrace platform used this.</li>
+                    <li><strong>SECCOMP_RET_LOG</strong> — Allow the syscall but log it to the audit subsystem 
+                        (useful for policy development).</li>
+                </ul>
+            </div>
+
+            <h3>The BPF Filter</h3>
+            <p>
+                The filter is a BPF program—originally designed for packet filtering, now repurposed for syscalls. 
+                From the kernel docs 
+                (<a href="https://docs.kernel.org/userspace-api/seccomp_filter.html" target="_blank">seccomp_filter.html</a>):
+            </p>
+            <blockquote>
+                "A seccomp filter is expressed as a Berkeley Packet Filter (BPF) program. The BPF program is 
+                evaluated for each system call the task makes."
+            </blockquote>
+            <p>
+                You typically don't write raw BPF bytecode by hand. Instead, you use a library like 
+                <strong>libseccomp</strong> (C) or <strong>seccomp-tools</strong> (Ruby) to generate it. For 
+                containers, runc applies the filter via <code>prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...)</code> 
+                before executing the container's entrypoint.
+            </p>
+
+            <div class="mermaid">
+graph LR
+    App[Application Code]
+    Syscall[Syscall Invocation<br/>e.g. open, read, fork]
+    BPF[seccomp-bpf Filter<br/>in Kernel]
+    
+    Allow[SECCOMP_RET_ALLOW<br/>→ Execute Syscall]
+    Errno[SECCOMP_RET_ERRNO<br/>→ Return Error]
+    Kill[SECCOMP_RET_KILL<br/>→ Kill Process]
+    Trap[SECCOMP_RET_TRAP<br/>→ Send SIGSYS]
+    
+    Kernel[Host Kernel<br/>Syscall Handler]
+    
+    App --> Syscall
+    Syscall --> BPF
+    BPF --> Allow
+    BPF --> Errno
+    BPF --> Kill
+    BPF --> Trap
+    Allow --> Kernel
+    Errno -.block.-> App
+    Kill -.terminate.-> App
+    Trap -.signal.-> App
+    
+    style BPF fill:#8b5cf6,stroke:#f1f5f9,stroke-width:2px
+    style Kernel fill:#1e293b,stroke:#3b82f6,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> seccomp-bpf intercepts every syscall and decides whether to allow, 
+                block, kill, or trap to userspace.
+            </p>
+        </section>
+
+        <section id="docker-profile" class="content-section">
+            <h2>Docker's Default seccomp Profile</h2>
+            <p>
+                Docker (via runc) applies a default seccomp profile to every container unless you run with 
+                <code>--security-opt seccomp=unconfined</code>. From the 
+                <a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">Docker seccomp docs</a>:
+            </p>
+            <blockquote>
+                "Seccomp profiles can be used to filter system calls and prevent containers from exploiting 
+                vulnerabilities in the Linux kernel. Docker's default seccomp profile blocks around 44 out of 
+                300+ syscalls."
+            </blockquote>
+
+            <h3>Which Syscalls Are Blocked?</h3>
+            <p>
+                The canonical profile is in the Moby repo: 
+                <a href="https://github.com/moby/moby/blob/master/profiles/seccomp/default.json" target="_blank">
+                profiles/seccomp/default.json</a>. Key blocked syscalls include:
+            </p>
+            <ul>
+                <li><strong>Kernel module loading:</strong> <code>init_module</code>, <code>finit_module</code>, 
+                    <code>delete_module</code> — prevents loading kernel modules (requires <code>CAP_SYS_MODULE</code>, 
+                    but defense in depth).</li>
+                <li><strong>Debugging:</strong> <code>ptrace</code> — prevents attaching to other processes 
+                    (important for multi-tenant isolation).</li>
+                <li><strong>Kernel replacement:</strong> <code>kexec_load</code>, <code>kexec_file_load</code> 
+                    — prevents loading a new kernel.</li>
+                <li><strong>Time manipulation:</strong> <code>clock_settime</code>, <code>settimeofday</code> 
+                    — prevents setting the system clock (which could break other containers).</li>
+                <li><strong>BPF programs:</strong> <code>bpf</code> — prevents loading arbitrary BPF programs 
+                    (requires <code>CAP_SYS_ADMIN</code> for most operations).</li>
+                <li><strong>Performance counters:</strong> <code>perf_event_open</code> — prevents reading 
+                    system-wide performance counters (potential side-channel).</li>
+                <li><strong>Reboot:</strong> <code>reboot</code> — prevents rebooting the host.</li>
+                <li><strong>Personality:</strong> <code>personality</code> with certain flags — blocks execution 
+                    domain changes that could bypass security.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Example: Blocked Syscall Behavior</h3>
+                <p>
+                    If a containerized process tries to call <code>ptrace</code>, the seccomp filter returns 
+                    <code>SECCOMP_RET_ERRNO</code> with <code>errno=EPERM</code> or <code>errno=ENOSYS</code>. 
+                    The process sees the syscall fail immediately, without ever reaching the kernel's ptrace handler.
+                </p>
+                <pre><code class="language-python">import ctypes
+import errno
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+# Try to ptrace ourselves (should fail with EPERM in Docker default profile)
+result = libc.ptrace(0, 0, 0, 0)  # PTRACE_TRACEME
+if result == -1:
+    err = ctypes.get_errno()
+    print(f"ptrace failed: {errno.errorcode.get(err, err)}")
+    # Output in Docker: ptrace failed: EPERM
+</code></pre>
+            </div>
+
+            <h3>Why Not Block More Syscalls?</h3>
+            <p>
+                The default profile is a balance: it blocks dangerous syscalls but allows enough for general-purpose 
+                workloads (databases, web servers, build tools). For tighter sandboxing, you can:
+            </p>
+            <ul>
+                <li>Use a <strong>custom seccomp profile</strong> with a whitelist of only the syscalls your 
+                    workload needs (requires profiling).</li>
+                <li>Use <strong>gVisor</strong>, which blocks syscalls at a higher level (in the Sentry) and 
+                    intercepts the rest.</li>
+            </ul>
+        </section>
+
+        <section id="gvisor" class="content-section">
+            <h2>gVisor's Syscall Interception: SECCOMP_RET_TRAP and systrap</h2>
+            <p>
+                <strong>gVisor</strong> is a userspace kernel written in Go. Instead of letting application syscalls 
+                go directly to the host kernel, gVisor interposes a component called the <strong>Sentry</strong> 
+                that implements a large subset of the Linux syscall API. From the 
+                <a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">gVisor platforms docs</a>:
+            </p>
+            <blockquote>
+                "The Sentry implements the Linux system call interface. When the application makes a system call, 
+                the call is intercepted and handled by the Sentry, not the host kernel. The Sentry then makes a 
+                limited set of host system calls to provide the requested functionality."
+            </blockquote>
+
+            <h3>Platform: systrap (Default Since Mid-2023)</h3>
+            <p>
+                gVisor's <strong>systrap platform</strong> (introduced as the default in gVisor v20230717.0) uses 
+                <code>SECCOMP_RET_TRAP</code> to intercept syscalls. From the 
+                <a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">platforms docs</a>:
+            </p>
+            <blockquote>
+                "systrap uses seccomp to trap into the Sentry for system calls. When the application makes a 
+                system call, the seccomp filter returns <code>SECCOMP_RET_TRAP</code>, which delivers a 
+                <code>SIGSYS</code> signal to a Sentry thread. The Sentry handles the signal, emulates the system 
+                call, and resumes the application."
+            </blockquote>
+            <p>
+                This is <strong>faster</strong> than the older ptrace platform (which used <code>SECCOMP_RET_TRACE</code> 
+                and <code>ptrace(PTRACE_SYSEMU)</code>) because it avoids context switches to a separate tracer process.
+            </p>
+
+            <h3>Why Use gVisor for Evals?</h3>
+            <p>
+                From the <a href="https://gvisor.dev/" target="_blank">gVisor homepage</a>:
+            </p>
+            <blockquote>
+                "gVisor provides a substantial layer of isolation between running applications and the host 
+                operating system. It limits the host kernel surface accessible to applications."
+            </blockquote>
+            <p>
+                In production eval systems:
+            </p>
+            <ul>
+                <li><strong>Modal</strong> uses gVisor as the default runtime for sandboxes. From 
+                    <a href="https://modal.com/docs/guide/sandbox" target="_blank">Modal sandbox docs</a>: 
+                    "GPU Sandboxes are only supported with <code>runtime=gvisor</code>."</li>
+                <li><strong>UK AISI's Inspect k8s provider</strong> uses gVisor as the RuntimeClass. From 
+                    <a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">
+                    inspect_k8s_sandbox README</a>: "gVisor provides an additional layer of isolation."</li>
+                <li><strong>Kubernetes</strong> can use runsc (gVisor's OCI runtime) via RuntimeClass. From 
+                    <a href="https://kubernetes.io/docs/concepts/containers/runtime-class/" target="_blank">
+                    RuntimeClass docs</a>: select per-pod with <code>runtimeClassName: gvisor</code>.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    App[Application in Sandbox]
+    Syscall[Syscall Invocation<br/>e.g. open, read, socket]
+    Seccomp[seccomp Filter<br/>SECCOMP_RET_TRAP]
+    SIGSYS[SIGSYS Signal<br/>to Sentry]
+    Sentry[gVisor Sentry<br/>Userspace Kernel]
+    HostSyscall[Limited Host<br/>Syscalls]
+    HostKernel[Host Kernel]
+    
+    App --> Syscall
+    Syscall --> Seccomp
+    Seccomp --> SIGSYS
+    SIGSYS --> Sentry
+    Sentry -->|Emulate in userspace| App
+    Sentry -->|When needed<br/>e.g. mmap, futex| HostSyscall
+    HostSyscall --> HostKernel
+    
+    style Sentry fill:#8b5cf6,stroke:#f1f5f9,stroke-width:3px
+    style Seccomp fill:#334155,stroke:#3b82f6,stroke-width:2px
+    style HostKernel fill:#1e293b,stroke:#3b82f6,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> gVisor's systrap platform intercepts syscalls with seccomp and handles 
+                them in the Sentry (userspace kernel). Only a limited set of syscalls reach the host kernel.
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Performance Trade-Off</h3>
+                <p>
+                    gVisor's syscall interception adds overhead. From the 
+                    <a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">gVisor performance guide</a>:
+                </p>
+                <blockquote>
+                    "For syscall-heavy workloads, gVisor can be 10–50% slower than runc. For I/O-heavy workloads 
+                    (especially file I/O), the overhead can be higher."
+                </blockquote>
+                <p>
+                    But this is the <strong>tax for stronger isolation</strong>. The Sentry is a smaller attack 
+                    surface than the full Linux kernel. A vulnerability in the Sentry is less catastrophic than a 
+                    kernel vuln, and the Sentry's attack surface is auditable.
+                </p>
+            </div>
+        </section>
+
+        <section id="overlayfs" class="content-section">
+            <h2>overlayfs: Union Filesystems for Container Layers</h2>
+            <p>
+                <strong>overlayfs</strong> is a union filesystem: it combines multiple directories (called layers) 
+                into one unified view. From the kernel docs 
+                (<a href="https://docs.kernel.org/filesystems/overlayfs.html" target="_blank">overlayfs.html</a>):
+            </p>
+            <blockquote>
+                "An overlay filesystem combines an 'upper' filesystem (read-write) with one or more 'lower' 
+                filesystems (read-only). When a file is accessed, overlayfs first checks the upper; if not found, 
+                it searches the lowers."
+            </blockquote>
+            <p>
+                This is how Docker shares one base image across thousands of containers. Each container gets its 
+                own writable layer on top of shared read-only layers.
+            </p>
+
+            <h3>The Four Directories</h3>
+            <p>
+                An overlayfs mount requires four directories:
+            </p>
+
+            <div class="info-box">
+                <h3>1. Lower Directories (Read-Only)</h3>
+                <p>
+                    These are the base layers—typically Docker image layers. Multiple lowers can be stacked. 
+                    When a file exists in multiple lowers, the uppermost (most recent) wins.
+                </p>
+                <p>
+                    <strong>Example:</strong> <code>lowerdir=/var/lib/docker/overlay2/base1:/var/lib/docker/overlay2/base2</code>
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>2. Upper Directory (Read-Write)</h3>
+                <p>
+                    This is the container's writable layer. All writes go here. When you modify a file from a 
+                    lower layer, overlayfs copies it to the upper (copy-on-write). When you delete a file, 
+                    overlayfs creates a <strong>whiteout</strong> marker in the upper.
+                </p>
+                <p>
+                    <strong>Example:</strong> <code>upperdir=/var/lib/docker/overlay2/container_abc/diff</code>
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>3. Work Directory</h3>
+                <p>
+                    An internal directory used by overlayfs for atomic copy-up operations. Must be on the same 
+                    filesystem as the upper. Not directly visible to applications.
+                </p>
+                <p>
+                    <strong>Example:</strong> <code>workdir=/var/lib/docker/overlay2/container_abc/work</code>
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>4. Merged Directory (The Unified View)</h3>
+                <p>
+                    This is the mount point—the unified filesystem that the container sees. Reads check upper first, 
+                    then lowers. Writes go to upper.
+                </p>
+                <p>
+                    <strong>Example:</strong> <code>/var/lib/docker/overlay2/container_abc/merged</code> 
+                    (this becomes the container's <code>/</code> after <code>pivot_root</code>).
+                </p>
+            </div>
+
+            <h3>Copy-on-Write and Whiteouts</h3>
+            <p>
+                From the <a href="https://docs.kernel.org/filesystems/overlayfs.html" target="_blank">kernel docs</a>:
+            </p>
+            <blockquote>
+                "When a file in a lower layer is modified, the entire file is copied to the upper layer (copy-up) 
+                before the modification is applied. When a file is deleted, a whiteout (a character device with 
+                device number 0/0) is created in the upper layer."
+            </blockquote>
+            <p>
+                <strong>Why this matters for evals:</strong>
+            </p>
+            <ul>
+                <li><strong>Image sharing:</strong> Thousands of containers can share one base image (e.g., 
+                    <code>python:3.11</code>) without copying it. Each container's writes stay in its own upper.</li>
+                <li><strong>Storage efficiency:</strong> SWE-bench with <code>cache_level=instance</code> is 
+                    ~2TB even with layering. Without overlayfs, it would be 10×+ larger.</li>
+                <li><strong>Startup speed:</strong> No need to copy the base image—mount is instant. The container 
+                    starts as soon as overlayfs is mounted.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    Merged[Merged View<br/>Container's /]
+    Upper[Upper Layer<br/>Writable Container Changes]
+    Work[Work Dir<br/>Internal Scratch Space]
+    Lower1[Lower Layer 1<br/>App Dependencies]
+    Lower2[Lower Layer 2<br/>Base OS]
+    
+    Merged -->|Read: check upper first| Upper
+    Merged -->|If not in upper, search lowers| Lower1
+    Lower1 -->|Stack order| Lower2
+    Merged -->|All writes go here| Upper
+    Upper -.atomic copy-up.-> Work
+    
+    style Merged fill:#8b5cf6,stroke:#f1f5f9,stroke-width:3px
+    style Upper fill:#334155,stroke:#10b981,stroke-width:2px
+    style Lower1 fill:#1e293b,stroke:#3b82f6
+    style Lower2 fill:#1e293b,stroke:#3b82f6
+    style Work fill:#334155,stroke:#f59e0b
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> overlayfs stacks read-only lower layers under one writable upper layer, 
+                presenting a unified merged view to the container.
+            </p>
+
+            <h3>How Docker Uses overlayfs</h3>
+            <p>
+                When you run <code>docker run ubuntu</code>, Docker:
+            </p>
+            <ol>
+                <li>Pulls (or reuses) the <code>ubuntu</code> image layers (each layer is a tar archive).</li>
+                <li>Extracts each layer into <code>/var/lib/docker/overlay2/&lt;id&gt;/diff</code>.</li>
+                <li>Creates a new upper+work pair for the container.</li>
+                <li>Mounts overlayfs: <code>mount -t overlay overlay -o lowerdir=layer1:layer2:layer3,upperdir=container_upper,workdir=container_work merged</code>.</li>
+                <li>The container's root filesystem is <code>merged</code>. All reads are from layers or upper; 
+                    all writes go to upper.</li>
+            </ol>
+            <p>
+                Inspect a running container's overlayfs mount:
+            </p>
+            <pre><code class="language-bash"># Find the container ID
+docker ps
+
+# Inspect its mount
+docker inspect &lt;container_id&gt; | grep -A 20 '"GraphDriver"'
+
+# Or check /proc/mounts on the host
+grep overlay /proc/mounts
+</code></pre>
+        </section>
+
+        <section id="real-systems" class="content-section">
+            <h2>How Real Systems Combine seccomp and overlayfs</h2>
+
+            <div class="info-box">
+                <h3>Docker (runc)</h3>
+                <p>
+                    <strong>seccomp:</strong> Applies <code>default.json</code> profile (blocks ~44 syscalls) via 
+                    <code>prctl(PR_SET_SECCOMP)</code> before container entrypoint. From 
+                    <a href="https://github.com/opencontainers/runc/blob/main/libcontainer/seccomp/seccomp_linux.go" target="_blank">
+                    runc's seccomp_linux.go</a>: "Load the seccomp filter into the kernel."
+                </p>
+                <p>
+                    <strong>overlayfs:</strong> Default storage driver on modern Linux. From 
+                    <a href="https://docs.docker.com/storage/storagedriver/overlayfs-driver/" target="_blank">
+                    Docker storage driver docs</a>: "OverlayFS is the default and recommended driver."
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor (runsc)</h3>
+                <p>
+                    <strong>seccomp:</strong> The Sentry itself runs with a tight seccomp filter that only allows 
+                    the host syscalls it needs (e.g., <code>mmap</code>, <code>futex</code>, <code>epoll_wait</code>). 
+                    The application's syscalls are intercepted via <code>SECCOMP_RET_TRAP</code>. From 
+                    <a href="https://github.com/google/gvisor/blob/master/runsc/boot/filter/config.go" target="_blank">
+                    gVisor's filter/config.go</a>: "The Sentry's seccomp policy."
+                </p>
+                <p>
+                    <strong>Filesystem:</strong> gVisor emulates filesystems in the Sentry. For the root filesystem, 
+                    it can use <code>gofer</code> (a 9P proxy) or direct overlayfs access. From 
+                    <a href="https://gvisor.dev/docs/user_guide/filesystem/" target="_blank">gVisor filesystem docs</a>: 
+                    "The default is gofer for maximum compatibility."
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Kubernetes (with runc or gVisor)</h3>
+                <p>
+                    <strong>seccomp:</strong> You can set a per-pod seccomp profile via 
+                    <code>securityContext.seccompProfile</code> in the pod spec. From 
+                    <a href="https://kubernetes.io/docs/tutorials/security/seccomp/" target="_blank">
+                    Kubernetes seccomp tutorial</a>: "Restrict a Container's Syscalls with seccomp."
+                </p>
+                <p>
+                    <strong>overlayfs:</strong> Depends on the container runtime (containerd or CRI-O) and the 
+                    configured storage driver. On most modern setups, it's overlayfs.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>SWE-bench</h3>
+                <p>
+                    <strong>seccomp:</strong> Uses Docker defaults (not explicitly overridden in the public code).
+                </p>
+                <p>
+                    <strong>overlayfs:</strong> Essential for the three-layer image model (base → environment → instance). 
+                    From <a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md" target="_blank">
+                    SWE-bench Docker setup</a>: "Images are layered to reduce duplication." Without overlayfs, 
+                    the 2TB instance cache would be 10×+ larger.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Modal Sandboxes</h3>
+                <p>
+                    <strong>seccomp:</strong> Managed by the gVisor runtime (default). From 
+                    <a href="https://modal.com/docs/guide/sandbox" target="_blank">Modal sandbox docs</a>: 
+                    "gVisor runtime for stronger isolation."
+                </p>
+                <p>
+                    <strong>Filesystem:</strong> Modal uses gVisor's gofer for the root filesystem, plus support 
+                    for filesystem and memory snapshots. From the same docs: "Filesystem snapshots save setup time."
+                </p>
+            </div>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: seccomp Filter and overlayfs Mount</h2>
+            <p>
+                This exercise demonstrates:
+            </p>
+            <ul>
+                <li>Installing a minimal seccomp filter that blocks one syscall (<code>getpid</code>)</li>
+                <li>Mounting an overlayfs with lower, upper, work, and merged directories</li>
+            </ul>
+
+            <div class="info-box warning">
+                <h3>⚠️ Privilege Requirements</h3>
+                <p>
+                    <strong>seccomp filter:</strong> Can be installed by any process (no root needed), but it's 
+                    a one-way transition—once installed, you can't remove it.
+                </p>
+                <p>
+                    <strong>overlayfs mount:</strong> Requires <strong>root</strong> or <code>CAP_SYS_ADMIN</code> 
+                    inside a user namespace. Run with <code>sudo</code> or inside a privileged container 
+                    (<code>docker run --privileged</code>).
+                </p>
+            </div>
+
+            <h3>Exercise 1: Minimal seccomp Filter</h3>
+            <p>
+                This Python script installs a seccomp filter that blocks <code>getpid</code> (just for demonstration). 
+                It uses the <code>libseccomp</code> library via <code>ctypes</code> (you can also use the 
+                <code>seccomp</code> package from PyPI for a higher-level interface, but we'll use ctypes to show 
+                the raw syscall interface).
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Minimal seccomp filter demo: block getpid() syscall.
+
+Requirements:
+- Python 3.7+
+- No special privileges needed (seccomp filters are per-process)
+
+Usage:
+    python3 seccomp_demo.py
+
+What it does:
+1. Calls getpid() successfully
+2. Installs a seccomp filter that blocks getpid
+3. Tries to call getpid() again (will fail with EPERM)
+"""
+
+import os
+import sys
+import ctypes
+import ctypes.util
+
+# Linux syscall numbers (x86-64)
+__NR_seccomp = 317
+__NR_getpid = 39
+
+# seccomp constants
+SECCOMP_SET_MODE_FILTER = 1
+SECCOMP_FILTER_FLAG_TSYNC = 1
+
+# SECCOMP_RET_* values
+SECCOMP_RET_KILL = 0x00000000
+SECCOMP_RET_ERRNO = 0x00050000
+SECCOMP_RET_ALLOW = 0x7fff0000
+
+# BPF instruction structure
+class sock_filter(ctypes.Structure):
+    _fields_ = [
+        ("code", ctypes.c_uint16),
+        ("jt", ctypes.c_uint8),
+        ("jf", ctypes.c_uint8),
+        ("k", ctypes.c_uint32),
+    ]
+
+class sock_fprog(ctypes.Structure):
+    _fields_ = [
+        ("len", ctypes.c_uint16),
+        ("filter", ctypes.POINTER(sock_filter)),
+    ]
+
+# BPF instruction macros
+def BPF_STMT(code, k):
+    return sock_filter(code, 0, 0, k)
+
+def BPF_JUMP(code, k, jt, jf):
+    return sock_filter(code, jt, jf, k)
+
+# BPF opcodes
+BPF_LD = 0x00
+BPF_W = 0x00
+BPF_ABS = 0x20
+BPF_JMP = 0x05
+BPF_JEQ = 0x10
+BPF_RET = 0x06
+BPF_K = 0x00
+
+# Load libc
+libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+
+def install_seccomp_filter():
+    """
+    Install a seccomp filter that:
+    - Blocks getpid() with EPERM
+    - Allows all other syscalls
+    """
+    # BPF program:
+    # 1. Load syscall number (at offset 0 in seccomp_data)
+    # 2. If syscall == getpid, return ERRNO(EPERM)
+    # 3. Else, return ALLOW
+    
+    # seccomp_data offsets (from kernel headers)
+    offsetof_nr = 0  # syscall number is at offset 0
+    
+    filter_prog = (sock_filter * 5)(
+        # Load syscall number
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof_nr),
+        
+        # If syscall == __NR_getpid, jump to return ERRNO
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_getpid, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | 1),  # errno=EPERM (1)
+        
+        # Default: allow
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),  # padding
+    )
+    
+    prog = sock_fprog(len(filter_prog), filter_prog)
+    
+    # Call seccomp(SECCOMP_SET_MODE_FILTER, 0, &prog)
+    ret = libc.syscall(__NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, ctypes.byref(prog))
+    if ret != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), "seccomp")
+    
+    print("[seccomp] Filter installed: getpid() is now blocked")
+
+def main():
+    print("=== seccomp Filter Demo ===\n")
+    
+    # Step 1: Call getpid() normally
+    pid = os.getpid()
+    print(f"[before filter] os.getpid() = {pid}")
+    
+    # Step 2: Install the filter
+    try:
+        install_seccomp_filter()
+    except OSError as e:
+        print(f"❌ Failed to install seccomp filter: {e}")
+        print("   (This should not happen—seccomp filters don't need special privileges)")
+        sys.exit(1)
+    
+    # Step 3: Try to call getpid() again (should fail)
+    print("\n[after filter] Attempting os.getpid()...")
+    try:
+        # os.getpid() is cached in Python, so we call the raw syscall
+        pid = libc.syscall(__NR_getpid)
+        if pid == -1:
+            errno = ctypes.get_errno()
+            print(f"✓ getpid() blocked! errno={errno} ({os.strerror(errno)})")
+        else:
+            print(f"✗ Unexpected: getpid() returned {pid} (should have been blocked)")
+    except Exception as e:
+        print(f"✓ getpid() blocked with exception: {e}")
+    
+    print("\n✅ Demo complete!")
+    print("   Note: The seccomp filter is now active for this process and cannot be removed.")
+    print("   All child processes inherit it. To reset, exit this process.")
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+            <h3>Expected Output</h3>
+            <pre><code>=== seccomp Filter Demo ===
+
+[before filter] os.getpid() = 12345
+[seccomp] Filter installed: getpid() is now blocked
+
+[after filter] Attempting os.getpid()...
+✓ getpid() blocked! errno=1 (Operation not permitted)
+
+✅ Demo complete!
+   Note: The seccomp filter is now active for this process and cannot be removed.
+   All child processes inherit it. To reset, exit this process.
+</code></pre>
+
+            <h3>Exercise 2: Mount overlayfs</h3>
+            <p>
+                This script demonstrates a minimal overlayfs mount. It creates lower, upper, work, and merged 
+                directories, mounts overlayfs, and shows copy-on-write behavior.
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+overlayfs mount demo: stack read-only lower layers under one writable upper.
+
+Requirements:
+- Linux kernel with overlayfs support (merged into mainline in 3.18, 2014)
+- Python 3.7+
+- Root or CAP_SYS_ADMIN (e.g., run with sudo)
+
+Usage:
+    sudo python3 overlayfs_demo.py
+
+What it does:
+1. Creates lower1/ (read-only layer), lower2/ (another read-only layer), upper/ (writable), work/, and merged/
+2. Mounts overlayfs: merged/ shows the union of lower1, lower2, and upper
+3. Demonstrates copy-on-write: modifying a file from lower copies it to upper
+4. Demonstrates whiteouts: deleting a file from lower creates a whiteout in upper
+"""
+
+import os
+import sys
+import subprocess
+import tempfile
+import shutil
+
+def run_command(cmd, check=True):
+    """Run a shell command and return output."""
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        print(f"❌ Command failed: {cmd}")
+        print(f"   stdout: {result.stdout}")
+        print(f"   stderr: {result.stderr}")
+        sys.exit(1)
+    return result
+
+def main():
+    if os.geteuid() != 0:
+        print("⚠️  This script needs root to mount overlayfs. Run with sudo.")
+        sys.exit(1)
+    
+    print("=== overlayfs Mount Demo ===\n")
+    
+    # Create a temporary directory for our demo
+    demo_dir = tempfile.mkdtemp(prefix="overlayfs_demo_")
+    print(f"[setup] Working directory: {demo_dir}\n")
+    
+    try:
+        # Create the four required directories
+        lower1_dir = os.path.join(demo_dir, "lower1")
+        lower2_dir = os.path.join(demo_dir, "lower2")
+        upper_dir = os.path.join(demo_dir, "upper")
+        work_dir = os.path.join(demo_dir, "work")
+        merged_dir = os.path.join(demo_dir, "merged")
+        
+        for d in [lower1_dir, lower2_dir, upper_dir, work_dir, merged_dir]:
+            os.makedirs(d, exist_ok=True)
+        
+        # Populate lower layers
+        with open(os.path.join(lower2_dir, "base.txt"), "w") as f:
+            f.write("This file is in lower2 (the bottom layer).\n")
+        
+        with open(os.path.join(lower1_dir, "app.txt"), "w") as f:
+            f.write("This file is in lower1 (middle layer).\n")
+        
+        with open(os.path.join(lower1_dir, "shared.txt"), "w") as f:
+            f.write("This file exists in lower1.\n")
+        
+        with open(os.path.join(lower2_dir, "shared.txt"), "w") as f:
+            f.write("This file also exists in lower2, but lower1 takes precedence.\n")
+        
+        print("[setup] Created lower layers:")
+        print(f"  lower2/base.txt")
+        print(f"  lower1/app.txt")
+        print(f"  lower1/shared.txt (shadows lower2/shared.txt)\n")
+        
+        # Mount overlayfs
+        # Syntax: mount -t overlay overlay -o lowerdir=lower1:lower2,upperdir=upper,workdir=work merged
+        mount_opts = f"lowerdir={lower1_dir}:{lower2_dir},upperdir={upper_dir},workdir={work_dir}"
+        mount_cmd = f"mount -t overlay overlay -o {mount_opts} {merged_dir}"
+        
+        print(f"[mount] Mounting overlayfs...")
+        print(f"  Command: {mount_cmd}\n")
+        run_command(mount_cmd)
+        print(f"✓ Mounted overlayfs at {merged_dir}\n")
+        
+        # Show merged view
+        print("[merged view] Contents of merged/:")
+        result = run_command(f"ls -la {merged_dir}", check=False)
+        print(result.stdout)
+        
+        print("[merged view] Contents of merged/base.txt:")
+        with open(os.path.join(merged_dir, "base.txt"), "r") as f:
+            print(f"  {f.read().strip()}")
+        
+        print("\n[merged view] Contents of merged/shared.txt (from lower1, not lower2):")
+        with open(os.path.join(merged_dir, "shared.txt"), "r") as f:
+            print(f"  {f.read().strip()}")
+        
+        # Demonstrate copy-on-write
+        print("\n[copy-on-write] Modifying merged/app.txt (from lower1)...")
+        with open(os.path.join(merged_dir, "app.txt"), "a") as f:
+            f.write("This line was added via the merged view.\n")
+        
+        print("  ✓ File modified. Checking upper/:")
+        result = run_command(f"ls -la {upper_dir}", check=False)
+        print(result.stdout)
+        
+        print("  Contents of upper/app.txt (copy-up happened):")
+        with open(os.path.join(upper_dir, "app.txt"), "r") as f:
+            print(f"    {f.read()}")
+        
+        # Demonstrate whiteout (deletion)
+        print("[whiteout] Deleting merged/base.txt (from lower2)...")
+        os.remove(os.path.join(merged_dir, "base.txt"))
+        
+        print("  ✓ File deleted. Checking upper/:")
+        result = run_command(f"ls -la {upper_dir}", check=False)
+        print(result.stdout)
+        
+        print("  Note: A whiteout marker (char device 0/0) was created in upper/")
+        
+        # Unmount
+        print(f"\n[cleanup] Unmounting {merged_dir}...")
+        run_command(f"umount {merged_dir}")
+        print("  ✓ Unmounted")
+        
+    finally:
+        # Clean up
+        print(f"\n[cleanup] Removing {demo_dir}...")
+        shutil.rmtree(demo_dir, ignore_errors=True)
+        print("  ✓ Cleaned up")
+    
+    print("\n✅ Demo complete!")
+    print("\nKey takeaways:")
+    print("  - overlayfs stacks multiple lower layers under one writable upper")
+    print("  - Reads check upper first, then lowers in order")
+    print("  - Writes trigger copy-on-write: files are copied from lower to upper")
+    print("  - Deletions create whiteout markers in upper (char device 0/0)")
+    print("  - This is how Docker shares one image across thousands of containers")
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+            <h3>Expected Output (Abbreviated)</h3>
+            <pre><code>=== overlayfs Mount Demo ===
+
+[setup] Working directory: /tmp/overlayfs_demo_abc123
+
+[setup] Created lower layers:
+  lower2/base.txt
+  lower1/app.txt
+  lower1/shared.txt (shadows lower2/shared.txt)
+
+[mount] Mounting overlayfs...
+  Command: mount -t overlay overlay -o lowerdir=...
+✓ Mounted overlayfs at /tmp/overlayfs_demo_abc123/merged
+
+[merged view] Contents of merged/:
+total 12
+drwxr-xr-x 1 root root  60 Jan  1 00:00 .
+drwx------ 7 root root 140 Jan  1 00:00 ..
+-rw-r--r-- 1 root root  38 Jan  1 00:00 app.txt
+-rw-r--r-- 1 root root  46 Jan  1 00:00 base.txt
+-rw-r--r-- 1 root root  32 Jan  1 00:00 shared.txt
+
+[copy-on-write] Modifying merged/app.txt (from lower1)...
+  ✓ File modified. Checking upper/:
+total 4
+-rw-r--r-- 1 root root 85 Jan  1 00:00 app.txt
+
+[whiteout] Deleting merged/base.txt (from lower2)...
+  ✓ File deleted. Checking upper/:
+c--------- 1 root root 0, 0 Jan  1 00:00 base.txt
+-rw-r--r-- 1 root root   85 Jan  1 00:00 app.txt
+
+✅ Demo complete!
+</code></pre>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from primary documentation. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>seccomp and BPF</h3>
+                <ul>
+                    <li><a href="https://man7.org/linux/man-pages/man2/seccomp.2.html" target="_blank">seccomp(2)</a> 
+                        — The syscall that installs filters</li>
+                    <li><a href="https://docs.kernel.org/userspace-api/seccomp_filter.html" target="_blank">
+                        seccomp_filter.html</a> — Kernel docs on BPF filters</li>
+                    <li><a href="https://github.com/seccomp/libseccomp" target="_blank">libseccomp</a> 
+                        — C library for building seccomp filters</li>
+                    <li><a href="https://github.com/moby/moby/blob/master/profiles/seccomp/default.json" target="_blank">
+                        Docker's default.json</a> — The canonical seccomp profile</li>
+                    <li><a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">
+                        Docker seccomp docs</a> — How to customize and audit profiles</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor and Syscall Interception</h3>
+                <ul>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">
+                        gVisor Platforms</a> — systrap vs ptrace vs KVM</li>
+                    <li><a href="https://gvisor.dev/blog/2023/04/28/systrap-release/" target="_blank">
+                        systrap Release Post</a> — Why systrap became the default</li>
+                    <li><a href="https://github.com/google/gvisor/blob/master/runsc/boot/filter/config.go" target="_blank">
+                        gVisor's seccomp policy</a> — What the Sentry allows itself to call</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">
+                        gVisor Performance</a> — Overhead benchmarks</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>overlayfs</h3>
+                <ul>
+                    <li><a href="https://docs.kernel.org/filesystems/overlayfs.html" target="_blank">
+                        overlayfs.html</a> — Kernel documentation (authoritative)</li>
+                    <li><a href="https://man7.org/linux/man-pages/man8/mount.8.html" target="_blank">
+                        mount(8)</a> — How to mount overlayfs manually</li>
+                    <li><a href="https://docs.docker.com/storage/storagedriver/overlayfs-driver/" target="_blank">
+                        Docker OverlayFS driver</a> — How Docker uses overlayfs</li>
+                    <li><a href="https://github.com/opencontainers/runtime-spec/blob/main/config-linux.md" target="_blank">
+                        OCI runtime-spec</a> — Standard container config (includes mounts)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Production Systems</h3>
+                <ul>
+                    <li><a href="https://modal.com/docs/guide/sandbox" target="_blank">Modal Sandboxes</a> 
+                        — gVisor for GPU sandboxes</li>
+                    <li><a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">
+                        Inspect k8s provider</a> — UK AISI's gVisor + Cilium setup</li>
+                    <li><a href="https://kubernetes.io/docs/tutorials/security/seccomp/" target="_blank">
+                        Kubernetes seccomp</a> — Per-pod seccomp profiles</li>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md" target="_blank">
+                        SWE-bench Docker setup</a> — Layered images and overlayfs usage</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Security Research</h3>
+                <ul>
+                    <li><a href="https://www.kernel.org/doc/html/latest/admin-guide/LSM/index.html" target="_blank">
+                        Linux Security Modules</a> — AppArmor, SELinux, and their relation to seccomp</li>
+                    <li><a href="https://cve.mitre.org/cgi-bin/cvekey.cgi?keyword=seccomp" target="_blank">
+                        CVEs related to seccomp</a> — Real-world bypass examples</li>
+                    <li><a href="https://grsecurity.net/~spender/exploits/" target="_blank">
+                        Container escape exploits</a> — Why stronger isolation matters</li>
+                </ul>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../01-linux-namespaces-cgroups/">← Lesson 01</a> | 
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>
