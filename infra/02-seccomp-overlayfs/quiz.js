@@ -1,7 +1,7 @@
 // Quiz functionality for seccomp-bpf and overlayfs lesson
 const quizData = {
     1: {
-        question: "Docker's default seccomp profile blocks around 44 out of 300+ syscalls. Which of the following is NOT blocked by default?",
+        question: "Docker's default seccomp profile blocks a subset of Linux's 300+ syscalls. Which of the following is NOT blocked by default?",
         options: {
             a: "ptrace — attach to and debug another process",
             b: "read — read from a file descriptor",
@@ -10,8 +10,8 @@ const quizData = {
         },
         correct: "b",
         feedback: {
-            correct: "✓ Correct! `read()` is essential for any process to function and is NOT blocked. The default seccomp profile (from https://github.com/moby/moby/blob/master/profiles/seccomp/default.json) blocks dangerous syscalls like ptrace, kexec_load, perf_event_open, bpf, clock_settime, and module loading, but allows core syscalls like read, write, mmap, open, etc. From the Docker docs: 'Seccomp profiles... block around 44 out of 300+ syscalls.' The goal is defense-in-depth: even if a container has sufficient capabilities, these syscalls are still blocked.",
-            wrong: "✗ `read()` is a core syscall that every process needs—it's definitely NOT blocked. Docker's default seccomp profile (https://github.com/moby/moby/blob/master/profiles/seccomp/default.json) blocks dangerous syscalls: ptrace (debugging other processes), kexec_load (kernel replacement), perf_event_open (performance counter side-channels), bpf (loading BPF programs), and others. The profile allows essential syscalls (read, write, mmap, open, fork, etc.) but blocks the ~44 that are risky in multi-tenant environments."
+            correct: "✓ Correct! `read()` is essential for any process to function and is NOT blocked. The default seccomp profile blocks dangerous syscalls like ptrace, kexec_load, perf_event_open, bpf, clock_settime, and module loading, but allows core syscalls like read, write, mmap, open, etc. From the Docker docs (https://docs.docker.com/engine/security/seccomp/), seccomp profiles filter system calls to prevent containers from exploiting kernel vulnerabilities. The goal is defense-in-depth: even if a container has sufficient capabilities, dangerous syscalls are still blocked.",
+            wrong: "✗ `read()` is a core syscall that every process needs—it's definitely NOT blocked. Docker's default seccomp profile blocks dangerous syscalls: ptrace (debugging other processes), kexec_load (kernel replacement), perf_event_open (performance counter side-channels), bpf (loading BPF programs), and others. The profile allows essential syscalls (read, write, mmap, open, fork, etc.) but blocks those that pose security risks in multi-tenant environments. See Docker's seccomp documentation: https://docs.docker.com/engine/security/seccomp/"
         }
     },
     2: {
@@ -66,8 +66,8 @@ const quizData = {
         },
         correct: "b",
         feedback: {
-            correct: "✓ Exactly! overlayfs enables **storage deduplication**. From SWE-bench docs (https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md): 'Images are layered to reduce duplication.' With overlayfs, thousands of containers share the base and environment layers (read-only), and only the per-instance changes are stored separately. The SWE-bench instance cache is already ~2TB *with* layering. Without overlayfs, you'd copy the full 5–10 GB rootfs per instance → 10×+ storage, plus much slower startup (copying GB instead of mounting instantly). overlayfs is orthogonal to seccomp and doesn't affect test correctness—it's purely a storage optimization.",
-            wrong: "✗ The killer problem is **storage explosion**. Without overlayfs, each container needs its own complete copy of base + environment + instance layers (5–10 GB each). SWE-bench's instance cache is ~2TB *with* deduplication (https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md); without it, that would balloon to 10×+ the size. Plus, container startup would be much slower: copying GB of data instead of instant overlayfs mount. overlayfs is orthogonal to seccomp and test correctness—it's a storage optimization, not a functional requirement."
+            correct: "✓ Exactly! overlayfs enables **storage deduplication**. From SWE-bench docs (https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md), images are layered to reduce duplication. With overlayfs, thousands of containers share the base and environment layers (read-only), and only the per-instance changes are stored separately. With cache_level=instance, cached images require ~2,000GB; with cache_level=env (caching base and environment only), it's ~100GB. Without overlayfs, each instance would need its own full copy of all dependencies, multiplying storage requirements substantially and making startup much slower (copying full images instead of instant mount). overlayfs is orthogonal to seccomp and doesn't affect test correctness—it's purely a storage optimization.",
+            wrong: "✗ The killer problem is **storage explosion**. Without overlayfs, each container needs its own complete copy of base + environment + instance layers. From SWE-bench docs (https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/docker_setup.md), cache_level=instance requires ~2,000GB with layering; cache_level=env (base and environment only) requires ~100GB. Without layering, storage would multiply as each instance needed full copies. Plus, container startup would be much slower: copying full images instead of instant overlayfs mount. overlayfs is orthogonal to seccomp and test correctness—it's a storage optimization, not a functional requirement."
         }
     }
 };
