@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 03: runc vs gVisor vs Kata Containers</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 03: runc vs gVisor vs Kata Containers</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Container Runtimes and the Isolation Spectrum</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#oci-runtime-spec">OCI Runtime Spec</a>
+            <a href="#runc">runc</a>
+            <a href="#gvisor">gVisor</a>
+            <a href="#kata">Kata Containers</a>
+            <a href="#comparison">Attack Surface Comparison</a>
+            <a href="#decision-guide">Decision Guide</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Runtime Choice Matters for Evals</h2>
+            <p>
+                In Lessons 01 and 02, you learned the primitives: namespaces, cgroups, seccomp-bpf, and overlayfs. 
+                Now we'll see how three major container runtimes combine these primitives—or go beyond them—to 
+                provide different isolation guarantees.
+            </p>
+            <p>
+                <strong>The fundamental trade-off:</strong> Security vs Performance vs Compatibility.
+            </p>
+            <ul>
+                <li><strong>runc</strong> (and <strong>crun</strong>): Shared kernel. Highest performance, largest attack surface.</li>
+                <li><strong>gVisor (runsc)</strong>: Userspace kernel. Syscalls hit the Sentry, not the host. Overhead on syscall-heavy and I/O-heavy workloads.</li>
+                <li><strong>Kata Containers</strong>: Hardware virtualization. Each pod gets a guest kernel. VM boot cost, per-VM memory, and requires bare metal or nested virt.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>The OCI runtime spec and how containerd shim v2 plugs in runc/runsc/kata-runtime</li>
+                    <li>How runc builds on lessons 01–02 (namespaces, cgroups, seccomp)</li>
+                    <li>gVisor's Sentry + Gofer architecture and platform choices (systrap/ptrace/KVM)</li>
+                    <li>Kata's lightweight VM model with guest kernel, kata-agent, and virtio-fs</li>
+                    <li>Which runtime production systems use (Modal, UK AISI, Northflank, SkyRL)</li>
+                    <li>A decision guide: which runtime for which eval workload</li>
+                    <li>Hands-on: benchmark syscall, I/O, and CPU workloads under runc vs runsc</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ The Isolation Ladder</h3>
+                <p>
+                    Every step up the ladder shrinks the attack surface but adds overhead:
+                </p>
+                <ol>
+                    <li><strong>Plain containers (runc):</strong> Shared kernel. One vuln = escape.</li>
+                    <li><strong>gVisor:</strong> Syscalls hit a userspace kernel (the Sentry). Host kernel exposure is drastically reduced.</li>
+                    <li><strong>microVMs (Firecracker/Kata):</strong> Hardware isolation. Each guest has its own kernel behind KVM.</li>
+                </ol>
+                <p>
+                    For untrusted code—RL policies exploring for reward hacks, adversarial submissions—runc alone is 
+                    not enough. This is why Modal uses gVisor, and why Northflank runs Kata for CPU sandboxes.
+                </p>
+            </div>
+        </section>
+
+        <section id="oci-runtime-spec" class="content-section">
+            <h2>The OCI Runtime Spec: What Runtimes Must Do</h2>
+            <p>
+                The <a href="https://github.com/opencontainers/runtime-spec" target="_blank">Open Container Initiative (OCI) runtime specification</a> 
+                defines a standard interface for low-level container runtimes. A runtime takes:
+            </p>
+            <ul>
+                <li>A <strong>bundle</strong>: a directory with a <code>config.json</code> (the container config) and a rootfs</li>
+                <li>Commands: <code>create</code>, <code>start</code>, <code>kill</code>, <code>delete</code>, <code>state</code></li>
+            </ul>
+            <p>
+                The <code>config.json</code> specifies:
+            </p>
+            <ul>
+                <li>Process args, env, cwd, user</li>
+                <li>Namespaces to create (<code>pid</code>, <code>network</code>, <code>mount</code>, etc.)</li>
+                <li>Mounts (the rootfs plus any bind mounts)</li>
+                <li>Linux-specific: cgroups path and resources (memory.max, cpu.max, pids.max), seccomp profile, capabilities, AppArmor/SELinux labels</li>
+            </ul>
+            <p>
+                <strong>Key insight:</strong> The spec defines <em>what</em> to isolate, not <em>how</em>. runc, runsc, and kata-runtime 
+                all implement this spec but use completely different isolation mechanisms underneath.
+            </p>
+
+            <h3>containerd shim v2: How Runtimes Plug In</h3>
+            <p>
+                In Kubernetes (and Docker via containerd), the <strong>containerd shim v2</strong> is the integration point 
+                (<a href="https://github.com/containerd/containerd/blob/main/runtime/v2/README.md" target="_blank">containerd runtime v2 README</a>). 
+                Each runtime provides a shim binary:
+            </p>
+            <ul>
+                <li><strong>runc:</strong> <code>containerd-shim-runc-v2</code></li>
+                <li><strong>gVisor (runsc):</strong> <code>containerd-shim-runsc-v1</code> (from <a href="https://gvisor.dev/docs/user_guide/containerd/quick_start/" target="_blank">gVisor containerd quick start</a>)</li>
+                <li><strong>Kata:</strong> <code>containerd-shim-kata-v2</code> (from <a href="https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/containerd-kata.md" target="_blank">Kata containerd guide</a>)</li>
+            </ul>
+            <p>
+                The shim starts the container and manages its lifecycle. containerd talks to the shim, which talks to the 
+                low-level runtime (runc/runsc/kata-runtime).
+            </p>
+
+            <h3>Kubernetes RuntimeClass</h3>
+            <p>
+                From <a href="https://kubernetes.io/docs/concepts/containers/runtime-class/" target="_blank">Kubernetes RuntimeClass</a>:
+            </p>
+            <blockquote>
+                "RuntimeClass is a feature for selecting the container runtime configuration. The container runtime 
+                configuration is used to run a Pod's containers."
+            </blockquote>
+            <p>
+                You define a RuntimeClass (e.g., <code>gvisor</code>, <code>kata</code>) that points to a shim, then set 
+                <code>spec.runtimeClassName</code> in your pod spec. Example from 
+                <a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">UK AISI's Inspect k8s provider</a>, 
+                which uses gVisor:
+            </p>
+            <pre><code class="language-yaml">apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+handler: runsc</code></pre>
+            <p>
+                Pods with <code>runtimeClassName: gvisor</code> run under runsc instead of runc.
+            </p>
+
+            <div class="mermaid">
+graph TB
+    K8s[Kubernetes API Server]
+    Kubelet[kubelet]
+    Containerd[containerd]
+    
+    subgraph "Runtime Shims"
+        ShimRunc[containerd-shim-runc-v2]
+        ShimRunsc[containerd-shim-runsc-v1]
+        ShimKata[containerd-shim-kata-v2]
+    end
+    
+    subgraph "Low-Level Runtimes"
+        Runc[runc<br/>libcontainer]
+        Runsc[runsc<br/>gVisor Sentry]
+        Kata[kata-runtime<br/>QEMU/FC/CHyp]
+    end
+    
+    K8s -->|pod spec| Kubelet
+    Kubelet -->|CRI| Containerd
+    Containerd -->|runtime=runc| ShimRunc
+    Containerd -->|runtime=runsc| ShimRunsc
+    Containerd -->|runtime=kata| ShimKata
+    
+    ShimRunc --> Runc
+    ShimRunsc --> Runsc
+    ShimKata --> Kata
+    
+    Runc -->|syscalls| HostKernel[Host Kernel]
+    Runsc -->|Sentry intercepts| HostKernel
+    Kata -->|guest kernel| GuestKernel[Guest Kernel in VM]
+    GuestKernel -.KVM/hypervisor.-> HostKernel
+    
+    style K8s fill:#1e293b,stroke:#3b82f6,stroke-width:2px
+    style Runc fill:#8b5cf6,stroke:#f1f5f9
+    style Runsc fill:#8b5cf6,stroke:#f1f5f9
+    style Kata fill:#8b5cf6,stroke:#f1f5f9
+    style HostKernel fill:#ef4444,stroke:#f1f5f9,stroke-width:3px
+    style GuestKernel fill:#10b981,stroke:#f1f5f9,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> Kubernetes → containerd → shims → low-level runtimes. runc and runsc hit the host 
+                kernel (directly or via Sentry); Kata runs a guest kernel in a VM.
+            </p>
+        </section>
+
+        <section id="runc" class="content-section">
+            <h2>runc: The Reference OCI Runtime</h2>
+            <p>
+                <strong>Source:</strong> <a href="https://github.com/opencontainers/runc" target="_blank">github.com/opencontainers/runc</a>
+            </p>
+            <p>
+                runc is the reference implementation of the OCI runtime spec. It's written in Go and powers Docker, 
+                containerd, CRI-O, and most Kubernetes clusters by default.
+            </p>
+
+            <h3>How runc Works: Lessons 01–02 in Action</h3>
+            <p>
+                runc's core is <code>libcontainer/</code> 
+                (<a href="https://github.com/opencontainers/runc/tree/main/libcontainer" target="_blank">libcontainer code</a>), 
+                which implements:
+            </p>
+            <ol>
+                <li><strong>Namespace creation</strong> (<code>libcontainer/nsenter</code>): Calls <code>unshare(2)</code> and 
+                <code>setns(2)</code> to enter the new namespaces (mnt, pid, net, uts, ipc, user, cgroup, time).</li>
+                <li><strong>cgroups setup</strong> (<code>libcontainer/cgroups</code>): Creates a cgroup v2 (or v1) hierarchy 
+                and writes limits (<code>memory.max</code>, <code>cpu.max</code>, <code>pids.max</code>, <code>io.max</code>).</li>
+                <li><strong>seccomp-bpf</strong> (<code>libcontainer/seccomp</code>): Applies a BPF filter. Docker's default 
+                profile disables "around 44 system calls out of 300+" 
+                (<a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">Docker seccomp docs</a>).</li>
+                <li><strong>overlayfs mount</strong>: Layers the read-only image and a writable upper layer.</li>
+                <li><strong>pivot_root</strong>: Changes the root filesystem to the container's rootfs, isolating it from the host.</li>
+                <li><strong>Drop capabilities</strong>: Removes dangerous capabilities (e.g., <code>CAP_SYS_ADMIN</code>, <code>CAP_NET_ADMIN</code> 
+                unless needed).</li>
+                <li><strong>Exec the entrypoint</strong>: Finally, <code>execve(2)</code> the container's init process.</li>
+            </ol>
+            <p>
+                <strong>Where syscalls go:</strong> Directly to the <strong>host kernel</strong>. This is the highest performance 
+                path (no interception), but every syscall the workload makes is a potential attack vector.
+            </p>
+
+            <h3>Performance Characteristics</h3>
+            <ul>
+                <li><strong>Near-native:</strong> Syscall, I/O, and CPU overhead is negligible (typically <1%).</li>
+                <li><strong>Density:</strong> Thousands of containers per host. 
+                <a href="https://github.com/NovaSky-AI/SkyRL-OpenHands" target="_blank">SkyRL-OpenHands</a> reports "80–100 containers 
+                per replica on nodes with just 16 CPUs" (vendor claim) using <strong>crun</strong> (a lighter C implementation of runc).</li>
+                <li><strong>Cold start:</strong> Container creation is ~1–10ms (mostly cgroup setup and namespace entry). Image pull dominates cold start.</li>
+            </ul>
+
+            <h3>Who Uses runc</h3>
+            <ul>
+                <li><strong>SWE-bench:</strong> Default Docker runtime 
+                (<a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repo</a>).</li>
+                <li><strong>SWE-Gym:</strong> Pre-built per-instance images on Docker Hub 
+                (<a href="https://github.com/SWE-Gym/SWE-Gym" target="_blank">SWE-Gym repo</a>).</li>
+                <li><strong>OpenHands:</strong> Agent-server runs in runc containers 
+                (<a href="https://github.com/OpenHands/OpenHands" target="_blank">OpenHands repo</a>).</li>
+                <li><strong>SkyRL-OpenHands:</strong> crun + aiodocker for density 
+                (<a href="https://github.com/NovaSky-AI/SkyRL-OpenHands" target="_blank">SkyRL-OpenHands</a>).</li>
+                <li><strong>DeepSWE:</strong> Started with Docker (runc), moved to Kubernetes when dockerd crashed under load 
+                (<a href="https://www.together.ai/blog/deepswe" target="_blank">DeepSWE blog</a>).</li>
+            </ul>
+
+            <div class="info-box warning">
+                <h3>⚠️ Security Implication</h3>
+                <p>
+                    From <a href="https://github.com/google/gvisor" target="_blank">gVisor README</a>:
+                </p>
+                <blockquote>
+                    "While using a single, shared kernel allows for efficiency and performance gains, it also means that 
+                    <strong>container escape is possible with a single vulnerability</strong>."
+                </blockquote>
+                <p>
+                    runc is appropriate for:
+                </p>
+                <ul>
+                    <li><strong>Trusted code:</strong> Your own test suites, known open-source test harnesses</li>
+                    <li><strong>Single-tenant:</strong> One user per node (no multi-tenancy)</li>
+                    <li><strong>Defense in depth:</strong> Network isolation, seccomp allowlists, read-only rootfs</li>
+                </ul>
+                <p>
+                    For adversarial evals or multi-tenant environments, use gVisor or microVMs.
+                </p>
+            </div>
+        </section>
+
+        <section id="gvisor" class="content-section">
+            <h2>gVisor: A Userspace Kernel for Containers</h2>
+            <p>
+                <strong>Source:</strong> <a href="https://github.com/google/gvisor" target="_blank">github.com/google/gvisor</a><br>
+                <strong>Documentation:</strong> <a href="https://gvisor.dev/docs/" target="_blank">gvisor.dev/docs</a>
+            </p>
+            <p>
+                gVisor is <strong>not</strong> a container runtime in the traditional sense. It's a userspace kernel—an 
+                "application kernel"—that intercepts syscalls before they reach the host kernel.
+            </p>
+
+            <h3>Architecture: Sentry + Gofer</h3>
+            <p>
+                From <a href="https://gvisor.dev/docs/architecture_guide/intro/" target="_blank">gVisor Architecture Guide</a>:
+            </p>
+            <ul>
+                <li><strong>Sentry:</strong> The userspace kernel, written in Go. It implements ~280 Linux syscalls 
+                (per <a href="https://gvisor.dev/docs/user_guide/compatibility/" target="_blank">compatibility docs</a>). 
+                The workload's syscalls are intercepted by a <em>platform</em> (see below) and handled by the Sentry.</li>
+                <li><strong>Gofer:</strong> A per-sandbox file proxy. The Sentry itself has no direct filesystem access; 
+                it sends file I/O requests to the Gofer over a UNIX socket (9P protocol). The Gofer does the actual 
+                <code>open(2)</code>, <code>read(2)</code>, <code>write(2)</code> on the host.</li>
+            </ul>
+            <p>
+                <strong>Why this matters:</strong> The Sentry never directly opens host files or makes unfiltered syscalls. 
+                Its own syscall surface to the host is tiny and heavily filtered. From 
+                <a href="https://gvisor.dev/docs/architecture_guide/security/" target="_blank">gVisor security docs</a>:
+            </p>
+            <blockquote>
+                "The Sentry's own access to the host is restricted by seccomp, namespaces, and capabilities. The host kernel 
+                attack surface is drastically reduced."
+            </blockquote>
+
+            <div class="mermaid">
+graph TB
+    Workload[Workload Process<br/>e.g., python eval.py]
+    
+    subgraph "gVisor Sandbox"
+        Sentry[Sentry<br/>userspace kernel<br/>~280 syscalls]
+        Gofer[Gofer<br/>file proxy<br/>9P protocol]
+    end
+    
+    HostKernel[Host Kernel]
+    HostFS[Host Filesystem]
+    
+    Workload -->|"syscall (open, read, fork, ...)"| Platform[Platform<br/>systrap/KVM/ptrace]
+    Platform -->|intercept| Sentry
+    
+    Sentry -->|"file I/O (9P)"| Gofer
+    Gofer -->|"open/read/write"| HostFS
+    
+    Sentry -->|"limited syscalls<br/>(filtered by seccomp)"| HostKernel
+    Gofer -->|"file syscalls<br/>(also filtered)"| HostKernel
+    
+    style Workload fill:#8b5cf6,stroke:#f1f5f9
+    style Sentry fill:#10b981,stroke:#f1f5f9,stroke-width:2px
+    style Gofer fill:#f59e0b,stroke:#f1f5f9
+    style HostKernel fill:#ef4444,stroke:#f1f5f9,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> gVisor architecture. Workload syscalls are intercepted by a platform and handled 
+                by the Sentry. File I/O goes through the Gofer. Only the Sentry and Gofer talk to the host kernel, with 
+                heavy filtering.
+            </p>
+
+            <h3>Platforms: How Syscalls Are Intercepted</h3>
+            <p>
+                From <a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">gVisor Platforms</a>:
+            </p>
+            <ul>
+                <li><strong>systrap</strong> (default since mid-2023): Uses <code>SECCOMP_RET_TRAP</code> to trap syscalls 
+                (the same mechanism you learned in Lesson 02). When the workload makes a syscall, the seccomp filter returns 
+                <code>SECCOMP_RET_TRAP</code>, which sends a <code>SIGSYS</code> signal. The Sentry's signal handler catches 
+                it and emulates the syscall. Fast on modern kernels; no KVM required.</li>
+                <li><strong>KVM</strong>: Runs the workload in a VM-like context (using KVM but <em>without</em> a guest kernel). 
+                Syscalls trigger VM exits, which the Sentry handles. Best performance on bare metal with KVM. Not available 
+                in nested virt or on cloud VMs without nested virt.</li>
+                <li><strong>ptrace</strong>: Uses <code>ptrace(2)</code> to intercept syscalls. Slower and deprecated; kept 
+                for compatibility.</li>
+            </ul>
+            <p>
+                <strong>Performance note:</strong> systrap is now the default because it works everywhere (no KVM needed) and 
+                is much faster than ptrace. On bare metal with KVM, the KVM platform is slightly faster.
+            </p>
+
+            <h3>Performance Characteristics</h3>
+            <p>
+                From <a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">gVisor Performance Guide</a>:
+            </p>
+            <ul>
+                <li><strong>Syscall overhead:</strong> Each syscall intercepted by the platform has overhead (typically 
+                a few hundred nanoseconds to a few microseconds, depending on the platform). For syscall-heavy workloads 
+                (e.g., <code>getpid()</code> in a tight loop), this adds up.</li>
+                <li><strong>File I/O overhead:</strong> File operations go through the Sentry → Gofer → host kernel path. 
+                This adds latency, especially for many small reads/writes. The Sentry caches file data and metadata, but 
+                cold I/O is slower than native.</li>
+                <li><strong>CPU-bound workloads:</strong> Once a workload is running CPU-bound code (tight loops, computation), 
+                there's little overhead because no syscalls are being made.</li>
+            </ul>
+            <p>
+                <strong>Real-world numbers:</strong> The gVisor team's own benchmarks are in the 
+                <a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">performance guide</a>, 
+                but they don't publish hard percentages. For eval workloads:
+            </p>
+            <ul>
+                <li><strong>HumanEval-style unit tests:</strong> Mostly CPU-bound after imports. Overhead is minimal (few percent).</li>
+                <li><strong>SWE-bench-style builds:</strong> <code>pip install</code>, <code>pytest</code> discovery, and 
+                git operations are syscall-heavy and I/O-heavy. Expect 10–30% slowdown (measure on your workload).</li>
+            </ul>
+
+            <h3>Checkpoint/Restore</h3>
+            <p>
+                From <a href="https://gvisor.dev/docs/user_guide/checkpoint_restore/" target="_blank">gVisor Checkpoint/Restore</a>:
+            </p>
+            <p>
+                Because the Sentry <em>is</em> the kernel, gVisor can checkpoint and restore the entire kernel state without 
+                needing kernel cooperation (unlike CRIU, which has to serialize host-kernel state). Features:
+            </p>
+            <ul>
+                <li><strong>Lazy restore:</strong> <code>runsc restore --background</code> pages memory in lazily.</li>
+                <li><strong>Application-driven checkpoint:</strong> Write to <code>/proc/gvisor/checkpoint</code> from inside 
+                the sandbox to trigger a checkpoint.</li>
+                <li><strong>GPU support:</strong> <code>cuda-checkpoint</code> tool for checkpointing GPU state 
+                (see <a href="https://gvisor.dev/docs/user_guide/checkpoint_restore/" target="_blank">checkpoint docs</a>).</li>
+            </ul>
+
+            <h3>Who Uses gVisor</h3>
+            <ul>
+                <li><strong>Modal:</strong> "GPU Sandboxes are only supported with <code>runtime="gvisor"</code>" 
+                (<a href="https://modal.com/docs/guide/sandbox" target="_blank">Modal sandbox docs</a>). Default runtime 
+                for most sandboxes.</li>
+                <li><strong>Northflank:</strong> GPU sandboxes run on gVisor; CPU sandboxes run on Kata 
+                (<a href="https://northflank.com/docs/v1/application/sandboxes/sandboxes-on-northflank-cloud" target="_blank">Northflank docs</a>).</li>
+                <li><strong>UK AISI Inspect k8s provider:</strong> Uses gVisor RuntimeClass 
+                (<a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">inspect_k8s_sandbox</a>).</li>
+                <li><strong>Google Cloud Run, App Engine:</strong> gVisor powers Google's own multi-tenant container platforms 
+                (mentioned in <a href="https://gvisor.dev/" target="_blank">gvisor.dev home</a>).</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>When to Use gVisor</h3>
+                <ul>
+                    <li><strong>Multi-tenant or untrusted code:</strong> Strong isolation without VM overhead</li>
+                    <li><strong>GPU inside the sandbox:</strong> gVisor supports GPU passthrough (nvproxy); Kata+Firecracker does not 
+                    (<a href="https://github.com/kata-containers/kata-containers/blob/main/docs/hypervisors.md" target="_blank">Kata hypervisors table</a>)</li>
+                    <li><strong>Fast snapshot/restore:</strong> gVisor's checkpoint/restore is more robust than CRIU</li>
+                    <li><strong>No KVM available:</strong> systrap platform works on cloud VMs without nested virt</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="kata" class="content-section">
+            <h2>Kata Containers: Lightweight VMs as Pods</h2>
+            <p>
+                <strong>Source:</strong> <a href="https://github.com/kata-containers/kata-containers" target="_blank">github.com/kata-containers/kata-containers</a><br>
+                <strong>Documentation:</strong> <a href="https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md" target="_blank">Kata architecture</a>
+            </p>
+            <p>
+                Kata Containers is an OCI runtime that launches each pod (or container) in a lightweight VM with its own 
+                <strong>guest kernel</strong>. The workload never directly touches the host kernel—it only sees the guest kernel.
+            </p>
+
+            <h3>Architecture: VMM + kata-agent</h3>
+            <p>
+                From <a href="https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md" target="_blank">Kata architecture docs</a>:
+            </p>
+            <ul>
+                <li><strong>kata-runtime:</strong> The OCI-compatible frontend. It receives OCI commands and orchestrates 
+                VM creation.</li>
+                <li><strong>VMM (Virtual Machine Monitor):</strong> The hypervisor. Kata supports multiple VMMs 
+                (see <a href="https://github.com/kata-containers/kata-containers/blob/main/docs/hypervisors.md" target="_blank">hypervisors.md</a>):
+                    <ul>
+                        <li><strong>QEMU:</strong> Full-featured, mature. Supports GPU passthrough, hotplug, live migration.</li>
+                        <li><strong>Cloud Hypervisor:</strong> Rust VMM, built for modern cloud workloads. Supports CPU/memory/PCI 
+                        hotplug, live migration.</li>
+                        <li><strong>Firecracker:</strong> Minimal Rust VMM from AWS. Fast boot, low memory overhead. 
+                        <strong>No GPU support</strong> (per the hypervisors table).</li>
+                        <li><strong>Dragonball, StratoVirt:</strong> Alternative lightweight VMMs.</li>
+                    </ul>
+                </li>
+                <li><strong>kata-agent:</strong> Runs inside the guest VM. The runtime talks to the agent over <strong>vsock</strong> 
+                (a virtual socket) to execute commands, manage processes, and handle I/O.</li>
+                <li><strong>virtio-fs:</strong> A shared filesystem between host and guest. The container rootfs is mounted via 
+                virtio-fs, so file I/O goes through the hypervisor but doesn't require copying the whole rootfs into the VM.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    K8s[Kubernetes kubelet]
+    Containerd[containerd]
+    KataRuntime[kata-runtime<br/>OCI interface]
+    
+    subgraph "Lightweight VM (per pod)"
+        GuestKernel[Guest Kernel]
+        KataAgent[kata-agent<br/>process manager]
+        Workload[Workload Process<br/>e.g., python eval.py]
+        GuestFS[Guest FS<br/>virtio-fs mount]
+    end
+    
+    VMM[VMM<br/>QEMU/Cloud Hypervisor/Firecracker]
+    HostKernel[Host Kernel<br/>KVM]
+    HostFS[Host Filesystem]
+    
+    K8s -->|CRI| Containerd
+    Containerd -->|shim-kata-v2| KataRuntime
+    KataRuntime -->|"launch VM"| VMM
+    VMM -.vsock.-> KataAgent
+    
+    KataAgent --> Workload
+    Workload -->|syscalls| GuestKernel
+    GuestKernel -.hypercalls.-> VMM
+    VMM --> HostKernel
+    
+    GuestFS -.virtio-fs.-> HostFS
+    
+    style Workload fill:#8b5cf6,stroke:#f1f5f9
+    style GuestKernel fill:#10b981,stroke:#f1f5f9,stroke-width:2px
+    style VMM fill:#f59e0b,stroke:#f1f5f9
+    style HostKernel fill:#ef4444,stroke:#f1f5f9,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> Kata Containers architecture. Each pod runs in a lightweight VM with a guest kernel. 
+                The kata-agent manages processes inside. File I/O goes through virtio-fs.
+            </p>
+
+            <h3>Performance Characteristics</h3>
+            <ul>
+                <li><strong>Boot overhead:</strong> VM boot adds latency. With Firecracker, the spec target is ≤125ms from 
+                <code>InstanceStart</code> to guest init 
+                (<a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">Firecracker SPECIFICATION.md</a>). 
+                With QEMU, boot can be hundreds of milliseconds.</li>
+                <li><strong>Memory overhead:</strong> Each VM needs memory for the guest kernel and kata-agent (typically 
+                50–150 MB, depending on the VMM and kernel config).</li>
+                <li><strong>Syscall overhead:</strong> Once inside the VM, syscalls are native (to the guest kernel). Hypercalls 
+                (guest kernel → host kernel) are fast with KVM.</li>
+                <li><strong>I/O overhead:</strong> virtio-fs adds some overhead vs native filesystem access, but it's much 
+                faster than gVisor's Gofer for large files.</li>
+                <li><strong>Density:</strong> Lower than runc or gVisor, because each VM has per-VM memory. Northflank documents 
+                boot "in under a second" for Kata (vendor claim, 
+                <a href="https://northflank.com/docs/v1/application/sandboxes/sandboxes-on-northflank-cloud" target="_blank">Northflank docs</a>).</li>
+            </ul>
+
+            <h3>Who Uses Kata</h3>
+            <ul>
+                <li><strong>Northflank:</strong> CPU sandboxes run on Kata; GPU sandboxes run on gVisor 
+                (<a href="https://northflank.com/docs/v1/application/sandboxes/sandboxes-on-northflank-cloud" target="_blank">Northflank docs</a>).</li>
+                <li><strong>Azure Kubernetes Service (AKS):</strong> Offers Kata as a RuntimeClass for untrusted workloads 
+                (<a href="https://learn.microsoft.com/en-us/azure/aks/use-pod-sandboxing" target="_blank">AKS pod sandboxing docs</a>).</li>
+                <li><strong>IBM Cloud:</strong> Uses Kata for its Kubernetes service 
+                (mentioned in <a href="https://github.com/kata-containers/kata-containers" target="_blank">Kata README</a>).</li>
+            </ul>
+
+            <h3>Snapshot/Restore Support</h3>
+            <p>
+                Snapshot/restore depends on the VMM. Firecracker has full and diff snapshots 
+                (<a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">Firecracker snapshot docs</a>). 
+                Cloud Hypervisor supports snapshots and live migration. QEMU supports snapshots but Kata's integration is less 
+                mature than E2B's direct Firecracker orchestration. For production snapshot/fork workflows, most platforms 
+                use Firecracker directly (E2B, Fly Machines) or gVisor (Modal).
+            </p>
+
+            <div class="info-box">
+                <h3>When to Use Kata</h3>
+                <ul>
+                    <li><strong>Strongest isolation:</strong> Hardware virtualization, guest kernel, no shared kernel attack surface</li>
+                    <li><strong>Docker-in-sandbox or nested containers:</strong> The guest kernel supports full Docker/K8s inside. 
+                    Modal sends these to <code>runtime="vm"</code> (which may be Kata or Firecracker; Modal's docs don't specify the VMM).</li>
+                    <li><strong>Custom kernel:</strong> You control the guest kernel and can add custom patches or modules</li>
+                    <li><strong>Regulatory compliance:</strong> Some compliance regimes require VM-level isolation</li>
+                </ul>
+                <p>
+                    <strong>Avoid Kata for:</strong>
+                </p>
+                <ul>
+                    <li><strong>GPU workloads:</strong> Firecracker has no GPU support; QEMU/Cloud Hypervisor do, but gVisor 
+                    is the more common GPU sandbox path</li>
+                    <li><strong>Extreme density:</strong> VM memory overhead limits density vs runc/gVisor</li>
+                    <li><strong>Fast snapshot/fork:</strong> gVisor's checkpoint/restore or E2B's direct Firecracker orchestration 
+                    is more mature</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="comparison" class="content-section">
+            <h2>Attack Surface Comparison</h2>
+            <p>
+                The fundamental question: <strong>What can an attacker compromise if they fully control the workload?</strong>
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Runtime</th>
+                        <th>Boundary</th>
+                        <th>Attack Surface</th>
+                        <th>Escape Scenario</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>runc</strong></td>
+                        <td>Host kernel syscall surface, filtered by seccomp</td>
+                        <td>~300 syscalls minus ~44 blocked by Docker's default profile = ~256 syscalls exposed</td>
+                        <td>A kernel vulnerability in one of the allowed syscalls. The attacker can exploit it directly 
+                        because the workload makes syscalls to the host kernel.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>gVisor</strong></td>
+                        <td>Sentry (userspace kernel) + Sentry's own filtered syscalls to host</td>
+                        <td>The Sentry's ~280 implemented syscalls (in Go) + the Sentry's own restricted syscall surface 
+                        to the host (much smaller, ~20–30 syscalls per gVisor security docs, though exact count varies).</td>
+                        <td>1) Exploit the Sentry itself (a bug in the Go syscall implementation), or 2) Exploit a vulnerability 
+                        in one of the few syscalls the Sentry makes to the host. Much harder than runc because the Sentry 
+                        is a smaller, more auditable codebase than Linux, and its host syscall surface is tiny.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Kata</strong></td>
+                        <td>Hypervisor (KVM + VMM) + virtio devices</td>
+                        <td>The guest kernel's syscall surface (internal to the VM, not host), plus the VMM's device emulation 
+                        (virtio net/block/vsock). KVM itself is a small attack surface (~50k lines vs 30M lines in Linux).</td>
+                        <td>1) Exploit the guest kernel (only gives you control of the VM, not the host), then 2) exploit 
+                        a hypervisor or virtio device vulnerability to escape to the host. This is a much higher bar than 
+                        runc or gVisor. Hardware-level isolation (Intel VT-x/AMD-V) enforces the boundary.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Real-World Escapes</h3>
+            <p>
+                <strong>Container escapes (runc):</strong> Multiple CVEs in runc and the kernel have allowed container escape. 
+                Notable examples:
+            </p>
+            <ul>
+                <li><strong>CVE-2019-5736</strong> (runc): Overwriting the runc binary on the host by exploiting 
+                <code>/proc/self/exe</code>. Patched in runc 1.0-rc7.</li>
+                <li><strong>Dirty Cow (CVE-2016-5195)</strong>: Kernel race condition allowing write access to read-only 
+                memory mappings. Could be exploited from containers to write to host files.</li>
+            </ul>
+            <p>
+                <strong>gVisor:</strong> No known in-the-wild escapes to date. The Sentry has had bugs, but they typically 
+                result in Sentry crashes (denial of service inside the sandbox) rather than host compromise.
+            </p>
+            <p>
+                <strong>Kata/VM escapes:</strong> KVM and hypervisor escapes exist (e.g., Spectre/Meltdown side channels, 
+                specific QEMU device emulation bugs), but they are rare and typically require chaining multiple vulnerabilities.
+            </p>
+
+            <div class="info-box">
+                <h3>Key Insight: Defense in Depth</h3>
+                <p>
+                    No isolation mechanism is perfect. Production systems layer multiple defenses:
+                </p>
+                <ul>
+                    <li><strong>Network isolation:</strong> No network by default (Inspect AI), or strict egress filtering 
+                    (E2B nftables, Modal, Daytona allowlists)</li>
+                    <li><strong>Read-only rootfs:</strong> Prevent writes to system directories</li>
+                    <li><strong>Seccomp allowlists:</strong> Even with gVisor or Kata, apply seccomp to reduce the available 
+                    syscall set</li>
+                    <li><strong>Resource limits:</strong> cgroups to prevent DoS by exhaustion</li>
+                    <li><strong>Monitoring:</strong> Detect anomalous syscalls, process trees, or network activity</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="decision-guide" class="content-section">
+            <h2>Decision Guide: Which Runtime for Your Eval Workload</h2>
+            <p>
+                Choose based on threat model, performance requirements, and infrastructure constraints.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Workload Type</th>
+                        <th>Recommended Runtime</th>
+                        <th>Rationale</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Pure-Python unit tests</strong><br>(HumanEval, MBPP)</td>
+                        <td><strong>runc</strong> or <strong>crun</strong></td>
+                        <td>CPU-bound after imports. Threat model: trusted code from known datasets. Highest density 
+                        (hundreds per host). Use seccomp, no network, cgroup limits, read-only rootfs.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>SWE-bench-style builds</strong><br>(pip install, pytest, git clone)</td>
+                        <td><strong>runc</strong> for trusted, <strong>gVisor</strong> for multi-tenant or untrusted</td>
+                        <td>Syscall-heavy and I/O-heavy. runc is fastest (SWE-bench, DeepSWE use it). gVisor adds 
+                        10–30% overhead but much stronger isolation. Kata is overkill unless you need nested containers 
+                        or a custom kernel.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>RL policy rollouts</strong><br>(agentic evals, multi-turn)</td>
+                        <td><strong>gVisor</strong> (or microVMs if you need snapshot/fork)</td>
+                        <td>Policies explore for reward hacks. Some hacks look like escape attempts. gVisor's Sentry 
+                        significantly reduces attack surface. If you need fork-on-demand for GRPO/tree search, use 
+                        gVisor checkpoint/restore or E2B's Firecracker fork.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU jobs</strong><br>(inference, training inside sandbox)</td>
+                        <td><strong>gVisor</strong></td>
+                        <td>Modal: "GPU Sandboxes are only supported with runtime=gvisor". Northflank also uses gVisor 
+                        for GPU. Kata+Firecracker has no GPU support. Kata+QEMU/Cloud Hypervisor can do GPU passthrough 
+                        but is less common.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Docker-in-sandbox</strong><br>(nested containers, FUSE, custom kernel modules)</td>
+                        <td><strong>Kata</strong> (or direct Firecracker/Cloud Hypervisor)</td>
+                        <td>Needs a full guest kernel. Modal sends these to <code>runtime="vm"</code>. gVisor's Sentry 
+                        doesn't fully support nested containers or FUSE.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Multi-tenant SaaS</strong><br>(different customers' code on same host)</td>
+                        <td><strong>gVisor</strong> or <strong>Kata</strong></td>
+                        <td>runc is insufficient for untrusted multi-tenant workloads. gVisor is lower overhead and works 
+                        on cloud VMs; Kata needs bare metal or nested virt.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Regulated environments</strong><br>(FedRAMP, PCI-DSS, HIPAA)</td>
+                        <td><strong>Kata</strong></td>
+                        <td>Some compliance frameworks require VM-level isolation. Check your specific requirements.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Infrastructure Constraints</h3>
+            <ul>
+                <li><strong>No KVM (cloud VM without nested virt):</strong> Use runc or gVisor (systrap platform). 
+                Kata requires KVM.</li>
+                <li><strong>Bare metal with KVM:</strong> All options available. gVisor KVM platform is fastest; 
+                Kata provides strongest isolation.</li>
+                <li><strong>Kubernetes:</strong> Use RuntimeClass to select. runc is default; install gVisor or Kata 
+                via their respective K8s integrations.</li>
+                <li><strong>Extreme density (1000+ sandboxes per host):</strong> runc or gVisor. Kata's per-VM memory 
+                limits density.</li>
+            </ul>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Benchmark runc vs gVisor</h2>
+            <p>
+                In this exercise, you'll measure the overhead of gVisor vs runc on three workload types: syscall-heavy, 
+                I/O-heavy, and CPU-bound. You'll run the same Python script under Docker with <code>--runtime=runc</code> 
+                and <code>--runtime=runsc</code>, then compare the timings.
+            </p>
+
+            <div class="info-box">
+                <h3>Prerequisites</h3>
+                <ul>
+                    <li>Docker installed (any recent version)</li>
+                    <li>gVisor (runsc) installed and registered as a Docker runtime 
+                    (see <a href="https://gvisor.dev/docs/user_guide/install/" target="_blank">gVisor install guide</a>)</li>
+                    <li>Python 3.7+ (inside the Docker images; we'll use <code>python:3.11-slim</code>)</li>
+                </ul>
+            </div>
+
+            <h3>Step 1: Install gVisor and Register runsc as a Docker Runtime</h3>
+            <p>
+                Follow the <a href="https://gvisor.dev/docs/user_guide/install/" target="_blank">official gVisor install guide</a>. 
+                On Ubuntu/Debian:
+            </p>
+            <pre><code class="language-bash"># Add the gVisor repository and install runsc
+(
+  set -e
+  ARCH=$(uname -m)
+  URL=https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}
+  wget ${URL}/runsc ${URL}/runsc.sha512 \
+    ${URL}/containerd-shim-runsc-v1 ${URL}/containerd-shim-runsc-v1.sha512
+  sha512sum -c runsc.sha512 \
+    -c containerd-shim-runsc-v1.sha512
+  rm -f *.sha512
+  chmod a+rx runsc containerd-shim-runsc-v1
+  sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin
+)
+
+# Register runsc as a Docker runtime
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "runtimes": {
+    "runsc": {
+      "path": "/usr/local/bin/runsc",
+      "runtimeArgs": [
+        "--platform=systrap"
+      ]
+    }
+  }
+}
+EOF
+
+sudo systemctl restart docker
+
+# Verify
+docker run --rm --runtime=runsc hello-world</code></pre>
+            <p>
+                If the hello-world container runs successfully, gVisor is installed.
+            </p>
+
+            <h3>Step 2: The Benchmark Script</h3>
+            <p>
+                Create <code>benchmark.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Benchmark script comparing syscall-heavy, I/O-heavy, and CPU-bound workloads.
+
+This script times three types of work:
+1. Syscall-heavy: many getpid() calls
+2. I/O-heavy: many small file writes and reads
+3. CPU-bound: computing primes
+
+Run this under runc and runsc to measure overhead.
+"""
+
+import os
+import sys
+import time
+import tempfile
+
+
+def benchmark_syscalls(n=1_000_000):
+    """
+    Syscall-heavy: call getpid() in a tight loop.
+    This measures syscall interception overhead.
+    """
+    start = time.perf_counter()
+    for _ in range(n):
+        os.getpid()
+    elapsed = time.perf_counter() - start
+    return elapsed
+
+
+def benchmark_io(n=10_000):
+    """
+    I/O-heavy: write and read many small files.
+    This measures file I/O overhead (Gofer path in gVisor).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        start = time.perf_counter()
+        
+        # Write phase
+        for i in range(n):
+            path = os.path.join(tmpdir, f"file_{i}.txt")
+            with open(path, "w") as f:
+                f.write(f"data {i}\n")
+        
+        # Read phase
+        for i in range(n):
+            path = os.path.join(tmpdir, f"file_{i}.txt")
+            with open(path, "r") as f:
+                _ = f.read()
+        
+        elapsed = time.perf_counter() - start
+    return elapsed
+
+
+def is_prime(n):
+    if n < 2:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+
+def benchmark_cpu(limit=100_000):
+    """
+    CPU-bound: count primes up to limit.
+    This should show minimal overhead once running (no syscalls in the hot loop).
+    """
+    start = time.perf_counter()
+    count = sum(1 for i in range(2, limit) if is_prime(i))
+    elapsed = time.perf_counter() - start
+    return elapsed, count
+
+
+def main():
+    print("=== Container Runtime Benchmark ===")
+    print(f"Python {sys.version}")
+    print(f"PID: {os.getpid()}")
+    print()
+    
+    print("1. Syscall-heavy (1M getpid calls)...")
+    syscall_time = benchmark_syscalls(1_000_000)
+    print(f"   Time: {syscall_time:.4f} seconds")
+    print(f"   Per-call: {syscall_time / 1_000_000 * 1e6:.2f} microseconds")
+    print()
+    
+    print("2. I/O-heavy (10K small file write+read)...")
+    io_time = benchmark_io(10_000)
+    print(f"   Time: {io_time:.4f} seconds")
+    print(f"   Per-operation: {io_time / 10_000 * 1000:.2f} milliseconds")
+    print()
+    
+    print("3. CPU-bound (count primes up to 100K)...")
+    cpu_time, prime_count = benchmark_cpu(100_000)
+    print(f"   Time: {cpu_time:.4f} seconds")
+    print(f"   Primes found: {prime_count}")
+    print()
+    
+    print("=== Summary ===")
+    print(f"Syscall:  {syscall_time:.4f}s")
+    print(f"I/O:      {io_time:.4f}s")
+    print(f"CPU:      {cpu_time:.4f}s")
+    print()
+    print("(Measure on your own machine; do not fabricate data.)")
+
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+            <h3>Step 3: Run the Benchmark</h3>
+            <p>
+                Run under runc:
+            </p>
+            <pre><code class="language-bash">docker run --rm --runtime=runc -v "$(pwd)/benchmark.py:/benchmark.py" \
+  python:3.11-slim python /benchmark.py</code></pre>
+            <p>
+                Run under runsc (gVisor):
+            </p>
+            <pre><code class="language-bash">docker run --rm --runtime=runsc -v "$(pwd)/benchmark.py:/benchmark.py" \
+  python:3.11-slim python /benchmark.py</code></pre>
+            <p>
+                <strong>Note the timings from both runs.</strong> Run each a few times and take the median to reduce noise.
+            </p>
+
+            <h3>Step 4: Compare Results</h3>
+            <p>
+                Create a comparison table. Example format (your numbers will differ):
+            </p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Workload</th>
+                        <th>runc (seconds)</th>
+                        <th>runsc (seconds)</th>
+                        <th>Overhead</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Syscall-heavy (1M getpid)</td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(calculate: (runsc - runc) / runc * 100%)</em></td>
+                    </tr>
+                    <tr>
+                        <td>I/O-heavy (10K files)</td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(calculate)</em></td>
+                    </tr>
+                    <tr>
+                        <td>CPU-bound (primes to 100K)</td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(your measurement)</em></td>
+                        <td><em>(calculate)</em></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Expected Observations</h3>
+            <ul>
+                <li><strong>Syscall-heavy:</strong> runsc will be slower. Each <code>getpid()</code> is intercepted by 
+                the platform and handled by the Sentry. Expect 2–10× overhead (varies by CPU and platform).</li>
+                <li><strong>I/O-heavy:</strong> runsc will be slower due to the Gofer path. Expect 1.5–3× overhead for 
+                small-file I/O.</li>
+                <li><strong>CPU-bound:</strong> runsc should be close to runc (within 10%) because the hot loop makes no 
+                syscalls. The overhead is only during startup and the final print.</li>
+            </ul>
+
+            <h3>Step 5 (Optional): Add Kata if KVM is Available</h3>
+            <p>
+                If you have KVM and Kata installed, register it as a Docker runtime and run the same benchmark with 
+                <code>--runtime=kata</code>. Kata's syscall overhead should be minimal (native to the guest kernel), 
+                but you'll see VM boot overhead if you measure cold start.
+            </p>
+
+            <div class="info-box">
+                <h3>Important: Measure Honestly</h3>
+                <p>
+                    <strong>Do not fabricate results.</strong> The actual overhead depends on your CPU, kernel version, 
+                    gVisor platform (systrap vs KVM), and workload. Your numbers will differ from others. The goal is to 
+                    <em>understand</em> the trade-off, not to match a specific number.
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from primary documentation, source code, or published research. 
+                Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>OCI Runtime Specification</h3>
+                <ul>
+                    <li><a href="https://github.com/opencontainers/runtime-spec" target="_blank">OCI runtime-spec</a> — 
+                    The standard that runc, runsc, and kata-runtime implement</li>
+                    <li><a href="https://github.com/containerd/containerd/blob/main/runtime/v2/README.md" target="_blank">containerd shim v2</a> — 
+                    How runtimes plug into containerd</li>
+                    <li><a href="https://kubernetes.io/docs/concepts/containers/runtime-class/" target="_blank">Kubernetes RuntimeClass</a> — 
+                    Selecting runtimes per pod</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>runc</h3>
+                <ul>
+                    <li><a href="https://github.com/opencontainers/runc" target="_blank">github.com/opencontainers/runc</a> — 
+                    Reference OCI runtime</li>
+                    <li><a href="https://github.com/opencontainers/runc/tree/main/libcontainer" target="_blank">libcontainer/</a> — 
+                    Core implementation (namespaces, cgroups, seccomp)</li>
+                    <li><a href="https://github.com/containers/crun" target="_blank">crun</a> — 
+                    Lighter C implementation, used by SkyRL</li>
+                    <li><a href="https://docs.docker.com/engine/security/seccomp/" target="_blank">Docker seccomp profile</a> — 
+                    Which syscalls are blocked</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor</h3>
+                <ul>
+                    <li><a href="https://github.com/google/gvisor" target="_blank">github.com/google/gvisor</a> — 
+                    Main repository</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/intro/" target="_blank">Architecture Guide</a> — 
+                    Sentry + Gofer design</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/platforms/" target="_blank">Platforms</a> — 
+                    systrap, KVM, ptrace</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/security/" target="_blank">Security</a> — 
+                    Attack surface reduction</li>
+                    <li><a href="https://gvisor.dev/docs/architecture_guide/performance/" target="_blank">Performance</a> — 
+                    Syscall and I/O overhead</li>
+                    <li><a href="https://gvisor.dev/docs/user_guide/checkpoint_restore/" target="_blank">Checkpoint/Restore</a> — 
+                    Lazy restore, GPU support</li>
+                    <li><a href="https://gvisor.dev/docs/user_guide/containerd/quick_start/" target="_blank">containerd integration</a> — 
+                    Installing runsc</li>
+                    <li><strong>Paper:</strong> <a href="https://www.usenix.org/conference/hotos19/presentation/young" target="_blank">
+                    "Blending Containers and Virtual Machines: A Study of Firecracker and gVisor"</a> (Young et al., HotCloud 2019, 
+                    presented at HotOS '19)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Kata Containers</h3>
+                <ul>
+                    <li><a href="https://github.com/kata-containers/kata-containers" target="_blank">github.com/kata-containers/kata-containers</a> — 
+                    Main repository</li>
+                    <li><a href="https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md" target="_blank">Architecture</a> — 
+                    kata-runtime, VMM, kata-agent</li>
+                    <li><a href="https://github.com/kata-containers/kata-containers/blob/main/docs/hypervisors.md" target="_blank">Hypervisors</a> — 
+                    QEMU, Cloud Hypervisor, Firecracker, Dragonball, StratoVirt</li>
+                    <li><a href="https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/containerd-kata.md" target="_blank">containerd integration</a></li>
+                    <li><a href="https://github.com/kata-containers/kata-containers/tree/main/src/runtime" target="_blank">src/runtime/</a> — 
+                    kata-runtime code</li>
+                    <li><a href="https://github.com/kata-containers/kata-containers/tree/main/src/agent" target="_blank">src/agent/</a> — 
+                    kata-agent code</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Firecracker and Cloud Hypervisor</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker" target="_blank">Firecracker</a> — 
+                    Minimal Rust VMM</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">SPECIFICATION.md</a> — 
+                    Performance targets (≤125ms boot, ≤5MB overhead)</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">design.md</a> — 
+                    Architecture</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md" target="_blank">jailer.md</a> — 
+                    Security model</li>
+                    <li><strong>Paper:</strong> <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">
+                    "Firecracker: Lightweight Virtualization for Serverless Applications"</a> (Agache et al., NSDI 2020)</li>
+                    <li><a href="https://github.com/cloud-hypervisor/cloud-hypervisor" target="_blank">Cloud Hypervisor</a> — 
+                    Rust VMM for modern cloud workloads</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Production Systems Using These Runtimes</h3>
+                <ul>
+                    <li><a href="https://modal.com/docs/guide/sandbox" target="_blank">Modal Sandboxes</a> — 
+                    gVisor default, VM for Docker-in-sandbox</li>
+                    <li><a href="https://northflank.com/docs/v1/application/sandboxes/sandboxes-on-northflank-cloud" target="_blank">Northflank</a> — 
+                    Kata for CPU, gVisor for GPU</li>
+                    <li><a href="https://github.com/UKGovernmentBEIS/inspect_k8s_sandbox" target="_blank">UK AISI Inspect k8s</a> — 
+                    gVisor RuntimeClass</li>
+                    <li><a href="https://github.com/NovaSky-AI/SkyRL-OpenHands" target="_blank">SkyRL-OpenHands</a> — 
+                    crun + aiodocker</li>
+                    <li><a href="https://www.together.ai/blog/deepswe" target="_blank">DeepSWE</a> — 
+                    Docker → Kubernetes under load</li>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench</a> — 
+                    Docker (runc)</li>
+                    <li><a href="https://learn.microsoft.com/en-us/azure/aks/use-pod-sandboxing" target="_blank">Azure AKS</a> — 
+                    Kata RuntimeClass</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Papers</h3>
+                <ul>
+                    <li><strong>"Blending Containers and Virtual Machines: A Study of Firecracker and gVisor"</strong> 
+                    (Young et al., HotCloud 2019, presented at HotOS '19): 
+                    <a href="https://www.usenix.org/conference/hotos19/presentation/young" target="_blank">USENIX link</a></li>
+                    <li><strong>"Firecracker: Lightweight Virtualization for Serverless Applications"</strong> 
+                    (Agache et al., NSDI 2020): 
+                    <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">USENIX link</a></li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lessons</h3>
+                <p>
+                    In <strong>Lesson 04</strong>, you'll boot Firecracker by hand, set up tap networking, and understand 
+                    the jailer's security model. You'll see how Kata and E2B use Firecracker under the hood.
+                </p>
+                <p>
+                    In <strong>Lesson 05</strong>, you'll build snapshot/restore and forking systems for fast warm pools 
+                    and GRPO-style agent state branching.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>

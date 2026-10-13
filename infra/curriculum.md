@@ -35,7 +35,7 @@ Master the building blocks of every container: namespaces (mnt, pid, net, uts, i
 **02. seccomp-bpf and overlayfs** ✅ *Complete*  
 Harden your sandbox with syscall filtering and union filesystems. Understand Docker's default seccomp profile and how gVisor uses `SECCOMP_RET_TRAP` to intercept syscalls.
 
-**03. runc vs gVisor vs Kata Containers** 📝 *Planned*  
+**03. runc vs gVisor vs Kata Containers** ✅ *Complete*  
 Compare the three major container runtimes: runc (shared kernel), gVisor (userspace kernel), and Kata (hardware virtualization). Measure syscall and I/O overhead on real eval workloads.
 
 **04. Firecracker Internals and Booting a microVM** 📝 *Planned*  
