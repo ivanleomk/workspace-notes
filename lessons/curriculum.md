@@ -21,7 +21,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 06 | B | ✅ Complete | RL from Verifiable Rewards (GRPO) | DeepSeekMath (Shao et al., 2024) |
 | 07 | A | ✅ Complete | Code Evaluation Benchmarks | HumanEval (Chen et al., 2021) |
 | 08 | B | ✅ Complete | Constitutional AI | Bai et al. (2022) |
-| 09 | A | 📋 Planned | Holistic Evaluation (HELM) | Liang et al. (2022) |
+| 09 | A | ✅ Complete | Holistic Evaluation (HELM) | Liang et al. (2022) |
+| 10 | B | 📋 Planned | HH-RLHF: Harmless-Helpful Tradeoff | Bai et al. (Anthropic, 2022) |
 
 ## Learning Objectives by Track
 
@@ -60,9 +61,10 @@ Each lesson includes:
 - ✅ Lesson 06 (Track B): DeepSeekMath and GRPO (RL from verifiable rewards)
 - ✅ Lesson 07 (Track A): HumanEval and code evaluation benchmarks
 - ✅ Lesson 08 (Track B): Constitutional AI (Bai et al., 2022)
+- ✅ Lesson 09 (Track A): HELM - Holistic Evaluation of Language Models (Liang et al., 2022)
 
 **Next Up:**
-- 📋 Lesson 09 (Track A): Holistic Evaluation of Language Models (HELM) - Liang et al. (2022)
+- 📋 Lesson 10 (Track B): Training a Helpful and Harmless Assistant with RLHF (Bai et al., Anthropic, 2022) - explores the harmlessness-helpfulness tradeoff in human feedback training, complementing Constitutional AI's AI feedback approach and bridging HELM's multi-metric evaluation lens to preference learning
 
 ## How to Request a Lesson
 
