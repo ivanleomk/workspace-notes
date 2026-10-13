@@ -9,12 +9,14 @@ This series teaches you how to build production-grade eval infrastructure from f
 1. **[Curriculum](curriculum.md)** — Full 25-lesson syllabus with learning objectives
 2. **[Lesson 01: Linux Namespaces and cgroups v2](01-linux-namespaces-cgroups/)** — The building blocks of every container ✅
 3. **[Lesson 02: seccomp-bpf and overlayfs](02-seccomp-overlayfs/)** — Syscall filtering and union filesystems ✅
+4. **[Lesson 03: runc vs gVisor vs Kata Containers](03-runc-gvisor-kata/)** — Container runtime comparison and isolation spectrum ✅
 
 ## Live Lessons
 
 Visit the live interactive lessons at:
 - [Lesson 01: Linux Namespaces and cgroups v2](https://ivanleomk.github.io/workspace-notes/infra/01-linux-namespaces-cgroups/)
 - [Lesson 02: seccomp-bpf and overlayfs](https://ivanleomk.github.io/workspace-notes/infra/02-seccomp-overlayfs/)
+- [Lesson 03: runc vs gVisor vs Kata Containers](https://ivanleomk.github.io/workspace-notes/infra/03-runc-gvisor-kata/)
 
 ## What You'll Learn
 
