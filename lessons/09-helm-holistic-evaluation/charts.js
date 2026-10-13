@@ -3,7 +3,6 @@
 document.addEventListener('DOMContentLoaded', function() {
     createDensityChart();
     createCoverageChart();
-    createMetricCoverageChart();
 });
 
 // Density chart showing multi-metric coverage
@@ -146,70 +145,3 @@ function createCoverageChart() {
     });
 }
 
-// Metric coverage chart showing which metrics are measured for how many scenarios
-function createMetricCoverageChart() {
-    const ctx = document.getElementById('metricCoverageChart');
-    if (!ctx) return;
-
-    // Approximate coverage by metric category from the paper
-    // Not all metrics can be measured for all scenarios (e.g., calibration needs probabilities)
-    new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: ['Accuracy', 'Calibration', 'Robustness', 'Fairness', 'Bias', 'Toxicity', 'Efficiency'],
-            datasets: [{
-                label: 'Scenarios Measured',
-                data: [16, 13, 14, 14, 15, 15, 16], // Approximate from paper Table 4
-                backgroundColor: 'rgba(59, 130, 246, 0.7)',
-                borderColor: 'rgba(59, 130, 246, 1)',
-                borderWidth: 2
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            indexAxis: 'y',
-            plugins: {
-                title: {
-                    display: true,
-                    text: 'Metric Category Coverage Across 16 Core Scenarios',
-                    color: '#f1f5f9',
-                    font: { size: 16 }
-                },
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const metric = context.label;
-                            const count = context.parsed.x;
-                            const reasons = {
-                                'Accuracy': 'All 16 scenarios',
-                                'Calibration': '13/16 scenarios (requires probability outputs)',
-                                'Robustness': '14/16 scenarios (perturbation-based)',
-                                'Fairness': '14/16 scenarios (demographic perturbations)',
-                                'Bias': '15/16 scenarios (representation in generations)',
-                                'Toxicity': '15/16 scenarios (toxicity in generations)',
-                                'Efficiency': 'All 16 scenarios'
-                            };
-                            return `${count}/16 scenarios - ${reasons[metric]}`;
-                        }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    beginAtZero: true,
-                    max: 16,
-                    ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
-                },
-                y: {
-                    ticks: { color: '#cbd5e1' },
-                    grid: { color: 'rgba(71, 85, 105, 0.3)' }
-                }
-            }
-        }
-    });
-}
