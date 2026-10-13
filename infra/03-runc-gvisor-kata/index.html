@@ -279,8 +279,8 @@ graph TB
                 From <a href="https://gvisor.dev/docs/architecture_guide/intro/" target="_blank">gVisor Architecture Guide</a>:
             </p>
             <ul>
-                <li><strong>Sentry:</strong> The userspace kernel, written in Go. It implements ~280 Linux syscalls 
-                (per <a href="https://gvisor.dev/docs/user_guide/compatibility/" target="_blank">compatibility docs</a>). 
+                <li><strong>Sentry:</strong> The userspace kernel, written in Go. It implements 290 (full or partial) of 352 Linux syscalls 
+                (per <a href="https://gvisor.dev/docs/user_guide/compatibility/linux/amd64/" target="_blank">gVisor amd64 syscall compatibility table</a>). 
                 The workload's syscalls are intercepted by a <em>platform</em> (see below) and handled by the Sentry.</li>
                 <li><strong>Gofer:</strong> A per-sandbox file proxy. The Sentry itself has no direct filesystem access; 
                 it sends file I/O requests to the Gofer over a UNIX socket (9P protocol). The Gofer does the actual 
@@ -301,7 +301,7 @@ graph TB
     Workload[Workload Process<br/>e.g., python eval.py]
     
     subgraph "gVisor Sandbox"
-        Sentry[Sentry<br/>userspace kernel<br/>~280 syscalls]
+        Sentry[Sentry<br/>userspace kernel<br/>290 of 352 syscalls]
         Gofer[Gofer<br/>file proxy<br/>9P protocol]
     end
     
@@ -572,8 +572,8 @@ graph TB
                     <tr>
                         <td><strong>gVisor</strong></td>
                         <td>Sentry (userspace kernel) + Sentry's own filtered syscalls to host</td>
-                        <td>The Sentry's ~280 implemented syscalls (in Go) + the Sentry's own restricted syscall surface 
-                        to the host (much smaller, ~20–30 syscalls per gVisor security docs, though exact count varies).</td>
+                        <td>The Sentry's 290 implemented syscalls (in Go, full or partial) + the Sentry's own restricted syscall surface 
+                        to the host (much smaller, per gVisor security docs, though exact count varies).</td>
                         <td>1) Exploit the Sentry itself (a bug in the Go syscall implementation), or 2) Exploit a vulnerability 
                         in one of the few syscalls the Sentry makes to the host. Much harder than runc because the Sentry 
                         is a smaller, more auditable codebase than Linux, and its host syscall surface is tiny.</td>
@@ -928,11 +928,11 @@ if __name__ == "__main__":
             <h3>Expected Observations</h3>
             <ul>
                 <li><strong>Syscall-heavy:</strong> runsc will be slower. Each <code>getpid()</code> is intercepted by 
-                the platform and handled by the Sentry. Expect 2–10× overhead (varies by CPU and platform).</li>
-                <li><strong>I/O-heavy:</strong> runsc will be slower due to the Gofer path. Expect 1.5–3× overhead for 
-                small-file I/O.</li>
-                <li><strong>CPU-bound:</strong> runsc should be close to runc (within 10%) because the hot loop makes no 
-                syscalls. The overhead is only during startup and the final print.</li>
+                the platform and handled by the Sentry. Record your measured ratio of runsc to runc time.</li>
+                <li><strong>I/O-heavy:</strong> runsc will be slower due to the Gofer path (file I/O goes through the 
+                Gofer over 9P protocol). Record your measured ratio for small-file I/O.</li>
+                <li><strong>CPU-bound:</strong> runsc should be close to runc because the hot loop makes no 
+                syscalls. The overhead is only during startup and the final print. Record your measured ratio.</li>
             </ul>
 
             <h3>Step 5 (Optional): Add Kata if KVM is Available</h3>
@@ -1036,7 +1036,7 @@ if __name__ == "__main__":
                     <li><a href="https://github.com/firecracker-microvm/firecracker" target="_blank">Firecracker</a> — 
                     Minimal Rust VMM</li>
                     <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">SPECIFICATION.md</a> — 
-                    Performance targets (≤125ms boot, ≤5MB overhead)</li>
+                    Performance targets (≤125ms boot, ≤5 MiB overhead)</li>
                     <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">design.md</a> — 
                     Architecture</li>
                     <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md" target="_blank">jailer.md</a> — 
