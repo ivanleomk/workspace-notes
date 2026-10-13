@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 09: HELM - Holistic Evaluation of Language Models</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 09: HELM - Holistic Evaluation of Language Models</h1>
+            <p class="subtitle">Track A: Foundations | Paper: Liang et al. (2022)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#what-is-helm">What is HELM?</a>
+            <a href="#from-the-paper">From the Paper</a>
+            <a href="#multi-metric">Multi-Metric Approach</a>
+            <a href="#findings">Key Findings</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#visualizations">Visualizations</a>
+            <a href="#limitations">Limitations</a>
+            <a href="#post-training">Post-Training Bridge</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Holistic Evaluation Matters</h2>
+            <p>
+                As language models become the foundation for almost all major language technologies, their 
+                capabilities, limitations, and risks must be well understood. But a critical problem emerged: 
+                models were being evaluated inconsistently across different scenarios, making comparisons 
+                difficult and obscuring important trade-offs.
+            </p>
+            <p>
+                Before HELM, the evaluation landscape was fragmented:
+            </p>
+            <ul>
+                <li>Different models were evaluated on different benchmarks</li>
+                <li>Evaluation focused overwhelmingly on accuracy, sidelining other important properties</li>
+                <li>Models averaged just <strong>17.9% coverage</strong> across what would become HELM's core scenarios</li>
+                <li>Some prominent models didn't share a single evaluation scenario in common</li>
+            </ul>
+            <p>
+                <strong>HELM (Holistic Evaluation of Language Models)</strong> addresses this by providing 
+                a standardized, comprehensive framework that evaluates models across many scenarios and metrics 
+                under consistent conditions.
+            </p>
+        </section>
+
+        <section id="what-is-helm" class="content-section">
+            <h2>What is HELM?</h2>
+            <p>
+                HELM is both a benchmark and an evaluation framework developed by Stanford's Center for 
+                Research on Foundation Models (CRFM). It evaluates language models across:
+            </p>
+
+            <div class="info-box">
+                <h3>HELM at a Glance</h3>
+                <ul>
+                    <li><strong>30 models</strong> evaluated from 12 organizations (OpenAI, Anthropic, Meta, Google, etc.)</li>
+                    <li><strong>42 scenarios</strong> total: 16 core scenarios + 26 targeted evaluation scenarios</li>
+                    <li><strong>7 metric categories:</strong> accuracy, calibration, robustness, fairness, bias, toxicity, efficiency</li>
+                    <li><strong>21 new scenarios</strong> introduced that hadn't been used in mainstream LM evaluation</li>
+                    <li><strong>4,939 evaluation runs</strong> totaling ~12 billion tokens and 17 million queries</li>
+                    <li><strong>Coverage improvement:</strong> from 17.9% to 96.0% of core scenarios per model</li>
+                </ul>
+            </div>
+
+            <h3>The Three Pillars of HELM</h3>
+            
+            <h4>1. Broad Coverage via Taxonomy</h4>
+            <p>
+                HELM starts with a systematic taxonomy of scenarios (use cases) and metrics (desiderata). 
+                Rather than ad-hoc dataset collection, HELM explicitly documents what it evaluates and what's 
+                missing, making gaps transparent.
+            </p>
+
+            <h4>2. Multi-Metric Measurement</h4>
+            <p>
+                For each of the 16 core scenarios, HELM measures all 7 metric categories where applicable 
+                (achieving <strong>98 of 112 possible scenario×metric pairs</strong>, or 87.5% coverage). 
+                This ensures metrics beyond accuracy—like fairness, robustness, and toxicity—are not treated 
+                as second-class citizens.
+            </p>
+
+            <h4>3. Standardized Evaluation</h4>
+            <p>
+                All 30 models are evaluated under the same conditions using standardized prompting strategies 
+                (primarily 5-shot prompting). This enables direct head-to-head comparisons that were previously 
+                impossible when models were evaluated inconsistently.
+            </p>
+        </section>
+
+        <section id="from-the-paper" class="content-section">
+            <h2>From the Paper: Core Insights</h2>
+            <p>
+                The HELM paper (<a href="https://arxiv.org/abs/2211.09110" target="_blank">Liang et al., 2022</a>) 
+                provides unprecedented transparency into language model capabilities. Here are key insights 
+                directly from the paper:
+            </p>
+
+            <div class="info-box">
+                <h3>Abstract (Key Excerpt)</h3>
+                <blockquote>
+                    "We measure 7 metrics (accuracy, calibration, robustness, fairness, bias, toxicity, and efficiency) 
+                    for each of 16 core scenarios to the extent possible (87.5% of the time), ensuring that metrics 
+                    beyond accuracy don't fall to the wayside, and that trade-offs across models and metrics are 
+                    clearly exposed."
+                </blockquote>
+            </div>
+
+            <h3>The Coverage Problem</h3>
+            <p>
+                The paper documents exactly how inconsistent model evaluation was before HELM:
+            </p>
+            <blockquote>
+                "Prior to HELM, models on average were evaluated on just 17.9% of the core HELM scenarios, 
+                with some prominent models not sharing a single scenario in common. We improve this to 96.0%: 
+                now all 30 models have been densely benchmarked on a set of core scenarios and metrics under 
+                standardized conditions."
+            </blockquote>
+
+            <h3>Scale of the Evaluation</h3>
+            <p>From the paper's empirical findings section:</p>
+            <blockquote>
+                "To give a sense of the magnitude of our evaluation, we ran a total of 4,939 runs 
+                (i.e. evaluating a specific model on a specific scenario). This amounts to a total cost of 
+                12,169,227,491 tokens and 17,431,479 queries across all models."
+            </blockquote>
+        </section>
+
+        <section id="multi-metric" class="content-section">
+            <h2>The Seven Metrics</h2>
+            <p>
+                HELM measures seven categories of metrics for each core scenario. This multi-metric approach 
+                makes explicit the trade-offs between different desiderata:
+            </p>
+
+            <div class="metric-grid">
+                <div class="metric-card">
+                    <h4>1. Accuracy</h4>
+                    <p>Task-specific performance: exact match, F1, ROUGE, MRR, NDCG depending on the scenario.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>2. Calibration</h4>
+                    <p>How well model confidence matches actual correctness. Critical for high-stakes decisions where systems need to know when to defer to humans.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>3. Robustness</h4>
+                    <p>Performance consistency under perturbations: typos (invariance), paraphrases (equivariance), dialect variations.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>4. Fairness</h4>
+                    <p>Performance parity across demographic groups. Tests whether models perform equally well for questions mentioning different genders or races.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>5. Bias</h4>
+                    <p>Stereotypical associations in model outputs. Measures representation disparities and harmful stereotypes about demographics and professions.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>6. Toxicity</h4>
+                    <p>Rate of generating harmful, offensive, or inappropriate content, measured using Perspective API.</p>
+                </div>
+
+                <div class="metric-card">
+                    <h4>7. Efficiency</h4>
+                    <p>Computational cost: inference time, training FLOPs. Important for deployment and environmental impact.</p>
+                </div>
+            </div>
+
+            <h3>Coverage Matrix: 98 of 112 Pairs Measured</h3>
+            <p>
+                HELM's core evaluation measures <strong>98 out of 112 possible (scenario × metric) pairs</strong>, 
+                achieving 87.5% coverage. The 14 unmeasured pairs are either not well-defined (e.g., can't measure 
+                toxicity of completions when the task doesn't involve generation) or excluded due to validity 
+                concerns (e.g., robustness perturbations for long-form summarization outputs).
+            </p>
+
+            <div class="chart-container">
+                <canvas id="metric-coverage-chart"></canvas>
+            </div>
+        </section>
+
+        <section id="findings" class="content-section">
+            <h2>Key Findings from the Paper</h2>
+            <p>
+                HELM's comprehensive evaluation surfaced 25 top-level findings. Here are some of the most 
+                striking discoveries:
+            </p>
+
+            <h3>Finding #1: No Single Model Dominates</h3>
+            <blockquote>
+                "No single model dominates across all scenarios and metrics."
+            </blockquote>
+            <p>
+                Different models excel at different tasks: text-davinci-002 leads on knowledge tasks, 
+                code-davinci-002 on reasoning, but no model is best everywhere. This underscores the 
+                importance of evaluating across diverse scenarios.
+            </p>
+
+            <h3>Finding #16: Code Models Excel at Reasoning</h3>
+            <p>The paper's reasoning analysis reveals a striking pattern:</p>
+            <blockquote>
+                "For reasoning-intensive scenarios, we find that the code models, especially code-davinci-002, 
+                consistently outperform the text models, even on synthetic reasoning scenarios posed in natural 
+                language. This gap is made clear in mathematical reasoning: for GSM8K, code-davinci-002 achieves 
+                an accuracy of 52.1%, where the next best model is text-davinci-002 at 35.0% and no other model 
+                surpasses 16%."
+            </blockquote>
+
+            <div class="chart-container">
+                <canvas id="reasoning-chart"></canvas>
+            </div>
+
+            <h3>Finding #23: Extreme Prompt Sensitivity</h3>
+            <p>
+                One of HELM's most concerning findings is the extreme sensitivity of model performance to 
+                prompt formatting:
+            </p>
+            <blockquote>
+                "We find that model performance is extremely sensitive to how multiple choice scenarios are 
+                adapted into prompts: for example, accuracy for OPT (175B) on HellaSwag is 79.1% when each 
+                answer choice is presented in a separate 0-shot prompt (i.e. one of the most accurate models), 
+                but drops precipitously to 30.2% (almost random accuracy) when the answer choices are presented 
+                jointly in a single 5-shot prompt (i.e. in the format of a multiple-choice exam)."
+            </blockquote>
+
+            <div class="chart-container">
+                <canvas id="hellaswag-chart"></canvas>
+            </div>
+
+            <p>
+                This drop from 79.1% to 30.2% represents a catastrophic failure—the same model on the same 
+                task achieves top-tier performance or near-random accuracy purely based on prompt structure. 
+                This finding challenges what it means to standardize evaluation fairly across models.
+            </p>
+
+            <h3>Finding #7: Accuracy vs. Efficiency</h3>
+            <blockquote>
+                "We do not see a strong trade-off between accuracy and efficiency (which depends on both 
+                the model architecture and the hardware) across all 30 models. For each family of models 
+                (e.g. different size variants of GPT-3), we find that as models become larger, accuracy 
+                consistently improves but with higher training and inference cost."
+            </blockquote>
+            <p>
+                Within model families, there's a clear accuracy-cost curve. But across families, only a 
+                subset of models sit on the Pareto frontier, suggesting room for architectures that achieve 
+                better accuracy-efficiency trade-offs.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <p>
+                Take this quiz to check your understanding of HELM and holistic evaluation concepts. 
+                All questions are based on facts from the paper.
+            </p>
+            
+            <div id="quiz-container">
+                <div id="question-text" class="question-number"></div>
+                <div id="question-content" class="question"></div>
+                <div id="options" class="options"></div>
+                <div id="feedback" class="feedback" style="display: none;">
+                    <p id="feedback-text"></p>
+                </div>
+                <button id="next-btn" class="quiz-btn" onclick="nextQuestion()" style="display: none;">Next Question</button>
+            </div>
+        </section>
+
+        <section id="visualizations" class="content-section">
+            <h2>Interactive Visualizations</h2>
+
+            <h3>Coverage Improvement</h3>
+            <p>
+                HELM dramatically improved evaluation standardization. Before HELM, models were evaluated 
+                on an average of 17.9% of core scenarios. After HELM, this increased to 96.0%.
+            </p>
+            <div class="chart-container">
+                <canvas id="coverage-chart"></canvas>
+            </div>
+
+            <h3>Evaluation Scale</h3>
+            <p>
+                HELM represents one of the most comprehensive language model evaluations ever conducted. 
+                Here's the scale of the effort:
+            </p>
+            <div class="chart-container">
+                <canvas id="scale-chart"></canvas>
+            </div>
+            <p class="chart-note">
+                Note: Total Runs shown divided by 100 for scale (actual: 4,939 runs)
+            </p>
+        </section>
+
+        <section id="limitations" class="content-section">
+            <h2>Limitations and Future Directions</h2>
+            <p>
+                HELM is comprehensive, but the authors acknowledge several limitations:
+            </p>
+
+            <h3>Language Coverage</h3>
+            <p>
+                HELM currently covers only English (though it includes several English varieties like 
+                African-American English and English from different countries). Expanding to other languages 
+                is a priority for future work.
+            </p>
+
+            <h3>Scenario Selection</h3>
+            <p>
+                While HELM's taxonomy makes explicit what's covered and what's missing, the 42 scenarios 
+                still represent a subset of possible use cases. The paper notes gaps in question answering 
+                for neglected dialects and metrics for certain aspects of trustworthiness.
+            </p>
+
+            <h3>Evolving Models</h3>
+            <p>
+                HELM evaluated live systems that may update over time. Some models (especially commercial APIs) 
+                may have changed during the evaluation period or since publication. The paper records timestamps 
+                but acknowledges this introduces some uncertainty.
+            </p>
+
+            <h3>Prompt Sensitivity</h3>
+            <p>
+                The extreme sensitivity to prompting (Finding #23) poses a fundamental challenge: what does 
+                "fair" standardized evaluation mean when models achieve radically different results based on 
+                prompt format? HELM standardizes prompting, but optimal prompting may differ across models.
+            </p>
+
+            <h3>Living Benchmark</h3>
+            <p>
+                HELM is designed as a <strong>living benchmark</strong>, continuously updated with new scenarios, 
+                metrics, and models at <a href="https://crfm.stanford.edu/helm/" target="_blank">crfm.stanford.edu/helm</a>. 
+                The community can propose new scenarios and contribute to the framework.
+            </p>
+        </section>
+
+        <section id="post-training" class="content-section">
+            <h2>Connecting to Post-Training</h2>
+            <p>
+                HELM's holistic approach has critical implications for post-training work (RLHF, DPO, etc.) 
+                that we've studied in Track B:
+            </p>
+
+            <h3>Multi-Metric Trade-offs in RLHF</h3>
+            <p>
+                HELM makes explicit that optimizing for one metric (e.g., accuracy or reward model score) may 
+                harm others. This connects directly to:
+            </p>
+            <ul>
+                <li><strong>Alignment tax</strong> (Lesson 02): Does RLHF improve helpfulness while degrading accuracy on knowledge tasks?</li>
+                <li><strong>Reward hacking</strong>: Are models learning to game the reward without improving true quality?</li>
+                <li><strong>Safety vs. capability</strong>: Constitutional AI (Lesson 08) seeks non-evasive harmlessness, measured through both toxicity AND helpfulness</li>
+            </ul>
+
+            <h3>Code Models and Verifiable Rewards</h3>
+            <p>
+                HELM's Finding #16 (code-davinci-002 excels at reasoning) connects to DeepSeekMath and GRPO 
+                (Lesson 06). Code pretraining may help models learn structured reasoning, and verifiable 
+                rewards (like math correctness) avoid the pitfalls of learned reward models.
+            </p>
+
+            <h3>Evaluation for Preference Learning</h3>
+            <p>
+                DPO and RLHF (Lessons 02, 04) require evaluation to know if preference learning succeeds. 
+                HELM's standardized scenarios provide consistent benchmarks to measure:
+            </p>
+            <ul>
+                <li>Does preference learning improve win rates on MT-Bench style evaluations?</li>
+                <li>Does it maintain performance on accuracy benchmarks?</li>
+                <li>Does it introduce or reduce biases?</li>
+            </ul>
+
+            <h3>Prompt Engineering and Adaptation</h3>
+            <p>
+                Finding #23's extreme prompt sensitivity has implications for instruction tuning and SFT. 
+                If models are so brittle to prompt format, post-training methods must either:
+            </p>
+            <ul>
+                <li>Improve robustness to diverse prompts</li>
+                <li>Provide clear guidelines on optimal prompting</li>
+                <li>Or risk deploying models that work wonderfully in one format and fail catastrophically in another</li>
+            </ul>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <h3>Paper and Code</h3>
+            <ul>
+                <li>
+                    <strong>Paper:</strong> 
+                    <a href="https://arxiv.org/abs/2211.09110" target="_blank">
+                        Holistic Evaluation of Language Models (Liang et al., 2022)
+                    </a>
+                </li>
+                <li>
+                    <strong>Live Benchmark:</strong> 
+                    <a href="https://crfm.stanford.edu/helm/" target="_blank">
+                        crfm.stanford.edu/helm
+                    </a>
+                </li>
+                <li>
+                    <strong>GitHub:</strong> 
+                    <a href="https://github.com/stanford-crfm/helm" target="_blank">
+                        github.com/stanford-crfm/helm
+                    </a>
+                </li>
+            </ul>
+
+            <h3>Related Benchmarks</h3>
+            <ul>
+                <li>MMLU (Lesson 01): One of HELM's core scenarios for knowledge evaluation</li>
+                <li>GSM8K (Lesson 03): Core scenario for mathematical reasoning</li>
+                <li>HumanEval (Lesson 07): Targeted evaluation for code generation</li>
+                <li>MT-Bench (Lesson 05): LLM-as-judge approach complements HELM's standardized metrics</li>
+            </ul>
+
+            <h3>Key Concepts</h3>
+            <ul>
+                <li><strong>Scenario:</strong> A (task, domain, language) triple representing a use case</li>
+                <li><strong>Metric/Desiderata:</strong> A property we want to measure (accuracy, fairness, etc.)</li>
+                <li><strong>Adaptation:</strong> How we convert a scenario into prompts for the model</li>
+                <li><strong>Run:</strong> Evaluating one model on one scenario with one adaptation method</li>
+                <li><strong>Multi-metric:</strong> Measuring many desiderata for the same scenario</li>
+                <li><strong>Holistic:</strong> Comprehensive coverage of scenarios and metrics with explicit taxonomy</li>
+            </ul>
+
+            <h3>Discussion Questions</h3>
+            <ul>
+                <li>If prompt formatting causes 79% → 30% accuracy swings, how can we trust any single evaluation number?</li>
+                <li>Should "standardization" mean the same prompt for all models, or optimal prompts per model?</li>
+                <li>HELM measures 7 metrics, but are there important desiderata still missing?</li>
+                <li>How should we weigh accuracy vs. fairness vs. efficiency when choosing a model to deploy?</li>
+                <li>Can a living benchmark stay meaningful if it's continuously updated and models are evaluated at different times?</li>
+            </ul>
+        </section>
+
+        <footer>
+            <p>
+                <strong>Next:</strong> This completes Track A (foundations). Track B continues with advanced 
+                post-training techniques building on these evaluation principles.
+            </p>
+            <p>
+                <a href="../08-constitutional-ai/">← Previous: Constitutional AI</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>
