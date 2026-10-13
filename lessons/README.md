@@ -185,6 +185,29 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Critiqued vs direct revisions comparison (Figure 7 approximate)
 - **Status:** Complete
 
+### Lesson 09 - HELM: Holistic Evaluation of Language Models ✅
+- **Track:** A (Foundations)
+- **Paper:** Holistic Evaluation of Language Models (Liang et al., Stanford CRFM, 2022)
+- **Path:** [`09-helm-holistic-evaluation/`](09-helm-holistic-evaluation/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/09-helm-holistic-evaluation/](https://ivanleomk.github.io/workspace-notes/09-helm-holistic-evaluation/)
+- **Topics:**
+  - Why single-metric evaluation is incomplete for general-purpose LMs
+  - HELM's three pillars: broad coverage + recognition of incompleteness, multi-metric measurement, standardization
+  - Scenario taxonomy: task × domain × language (16 core scenarios)
+  - 7 metric categories: accuracy, calibration, robustness, fairness, bias, toxicity, efficiency
+  - 87.5% density: 98/112 (scenario, metric) pairs measured
+  - Coverage improvement: 17.9% → 96.0% across 30 models from 12 organizations
+  - Key findings: instruction-tuning advantage, prompt sensitivity (30-50% swings), accuracy-robustness tradeoffs
+  - 4,939 evaluation runs across 42 total scenarios (16 core + 26 targeted), 21 new to mainstream evaluation
+  - Bridge to post-training: HELM's multi-metric lens exposes tradeoffs in RLHF/DPO/GRPO/CAI
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Scenario & metric explorer (browse 8 core scenarios and 7 metric categories)
+  - Coverage charts: before HELM (17.9%) vs after (96.0%)
+  - Multi-metric density visualization (87.5% of pairs measured)
+  - Metric category coverage across scenarios
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -198,6 +221,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 06: DeepSeekMath & GRPO](https://ivanleomk.github.io/workspace-notes/06-deepseekmath-grpo/)
 - [Lesson 07: HumanEval & Code Evaluation](https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/)
 - [Lesson 08: Constitutional AI](https://ivanleomk.github.io/workspace-notes/08-constitutional-ai/)
+- [Lesson 09: HELM - Holistic Evaluation](https://ivanleomk.github.io/workspace-notes/09-helm-holistic-evaluation/)
 
 ### 💻 Local Serving (for development)
 ```bash
