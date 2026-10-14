@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 10: Tülu 3 - Open Language Model Post-Training</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 10: Tülu 3 - Open Post-Training</h1>
+            <p class="subtitle">Track B: SOTA Post-Training | Paper: Lambert et al. (Allen Institute for AI, 2024)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#overview">Pipeline Overview</a>
+            <a href="#data">Data Curation</a>
+            <a href="#sft">SFT Stage</a>
+            <a href="#dpo">DPO Stage</a>
+            <a href="#rlvr">RLVR Stage</a>
+            <a href="#evaluation">Evaluation Framework</a>
+            <a href="#results">Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#explorer">Data Explorer</a>
+            <a href="#charts">Charts & Data</a>
+            <a href="#bridge">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Introduction: Fully Open Post-Training</h2>
+            
+            <p>
+                In Lessons 02, 04, 06, and 08, you learned about individual post-training techniques: RLHF, 
+                DPO, GRPO, and Constitutional AI. But how do these pieces fit together into a complete, 
+                production-ready post-training pipeline? And how do you know if your trained model actually works?
+            </p>
+
+            <div class="info-box">
+                <h3>The Tülu 3 Vision</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2411.15124" target="_blank">Lambert et al. (2024)</a> from 
+                    Allen Institute for AI introduced <strong>Tülu 3</strong>, a family of fully-open state-of-the-art 
+                    post-trained models alongside <em>all the data, code, training recipes, and evaluation framework</em> 
+                    needed to reproduce them.
+                </p>
+                <p><strong>Key insight:</strong> Open post-training means more than releasing model weights. It means 
+                releasing the complete recipe—curated training data targeting core skills, on-policy preference data, 
+                training infrastructure, rigorous evaluation with development/unseen splits, and comprehensive 
+                decontamination—so the community can reproduce, adapt, and improve upon the work.</p>
+            </div>
+
+            <h3>What Makes Tülu 3 Different?</h3>
+            <p>Tülu 3 is the first fully-open post-training recipe that achieves state-of-the-art results:</p>
+            <ul>
+                <li><strong>Complete openness:</strong> All training data, code, evaluation suite, and decontamination 
+                tools released with permissive licenses</li>
+                <li><strong>Multi-stage pipeline:</strong> SFT → DPO → RLVR (a novel RL method with verifiable rewards)</li>
+                <li><strong>Rigorous evaluation:</strong> Development and unseen evaluation splits to detect overfitting 
+                to benchmarks</li>
+                <li><strong>Aggressive decontamination:</strong> Systematic removal of evaluation data leakage from 
+                training sets</li>
+                <li><strong>State-of-the-art results:</strong> Tülu 3 70B surpasses Llama 3.1 Instruct, Qwen 2.5, 
+                GPT-3.5 Turbo, GPT-4o mini, and matches Claude 3.5 Haiku</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>What You'll Learn</h4>
+                <ul>
+                    <li>The end-to-end Tülu 3 pipeline: data curation → SFT → DPO → RLVR</li>
+                    <li>How to curate multi-skill training data (synthetic + real-world prompts)</li>
+                    <li>On-policy preference data generation for DPO</li>
+                    <li>RLVR: reinforcement learning with verifiable rewards (vs learned reward models)</li>
+                    <li>Development vs unseen evaluation splits and why they matter</li>
+                    <li>Decontamination: detecting and removing benchmark leakage</li>
+                    <li>Results: how each stage (SFT → DPO → RLVR) improves core skills</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="overview" class="content-section">
+            <h2>The Tülu 3 Pipeline: Four Stages</h2>
+
+            <p>
+                Tülu 3 follows a four-stage post-training recipe, starting from pretrained base models 
+                (Llama 3.1 8B, 70B, 405B):
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Stage 1: Data Curation</h4>
+                    <p>
+                        Curate prompts from public datasets (with verified licenses and clear provenance) and 
+                        synthetically generate skill-specific prompts. Decontaminate against the evaluation suite 
+                        to prevent leakage. Result: <strong>23.3M prompts</strong> covering general chat, math, 
+                        coding, safety, instruction following, and multilingual tasks.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 2: Supervised Finetuning (SFT)</h4>
+                    <p>
+                        Finetune the base model on <strong>939,344 prompt-completion pairs</strong> selected from 
+                        the curated prompts. Mix general-purpose data (WildChat, OpenAssistant) with skill-specific 
+                        synthetic data (math, coding, instruction following). Result: Tülu 3 SFT checkpoint.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 3: Direct Preference Optimization (DPO)</h4>
+                    <p>
+                        Generate <strong>on-policy preference data</strong> by sampling completions from Tülu 3 SFT 
+                        and comparing them to outputs from other models. Apply length-normalized DPO on preference 
+                        pairs. Result: Tülu 3 DPO checkpoint with improved chat and instruction-following.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 4: Reinforcement Learning with Verifiable Rewards (RLVR)</h4>
+                    <p>
+                        Apply RL to tasks with verifiable ground-truth outcomes (math, instruction following). 
+                        <strong>RLVR gives a constant reward only when the completion is verified correct</strong>—no 
+                        learned reward model needed. Result: Tülu 3 final checkpoint, pushing math and IF performance 
+                        even higher.
+                    </p>
+                </div>
+            </div>
+
+            <h3>Why This Pipeline?</h3>
+            <p>
+                Each stage targets different aspects of model behavior:
+            </p>
+            <ul>
+                <li><strong>SFT:</strong> Teaches core skills (math, coding, safety, knowledge recall) and establishes 
+                the foundation for instruction-following.</li>
+                <li><strong>DPO:</strong> Refines output quality, reduces harmful/unhelpful responses, and improves 
+                conversational coherence by learning from preference comparisons.</li>
+                <li><strong>RLVR:</strong> Pushes performance on verifiable tasks (GSM8K, MATH, IFEval) where we can 
+                objectively check correctness—no subjective reward model needed.</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>Key Design Choices</h4>
+                <ul>
+                    <li><strong>Development/unseen splits:</strong> Tülu 3 Eval includes both splits to detect 
+                    overfitting to specific benchmarks during training</li>
+                    <li><strong>Decontamination:</strong> All training data is systematically checked for overlap 
+                    with evaluation benchmarks and contaminated examples are removed</li>
+                    <li><strong>On-policy preference data:</strong> Generated from Tülu 3 SFT's own outputs, 
+                    reflecting its actual behavior distribution (not off-policy data from different models)</li>
+                    <li><strong>Verifiable rewards over learned RM:</strong> For math and IF, RLVR uses deterministic 
+                    verification instead of a learned reward model, avoiding reward hacking</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="data" class="content-section">
+            <h2>Data Curation: 23.3M Prompts Across Core Skills</h2>
+
+            <h3>Sourcing from Public Datasets</h3>
+            <p>
+                Tülu 3 starts with a comprehensive survey of public post-training datasets, manually reviewing each 
+                for <strong>diversity, target skills, data provenance, and licenses</strong>. Key datasets included:
+            </p>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>General Chat & Diversity</h3>
+                    <p><strong>WildChat (GPT-4 subset):</strong> 241,307 prompts from real user interactions</p>
+                    <p><strong>OpenAssistant 1 & 2:</strong> 88,838 prompts from volunteer workers</p>
+                    <p><strong>No Robots:</strong> 9,500 prompts annotated by expert workers</p>
+                    <p><strong>FLAN v2:</strong> 89,982 prompts from classical NLP tasks</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Math & Reasoning</h3>
+                    <p><strong>OpenMathInstruct 2:</strong> 21.9M prompts (50K sampled)</p>
+                    <p><strong>NuminaMath-TIR:</strong> 64,312 prompts for advanced math</p>
+                    <p><strong>Tülu 3 Persona MATH:</strong> 149,960 synthetic math prompts</p>
+                    <p><strong>Tülu 3 Persona GSM:</strong> 49,980 synthetic grade-school math</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Coding</h3>
+                    <p><strong>Evol CodeAlpaca:</strong> 107,276 prompts for Python coding</p>
+                    <p><strong>Tülu 3 Persona Python:</strong> 34,999 synthetic coding prompts</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Safety & Instruction Following</h3>
+                    <p><strong>Tülu 3 CoCoNot:</strong> 10,983 prompts for non-compliance training</p>
+                    <p><strong>Tülu 3 WildJailbreak:</strong> 50,000 adversarial prompts</p>
+                    <p><strong>Tülu 3 Persona IF:</strong> 29,980 precise instruction-following prompts</p>
+                </div>
+            </div>
+
+            <h3>Synthetic Data Generation with Personas</h3>
+            <p>
+                To fill gaps in public data, Tülu 3 generates synthetic prompts using <strong>persona-driven 
+                synthesis</strong> (from Chan et al., 2024). The key idea: condition on diverse personas (e.g., 
+                "A machine learning researcher focused on neural networks") to steer the LLM toward generating 
+                varied, skill-specific prompts.
+            </p>
+
+            <div class="info-box">
+                <p><strong>Example:</strong> To generate math prompts, sample a persona like "An actuary calculating 
+                insurance premiums" and prompt GPT-4 to create a relevant math problem from that persona's perspective. 
+                Repeat with ~250K different personas to get diverse coverage.</p>
+                <p><strong>Why personas?:</strong> Without personas, LLMs fall into repetitive patterns (mode collapse). 
+                Personas provide natural diversity by anchoring generation to different viewpoints and expertise areas.</p>
+            </div>
+
+            <h3>Data Provenance and Licenses</h3>
+            <p>
+                Tülu 3 carefully tracks the provenance of all datasets and only includes those with clear, permissive 
+                licenses. Notably, <strong>ShareGPT was excluded</strong> due to questionable legal provenance (shared 
+                by users without consent for training use). All Tülu 3 datasets have verified licenses.
+            </p>
+
+            <h3>Decontamination: Removing Evaluation Leakage</h3>
+            <p>
+                A critical but often-overlooked step: <strong>checking training data for overlap with evaluation 
+                benchmarks</strong>. Tülu 3 developed a decontamination toolkit that:
+            </p>
+            <ul>
+                <li>Compares training prompts against all evaluation sets (MMLU, GSM8K, MATH, HumanEval, IFEval, etc.)</li>
+                <li>Removes exact matches and near-duplicates (using text similarity)</li>
+                <li>Reports contamination statistics for transparency</li>
+            </ul>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">23.3M</div>
+                    <div class="stat-label">Total curated prompts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">939K</div>
+                    <div class="stat-label">Prompts selected for SFT</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">425K</div>
+                    <div class="stat-label">Prompts used for DPO (8B + 70B combined)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">100%</div>
+                    <div class="stat-label">Datasets with verified licenses</div>
+                </div>
+            </div>
+        </section>
+
+        <section id="sft" class="content-section">
+            <h2>Stage 2: Supervised Finetuning (SFT)</h2>
+
+            <p>
+                The SFT stage finetunes Llama 3.1 base models on 939,344 carefully selected prompt-completion pairs. 
+                The goal: establish strong foundational capabilities across all core skills while maintaining balance.
+            </p>
+
+            <h3>Data Mixture: General + Skill-Specific</h3>
+            <p>
+                The SFT mixture balances two types of data:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>General-Purpose Data (~40%)</h4>
+                    <p>
+                        Real-world chat prompts (WildChat), volunteer-annotated conversations (OpenAssistant), 
+                        expert-curated tasks (No Robots), and classical NLP tasks (FLAN v2). These provide diversity 
+                        and general instruction-following capability.
+                    </p>
+                    <p><strong>Why important:</strong> Models trained only on skill-specific data become narrow 
+                    specialists; general data maintains broad competence and conversational coherence.</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Skill-Specific Data (~60%)</h4>
+                    <p>
+                        Synthetic math prompts (Persona MATH, Persona GSM, OpenMathInstruct), coding prompts 
+                        (Persona Python, Evol CodeAlpaca), precise instruction following (Persona IF), safety 
+                        (CoCoNot, WildJailbreak), and multilingual (Aya subset).
+                    </p>
+                    <p><strong>Why important:</strong> General data alone doesn't suffice for challenging tasks like 
+                    MATH or precise instruction following. Targeted data pushes performance on specific capabilities.</p>
+                </div>
+            </div>
+
+            <h3>Iterative Mix Refinement</h3>
+            <p>
+                The SFT mixture wasn't chosen arbitrarily—it was refined through <strong>multiple rounds of 
+                experimentation</strong> guided by the development evaluation suite. The process:
+            </p>
+
+            <ol>
+                <li><strong>Establish upper bounds:</strong> Train skill-specialized models (e.g., math-only, 
+                code-only) to see maximum achievable performance on each skill</li>
+                <li><strong>Mix and measure:</strong> Train models on different data mixtures, evaluate on 
+                development benchmarks</li>
+                <li><strong>Identify gaps:</strong> If math performance lags behind the math-specialist, increase 
+                math data proportion and re-train</li>
+                <li><strong>Check for interference:</strong> Ensure adding more of one skill doesn't degrade others 
+                (e.g., adding too much code data might hurt conversational quality)</li>
+                <li><strong>Converge:</strong> Iterate until the general model approaches specialist performance on 
+                each skill without sacrificing others</li>
+            </ol>
+
+            <div class="info-box">
+                <h4>Key Findings from SFT Experiments</h4>
+                <ul>
+                    <li><strong>Real-world prompts matter for chat:</strong> WildChat (real user queries) is crucial 
+                    for AlpacaEval performance; synthetic data alone produces stilted conversations</li>
+                    <li><strong>Targeted data scales capabilities:</strong> Adding Persona MATH prompts improved 
+                    MATH score by 20+ points without hurting other skills</li>
+                    <li><strong>Safety data prevents regressions:</strong> Including WildJailbreak and WildGuardMix 
+                    substantially improved safety scores with minimal impact on helpfulness</li>
+                    <li><strong>Decontamination is non-trivial:</strong> Several public datasets had significant 
+                    overlap with evaluation sets, requiring careful filtering</li>
+                </ul>
+            </div>
+
+            <h3>SFT Training Details</h3>
+            <ul>
+                <li><strong>Base models:</strong> Llama 3.1 8B, 70B, 405B</li>
+                <li><strong>Training data:</strong> 939,344 prompt-completion pairs</li>
+                <li><strong>Training procedure:</strong> Standard next-token prediction (causal language modeling)</li>
+                <li><strong>Result:</strong> Tülu 3 SFT checkpoint—strong foundational instruction-following with 
+                balanced capabilities</li>
+            </ul>
+        </section>
+
+        <section id="dpo" class="content-section">
+            <h2>Stage 3: Direct Preference Optimization (DPO)</h2>
+
+            <p>
+                After SFT establishes foundational skills, DPO refines the model by training on <strong>preference 
+                comparisons</strong>: pairs of responses where one is preferred over the other. Tülu 3 uses 
+                <strong>on-policy preference data</strong> generated from the SFT model itself.
+            </p>
+
+            <h3>On-Policy Preference Data Generation</h3>
+            <p>
+                Traditional preference datasets (e.g., UltraFeedback) are <strong>off-policy</strong>: they contain 
+                responses from models other than the one being trained. Tülu 3 generates <strong>on-policy</strong> 
+                preferences by:
+            </p>
+
+            <ol>
+                <li><strong>Sample prompts:</strong> Select prompts from the curated dataset (same sources as SFT)</li>
+                <li><strong>Generate completions:</strong> For each prompt, sample multiple completions from 
+                <strong>Tülu 3 SFT</strong> and from other models (e.g., Llama 3.1 Instruct, GPT-4)</li>
+                <li><strong>Pairwise comparison:</strong> Use a strong model (e.g., GPT-4) or human annotators to 
+                judge which completion is better</li>
+                <li><strong>Create preference pairs:</strong> Store (prompt, chosen_completion, rejected_completion) 
+                tuples</li>
+            </ol>
+
+            <div class="info-box">
+                <p><strong>Why on-policy?</strong> On-policy data reflects the SFT model's actual output distribution. 
+                If you train DPO on off-policy data (from a different model), the preference model learns about 
+                mistakes the current model doesn't make and fails to address its actual failure modes. On-policy 
+                data targets the model's specific weaknesses.</p>
+            </div>
+
+            <h3>Length-Normalized DPO</h3>
+            <p>
+                Tülu 3 uses <strong>length-normalized DPO</strong> (a variant of standard DPO from Lesson 04). 
+                The key modification: normalize the DPO loss by completion length to prevent the model from 
+                gaming the objective by generating very short or very long responses.
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Standard DPO (Lesson 04)</h4>
+                    <p>
+                        Directly optimizes the implicit reward function encoded in the preference data. Can be gamed 
+                        by length: the model might learn that shorter responses are "safer" (fewer opportunities to 
+                        make mistakes) and collapse to terse outputs.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Length-Normalized DPO</h4>
+                    <p>
+                        Divides the log-probability of each completion by its length before computing the DPO loss. 
+                        This prevents length exploitation and encourages the model to produce appropriately detailed 
+                        responses.
+                    </p>
+                </div>
+            </div>
+
+            <h3>DPO Training Details</h3>
+            <ul>
+                <li><strong>Starting checkpoint:</strong> Tülu 3 SFT</li>
+                <li><strong>Preference data:</strong> 425,145 preference pairs (combined across 8B and 70B; exact 
+                counts vary by model size)</li>
+                <li><strong>Data composition:</strong> Mix of on-policy Tülu 3 SFT preferences and off-policy 
+                UltraFeedback (decontaminated)</li>
+                <li><strong>Algorithm:</strong> Length-normalized DPO</li>
+                <li><strong>Result:</strong> Tülu 3 DPO checkpoint with improved chat quality and instruction-following</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>DPO Stage Improvements</h4>
+                <p>From Table 5 (70B model, development benchmarks):</p>
+                <ul>
+                    <li><strong>AlpacaEval 2:</strong> 26.3% (SFT) → 49.6% (DPO)—massive chat quality improvement</li>
+                    <li><strong>IFEval:</strong> 82.1% (SFT) → 82.6% (DPO)—modest instruction-following gain</li>
+                    <li><strong>Safety:</strong> 94.4% (SFT) → 89.0% (DPO)—slight regression (recovered in RLVR)</li>
+                </ul>
+                <p>DPO's main contribution is improving conversational quality (AlpacaEval) while maintaining 
+                technical capabilities. The safety regression is expected and addressed in the final RLVR stage.</p>
+            </div>
+        </section>
+
+        <section id="rlvr" class="content-section">
+            <h2>Stage 4: Reinforcement Learning with Verifiable Rewards (RLVR)</h2>
+
+            <p>
+                The final stage introduces <strong>RLVR</strong>, a novel RL-based method for tasks with 
+                <strong>verifiable ground-truth outcomes</strong>. Unlike RLHF (which uses a learned reward model) 
+                or RLAIF (which uses AI-generated preference labels), RLVR uses <strong>deterministic verification</strong>.
+            </p>
+
+            <h3>What is RLVR?</h3>
+            <p>
+                RLVR applies reinforcement learning to tasks where you can <strong>objectively check if the answer 
+                is correct</strong>:
+            </p>
+
+            <ul>
+                <li><strong>Math (GSM8K, MATH):</strong> Parse the model's final answer and compare to the ground truth</li>
+                <li><strong>Instruction Following (IFEval):</strong> Check if the response satisfies all specified 
+                constraints (e.g., "include exactly 3 bullet points," "start with the word 'Hello'")</li>
+                <li><strong>Code (HumanEval, in principle):</strong> Run unit tests against generated code</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>RLVR Reward Function</h3>
+                <p>
+                    For each task, define a <strong>verifier function</strong> that checks correctness. The reward is:
+                </p>
+                <p style="text-align: center; margin: 20px 0; font-family: monospace; font-size: 1.1em;">
+                    reward = <strong>1.0</strong> if verifier(completion) == correct, else <strong>0.0</strong>
+                </p>
+                <p>
+                    That's it. No learned reward model, no preference labels, no AI judge. Just pass/fail verification.
+                </p>
+            </div>
+
+            <h3>How RLVR Differs from RLHF and RLAIF</h3>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>RLHF (Lesson 02)</h4>
+                    <p>
+                        <strong>Reward model:</strong> Trained on human preferences<br>
+                        <strong>Pros:</strong> Works for subjective tasks (helpfulness, harmlessness)<br>
+                        <strong>Cons:</strong> Learned RM can be exploited (reward hacking), expensive human labels
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>RLAIF (Lesson 08, Constitutional AI)</h4>
+                    <p>
+                        <strong>Reward model:</strong> Trained on AI-generated preferences<br>
+                        <strong>Pros:</strong> Cheaper than RLHF, scalable<br>
+                        <strong>Cons:</strong> Still susceptible to reward hacking, AI judge can be wrong
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>RLVR (Tülu 3)</h4>
+                    <p>
+                        <strong>Reward:</strong> Deterministic verification (correct/incorrect)<br>
+                        <strong>Pros:</strong> No reward hacking (ground truth is objective), simple and reliable<br>
+                        <strong>Cons:</strong> Only works for tasks with verifiable outcomes
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>GRPO (Lesson 06)</h4>
+                    <p>
+                        <strong>Reward:</strong> Verifiable (unit tests for code/math)<br>
+                        <strong>Relation to RLVR:</strong> GRPO is a specific RL algorithm; RLVR is the general 
+                        paradigm of using verifiable rewards. Tülu 3 uses PPO-style RL with RLVR rewards.
+                    </p>
+                </div>
+            </div>
+
+            <h3>RLVR Training Pipeline</h3>
+
+            <ol>
+                <li><strong>Select verifiable tasks:</strong> Tülu 3 uses GSM8K, MATH, and IFEval</li>
+                <li><strong>Create training prompts:</strong> Sample prompts from each task's training set</li>
+                <li><strong>Generate completions:</strong> Use the DPO checkpoint to sample multiple completions 
+                per prompt (via VLLM for efficient inference)</li>
+                <li><strong>Verify correctness:</strong> For each completion, run the verifier:
+                    <ul>
+                        <li><strong>Math:</strong> Parse final answer (regex or LLM-based extraction), compare to ground truth</li>
+                        <li><strong>IFEval:</strong> Check all constraints (e.g., word count, formatting, keyword inclusion)</li>
+                    </ul>
+                </li>
+                <li><strong>RL optimization:</strong> Use PPO to maximize the expected reward (probability of generating 
+                correct completions)</li>
+            </ol>
+
+            <div class="info-box">
+                <h4>Infrastructure: Asynchronous RL at Scale</h4>
+                <p>
+                    Training 70B and 405B models with RL requires efficient infrastructure. Tülu 3's RLVR setup:
+                </p>
+                <ul>
+                    <li><strong>Inference:</strong> Run on VLLM (optimized for throughput) to generate completions quickly</li>
+                    <li><strong>Training:</strong> Learner nodes perform gradient updates concurrently while inference runs</li>
+                    <li><strong>Asynchronous pipeline:</strong> Inference and training don't block each other, maximizing GPU utilization</li>
+                </ul>
+                <p>This architecture allowed Tülu 3 to train 405B RLVR models feasibly.</p>
+            </div>
+
+            <h3>RLVR Results</h3>
+            <p>From Table 5 (70B model):</p>
+            <ul>
+                <li><strong>GSM8K:</strong> 91.1% (SFT) → 93.5% (DPO) → <strong>93.5%</strong> (RLVR, maintained)</li>
+                <li><strong>MATH:</strong> 53.7% (SFT) → 62.3% (DPO) → <strong>63.0%</strong> (RLVR, +0.7 points)</li>
+                <li><strong>IFEval:</strong> 82.1% (SFT) → 82.6% (DPO) → <strong>83.2%</strong> (RLVR, +0.6 points)</li>
+                <li><strong>Safety:</strong> 94.4% (SFT) → 89.0% (DPO) → <strong>88.3%</strong> (RLVR, slight further drop)</li>
+            </ul>
+
+            <div class="info-box warning">
+                <h4>⚠️ Safety Regression in RLVR</h4>
+                <p>
+                    The safety score dropped from 94.4% (SFT) to 88.3% (RLVR). This is expected: RLVR optimizes for 
+                    math and IF performance, not safety. The paper notes this tradeoff and suggests future work could 
+                    include safety-specific RLVR rewards or a final safety finetuning stage.
+                </p>
+            </div>
+        </section>
+
+        <section id="evaluation" class="content-section">
+            <h2>Tülu 3 Eval: Development vs Unseen Benchmarks</h2>
+
+            <p>
+                A critical innovation in Tülu 3 is its <strong>rigorous evaluation framework</strong> with separate 
+                <strong>development</strong> and <strong>unseen (held-out)</strong> benchmark splits. This prevents 
+                overfitting to specific evaluation sets during training.
+            </p>
+
+            <h3>Development Benchmarks: Guide Training</h3>
+            <p>
+                Development benchmarks are used throughout training to measure progress and inform decisions about 
+                data mixtures, hyperparameters, and training duration. For Tülu 3, development benchmarks include:
+            </p>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>Knowledge</h3>
+                    <p><strong>MMLU</strong> (0-shot, CoT): Massive multitask language understanding</p>
+                    <p><strong>PopQA</strong> (15-shot): Entity-centric question answering</p>
+                    <p><strong>TruthfulQA</strong> (6-shot): Truthful answers to adversarial questions</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Reasoning</h3>
+                    <p><strong>BigBenchHard</strong> (3-shot, CoT): Challenging BigBench subset</p>
+                    <p><strong>DROP</strong> (3-shot): Discrete reasoning over paragraphs</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Math</h3>
+                    <p><strong>MATH</strong> (4-shot, CoT, Flex): Competition-level math problems</p>
+                    <p><strong>GSM8K</strong> (8-shot, CoT): Grade-school math word problems</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Coding</h3>
+                    <p><strong>HumanEval</strong> (pass@10): Python function synthesis</p>
+                    <p><strong>HumanEval+</strong> (pass@10): HumanEval with extra test cases</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Instruction Following & Chat</h3>
+                    <p><strong>IFEval</strong> (prompt loose): Verifiable instruction following</p>
+                    <p><strong>AlpacaEval 2</strong> (LC % win): Conversational quality vs reference</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>Safety</h3>
+                    <p><strong>Tülu 3 Safety</strong>: Average across 6 safety tasks (details in paper Section 7.2.1)</p>
+                </div>
+            </div>
+
+            <h3>Unseen Benchmarks: Detect Overfitting</h3>
+            <p>
+                Unseen benchmarks are <strong>held out during training</strong>—the team did not look at scores on 
+                these until final evaluation. This reveals how much the training process overfit to development 
+                benchmarks. Unseen benchmarks include:
+            </p>
+
+            <ul>
+                <li><strong>Knowledge:</strong> MMLU-Pro, GPQA</li>
+                <li><strong>Reasoning:</strong> AGIEval English</li>
+                <li><strong>Math:</strong> Deepmind Mathematics</li>
+                <li><strong>Coding:</strong> BigCodeBench</li>
+                <li><strong>Instruction Following:</strong> IFEval-OOD, HREF</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>Why Separate Splits Matter</h4>
+                <p>
+                    When you iterate on training data and hyperparameters while constantly checking the same benchmarks, 
+                    you inevitably overfit—not to individual examples (that's contamination), but to the <em>distribution 
+                    and style</em> of the benchmark. Unseen benchmarks provide an unbiased estimate of generalization.
+                </p>
+                <p>
+                    <strong>Tülu 3 finding:</strong> Performance on development and unseen benchmarks was highly correlated, 
+                    suggesting the training process generalized well and didn't severely overfit to development evals.
+                </p>
+            </div>
+
+            <h3>Decontamination: No Evaluation Leakage</h3>
+            <p>
+                Tülu 3 systematically decontaminated all training data against all evaluation benchmarks:
+            </p>
+
+            <ol>
+                <li><strong>Exact match:</strong> Remove training examples that exactly match any evaluation example</li>
+                <li><strong>Fuzzy match:</strong> Use text similarity (n-gram overlap, embedding cosine similarity) to 
+                catch near-duplicates</li>
+                <li><strong>Manual review:</strong> Inspect flagged examples to confirm contamination</li>
+                <li><strong>Report statistics:</strong> Document how much contamination was found in each dataset 
+                (see Table 37 in the paper)</li>
+            </ol>
+
+            <div class="info-box warning">
+                <h4>⚠️ Contamination is Widespread</h4>
+                <p>
+                    Tülu 3 found <strong>non-trivial contamination in several popular open datasets</strong>. Many 
+                    publicly released datasets were scraped from the web or synthesized by LLMs that had access to 
+                    benchmark data, leading to accidental leakage. Decontamination is not optional—it's essential 
+                    for honest evaluation.
+                </p>
+            </div>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: State-of-the-Art Open Post-Training</h2>
+
+            <h3>Tülu 3 70B: Matching Closed Models</h3>
+            <p>
+                Tülu 3 70B surpasses all open-weight models in its size class and rivals closed models like 
+                GPT-4o mini and Claude 3.5 Haiku:
+            </p>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">76.2%</div>
+                    <div class="stat-label">Tülu 3 70B Average (dev benchmarks)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">75.3%</div>
+                    <div class="stat-label">Claude 3.5 Haiku Average</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">74.1%</div>
+                    <div class="stat-label">Llama 3.1 70B Instruct Average</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">69.6%</div>
+                    <div class="stat-label">GPT-4o mini Average</div>
+                </div>
+            </div>
+
+            <h3>Per-Skill Breakdown (70B Model)</h3>
+            <p>Comparing Tülu 3 70B final checkpoint to Llama 3.1 70B Instruct (Table 5):</p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>MMLU (Knowledge)</h4>
+                    <p>Llama 3.1 Instruct: <strong>85.3%</strong></p>
+                    <p>Tülu 3: <strong>83.1%</strong></p>
+                    <p style="color: var(--error);">-2.2 points (slight regression)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>MATH (Math Reasoning)</h4>
+                    <p>Llama 3.1 Instruct: <strong>56.4%</strong></p>
+                    <p>Tülu 3: <strong>63.0%</strong></p>
+                    <p style="color: var(--success);">+6.6 points (significant improvement)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>GSM8K (Grade School Math)</h4>
+                    <p>Llama 3.1 Instruct: <strong>93.7%</strong></p>
+                    <p>Tülu 3: <strong>93.5%</strong></p>
+                    <p>-0.2 points (essentially tied)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>HumanEval (Coding)</h4>
+                    <p>Llama 3.1 Instruct: <strong>93.6%</strong></p>
+                    <p>Tülu 3: <strong>92.4%</strong></p>
+                    <p style="color: var(--error);">-1.2 points (slight regression)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>IFEval (Instruction Following)</h4>
+                    <p>Llama 3.1 Instruct: <strong>88.0%</strong></p>
+                    <p>Tülu 3: <strong>83.2%</strong></p>
+                    <p style="color: var(--error);">-4.8 points (regression)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>AlpacaEval 2 (Chat Quality)</h4>
+                    <p>Llama 3.1 Instruct: <strong>33.4%</strong></p>
+                    <p>Tülu 3: <strong>49.8%</strong></p>
+                    <p style="color: var(--success);">+16.4 points (huge improvement)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>BigBenchHard (Reasoning)</h4>
+                    <p>Llama 3.1 Instruct: <strong>83.0%</strong></p>
+                    <p>Tülu 3: <strong>85.0%</strong></p>
+                    <p style="color: var(--success);">+2.0 points (improvement)</p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Safety (6-task average)</h4>
+                    <p>Llama 3.1 Instruct: <strong>76.5%</strong></p>
+                    <p>Tülu 3: <strong>88.3%</strong></p>
+                    <p style="color: var(--success);">+11.8 points (major improvement)</p>
+                </div>
+            </div>
+
+            <p style="margin-top: 20px;">
+                <strong>Key takeaway:</strong> Tülu 3 excels at math reasoning, chat quality, and safety compared to 
+                Llama 3.1 Instruct, with some regressions on MMLU and IFEval. This reflects the tradeoffs inherent 
+                in multi-objective optimization—you can't maximize everything simultaneously.
+            </p>
+
+            <h3>Stage-by-Stage Progress (70B Model)</h3>
+            <p>
+                Table 5 shows how performance evolves across training stages. Key observations:
+            </p>
+
+            <ul>
+                <li><strong>SFT establishes foundations:</strong> The SFT checkpoint already achieves strong performance 
+                on most technical benchmarks (math, coding, reasoning)</li>
+                <li><strong>DPO boosts chat:</strong> AlpacaEval jumps from 26.3% (SFT) to 49.6% (DPO), while technical 
+                benchmarks see smaller gains or stay flat</li>
+                <li><strong>RLVR refines verifiable tasks:</strong> MATH and IFEval improve slightly from DPO to RLVR; 
+                other benchmarks mostly hold steady</li>
+                <li><strong>Safety peaks at SFT:</strong> Safety score is highest at SFT (94.4%), drops to 89.0% after 
+                DPO, and 88.3% after RLVR. The paper notes this tradeoff but argues the final score is still competitive</li>
+            </ul>
+
+            <h3>Tülu 3 405B: Competing with Frontier Models</h3>
+            <p>
+                At 405B scale, Tülu 3 rivals some of the best closed models (Table 4):
+            </p>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">81.6%</div>
+                    <div class="stat-label">GPT-4o (11-24) Average</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">80.7%</div>
+                    <div class="stat-label">Tülu 3 405B Average (with safety)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">79.0%</div>
+                    <div class="stat-label">Llama 3.1 405B Instruct Average</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">79.0%</div>
+                    <div class="stat-label">DeepSeek v3 Average</div>
+                </div>
+            </div>
+
+            <p>
+                Tülu 3 405B notably outperforms Llama 3.1 405B Instruct and matches DeepSeek v3, while approaching 
+                GPT-4o (though still ~1 point behind on average).
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of Tülu 3's post-training pipeline:</p>
+            <div id="quiz-container" class="quiz-container"></div>
+            <div class="quiz-summary" id="quiz-summary" style="display: none;">
+                <h3>Quiz Complete!</h3>
+                <div class="quiz-score" id="quiz-score"></div>
+                <button class="btn" onclick="location.reload()">Retake Quiz</button>
+            </div>
+        </section>
+
+        <section id="explorer" class="content-section">
+            <h2>Tülu 3 Data Explorer</h2>
+            <p>Explore the composition of Tülu 3's training data across different stages:</p>
+            
+            <div class="explorer-controls">
+                <label for="datasetSelect">Select Category:</label>
+                <select id="datasetSelect" onchange="updateDataset()">
+                    <option value="0">General Chat & Diversity</option>
+                    <option value="1">Math & Reasoning</option>
+                    <option value="2">Coding</option>
+                    <option value="3">Safety & Instruction Following</option>
+                    <option value="4">Knowledge & Multilingual</option>
+                </select>
+            </div>
+
+            <div id="dataset-display" class="question-display"></div>
+        </section>
+
+        <section id="charts" class="content-section">
+            <h2>Charts & Visualizations</h2>
+
+            <h3>Training Pipeline Overview</h3>
+            <div class="chart-container">
+                <canvas id="pipelineChart"></canvas>
+                <p class="chart-caption">
+                    Tülu 3 training stages. Each stage builds on the previous checkpoint, targeting different 
+                    aspects of model behavior.
+                </p>
+            </div>
+
+            <h3>Stage-by-Stage Performance (70B Model)</h3>
+            <div class="chart-container">
+                <canvas id="stageProgressChart"></canvas>
+                <p class="chart-caption">
+                    Performance across training stages on key benchmarks. Values from Table 5. Note the tradeoffs: 
+                    AlpacaEval improves dramatically with DPO, while safety peaks at SFT.
+                </p>
+            </div>
+
+            <h3>Tülu 3 70B vs Competitors</h3>
+            <div class="chart-container">
+                <canvas id="competitorChart"></canvas>
+                <p class="chart-caption">
+                    Tülu 3 70B compared to other 70B-class models on development benchmarks. Values from Table 5. 
+                    Tülu 3 achieves the highest average score.
+                </p>
+            </div>
+        </section>
+
+        <section id="bridge" class="content-section">
+            <h2>Bridge to the Curriculum</h2>
+
+            <h3>How Tülu 3 Unifies Earlier Lessons</h3>
+            
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Lesson 01: MMLU & Lesson 09: HELM</h4>
+                    <p>
+                        Tülu 3 Eval builds on HELM's holistic evaluation philosophy: measure multiple skills, use 
+                        development/unseen splits, and decontaminate training data. Tülu 3 shows how to integrate 
+                        rigorous benchmarking into the training loop—not just for final evaluation.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 02: InstructGPT & RLHF</h4>
+                    <p>
+                        Tülu 3's SFT stage follows InstructGPT's SFT approach but with more diverse, skill-targeted 
+                        data. RLVR is a variant of RL from Lesson 02, but uses verifiable rewards instead of a learned 
+                        reward model, avoiding reward hacking.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 04: DPO</h4>
+                    <p>
+                        Tülu 3 uses length-normalized DPO (Stage 3) to refine the SFT model via on-policy preference 
+                        data. This demonstrates DPO at scale with careful data curation—extending the DPO lesson with 
+                        real-world best practices.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 06: GRPO & Verifiable Rewards</h4>
+                    <p>
+                        RLVR shares the core idea with GRPO: use verifiable rewards (unit tests, math verification) 
+                        instead of learned reward models. Tülu 3 extends this to instruction following (IFEval) and 
+                        scales to 405B models.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 08: Constitutional AI</h4>
+                    <p>
+                        Constitutional AI uses AI-generated preference labels to reduce human annotation. Tülu 3's 
+                        on-policy DPO data generation is similar: use strong models (or human judges) to label 
+                        preferences for the current model's outputs. Both scale supervision efficiently.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 03: GSM8K & Lesson 07: HumanEval</h4>
+                    <p>
+                        Tülu 3 targets these specific benchmarks with synthetic data (Persona GSM, Persona Python) 
+                        and RLVR optimization. This shows how to translate benchmark-specific insights (from Lessons 
+                        03 and 07) into training data and objectives that improve those benchmarks.
+                    </p>
+                </div>
+            </div>
+
+            <h3>The Complete Post-Training Picture</h3>
+            <p>
+                Across Lessons 02, 04, 06, 08, and now 10, you've learned individual post-training techniques. 
+                Tülu 3 shows how to <strong>combine them into a coherent pipeline</strong>:
+            </p>
+
+            <ol>
+                <li><strong>Start with diverse, decontaminated data</strong> (synthetic + real-world prompts)</li>
+                <li><strong>SFT to establish foundations</strong> (mix general + skill-specific data)</li>
+                <li><strong>DPO to refine chat quality</strong> (on-policy preferences, length normalization)</li>
+                <li><strong>RLVR to push verifiable tasks</strong> (math, IF, code—use ground truth, not learned RM)</li>
+                <li><strong>Evaluate rigorously</strong> (dev/unseen splits, decontamination, report tradeoffs)</li>
+            </ol>
+
+            <p>
+                And critically: <strong>release everything</strong>. Tülu 3 demonstrates that open post-training 
+                can achieve state-of-the-art results when done carefully—no proprietary data or secret sauce required.
+            </p>
+
+            <h3>What's Next?</h3>
+            <p>
+                You've completed the core curriculum! Track A (benchmarking) and Track B (post-training) have given 
+                you the tools to understand how language models are trained, evaluated, and deployed. Potential next 
+                steps:
+            </p>
+            <ul>
+                <li><strong>Implement Tülu 3:</strong> Use the released code and data to train your own post-trained 
+                model on a different base model or domain</li>
+                <li><strong>Explore advanced topics:</strong> Multi-turn RLHF, iterative preference learning, 
+                constitutional AI at scale, safety-specific RL</li>
+                <li><strong>Contribute to open post-training:</strong> Release your own datasets, recipes, or 
+                evaluation tools to advance the community's capabilities</li>
+            </ul>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 Tülu 3 Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2411.15124" target="_blank">arXiv:2411.15124</a></p>
+                    <p>Lambert et al., "Tülu 3: Pushing Frontiers in Open Language Model Post-Training" (2024)</p>
+                    <p><a href="https://ar5iv.labs.arxiv.org/html/2411.15124" target="_blank">ar5iv HTML version</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>💻 Tülu 3 Code</h3>
+                    <p><a href="https://github.com/allenai/open-instruct" target="_blank">allenai/open-instruct</a></p>
+                    <p>Training code for SFT, DPO, and RLVR</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 Tülu 3 Eval</h3>
+                    <p><a href="https://github.com/allenai/olmes" target="_blank">allenai/olmes</a></p>
+                    <p>Evaluation suite and decontamination toolkit</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🤗 Model Checkpoints</h3>
+                    <p><a href="https://huggingface.co/allenai/Llama-3.1-Tulu-3-70B" target="_blank">Tülu 3 70B (final)</a></p>
+                    <p><a href="https://huggingface.co/allenai/Llama-3.1-Tulu-3-8B" target="_blank">Tülu 3 8B (final)</a></p>
+                    <p>All SFT, DPO, and RLVR checkpoints available on HuggingFace</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📦 Training Datasets</h3>
+                    <p><a href="https://huggingface.co/collections/allenai/tulu-3-datasets-673b8df14442393f7213f372" target="_blank">Tülu 3 Datasets Collection</a></p>
+                    <p>SFT mixture, preference datasets, RLVR datasets—all released with permissive licenses</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🎮 Demo</h3>
+                    <p><a href="https://playground.allenai.org/" target="_blank">playground.allenai.org</a></p>
+                    <p>Try Tülu 3 models interactively</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🔗 Related Work</h3>
+                    <p><strong>Tülu 2:</strong> <a href="https://arxiv.org/abs/2311.10702" target="_blank">Ivison et al. (2023)</a></p>
+                    <p><strong>Persona Hub:</strong> <a href="https://arxiv.org/abs/2406.20094" target="_blank">Chan et al. (2024)</a> - persona-driven data synthesis</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Previous Lessons</h3>
+                    <p><a href="../02-instructgpt-rlhf-reward-modeling/">Lesson 02: RLHF</a></p>
+                    <p><a href="../04-dpo-direct-preference-optimization/">Lesson 04: DPO</a></p>
+                    <p><a href="../06-deepseekmath-grpo/">Lesson 06: GRPO</a></p>
+                    <p><a href="../08-constitutional-ai/">Lesson 08: Constitutional AI</a></p>
+                    <p><a href="../09-helm-holistic-evaluation/">Lesson 09: HELM</a></p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>Lesson 10: Tülu 3 - Open Language Model Post-Training</p>
+        <p>Part of Ivan's Alternating Paper Curriculum | Track B: State-of-the-Art Post-Training</p>
+        <p><a href="../curriculum.html">View Full Curriculum</a> | <a href="https://arxiv.org/abs/2411.15124" target="_blank">Read the Paper</a></p>
+    </footer>
+
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>

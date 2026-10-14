@@ -22,7 +22,7 @@ Lessons alternate tracks to interleave theory with practice.
 | 07 | A | ✅ Complete | Code Evaluation Benchmarks | HumanEval (Chen et al., 2021) |
 | 08 | B | ✅ Complete | Constitutional AI | Bai et al. (2022) |
 | 09 | A | ✅ Complete | Holistic Evaluation (HELM) | Liang et al. (2022) |
-| 10 | B | 📋 Planned | HH-RLHF: Harmless-Helpful Tradeoff | Bai et al. (Anthropic, 2022) |
+| 10 | B | ✅ Complete | Tülu 3: Open Post-Training | Lambert et al. (Allen AI, 2024) |
 
 ## Learning Objectives by Track
 
@@ -62,9 +62,10 @@ Each lesson includes:
 - ✅ Lesson 07 (Track A): HumanEval and code evaluation benchmarks
 - ✅ Lesson 08 (Track B): Constitutional AI (Bai et al., 2022)
 - ✅ Lesson 09 (Track A): HELM - Holistic Evaluation of Language Models (Liang et al., 2022)
+- ✅ Lesson 10 (Track B): Tülu 3 - Open Post-Training (Lambert et al., Allen AI, 2024)
 
 **Next Up:**
-- 📋 Lesson 10 (Track B): Training a Helpful and Harmless Assistant with RLHF (Bai et al., Anthropic, 2022) - explores the harmlessness-helpfulness tradeoff in human feedback training, complementing Constitutional AI's AI feedback approach and bridging HELM's multi-metric evaluation lens to preference learning
+The core curriculum is complete! Lessons 01-10 cover the fundamentals of benchmarking (Track A) and post-training techniques (Track B). Future lessons could explore: iterative preference learning, multi-turn RLHF, safety-specific RL, or domain adaptation for specialized models.
 
 ## How to Request a Lesson
 
