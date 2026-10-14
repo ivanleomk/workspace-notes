@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 labels: ['Data Curation', 'SFT', 'DPO', 'RLVR'],
                 datasets: [{
                     label: 'Training Data Size (thousands)',
-                    data: [23300, 939, 425, 150],
+                    data: [23300, 939, 425, 30], // RLVR: 29,946 prompts per Table on RLVR data (arXiv 2411.15124)
                     backgroundColor: [
                         'rgba(99, 102, 241, 0.8)',
                         'rgba(139, 92, 246, 0.8)',
@@ -48,9 +48,9 @@ document.addEventListener('DOMContentLoaded', function() {
                                 } else if (context.dataIndex === 1) {
                                     return 'SFT examples: 939K';
                                 } else if (context.dataIndex === 2) {
-                                    return 'DPO pairs: 425K';
+                                    return 'DPO pairs: 425K (8B + 70B combined)';
                                 } else {
-                                    return 'RLVR prompts: ~150K';
+                                    return 'RLVR prompts: ~30K';
                                 }
                             }
                         }
