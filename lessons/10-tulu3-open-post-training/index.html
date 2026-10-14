@@ -241,8 +241,8 @@
                     <div class="stat-label">Prompts selected for SFT</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-number">425K</div>
-                    <div class="stat-label">Prompts used for DPO (8B + 70B combined)</div>
+                    <div class="stat-number">271K / 334K</div>
+                    <div class="stat-label">DPO preference pairs (8B / 70B)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">100%</div>
@@ -394,8 +394,8 @@
             <h3>DPO Training Details</h3>
             <ul>
                 <li><strong>Starting checkpoint:</strong> Tülu 3 SFT</li>
-                <li><strong>Preference data:</strong> 425,145 preference pairs (combined across 8B and 70B; exact 
-                counts vary by model size)</li>
+                <li><strong>Preference data:</strong> 271,409 preference pairs (8B model) and 334,302 pairs (70B model) 
+                from Table 15; 425,145 prompts selected for preference stage per Table 7</li>
                 <li><strong>Data composition:</strong> Mix of on-policy Tülu 3 SFT preferences and off-policy 
                 UltraFeedback (decontaminated)</li>
                 <li><strong>Algorithm:</strong> Length-normalized DPO</li>
