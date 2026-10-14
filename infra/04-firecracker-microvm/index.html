@@ -285,17 +285,25 @@ graph LR
 
             <h3>Device Model</h3>
             <p>
-                From the 
-                <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">Firecracker NSDI 2020 paper</a> 
-                (Agache et al.):
+                From <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">docs/design.md</a>:
             </p>
             <blockquote>
-                "Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net 
-                devices, a serial console, a one-button keyboard, and a partial RTC."
+                "Firecracker provides guests with storage and network access via emulated VirtIO Net and VirtIO Block devices. 
+                It also exposes a serial console and partial keyboard controller, the latter being used by guests to reset the VM."
             </blockquote>
             <p>
-                The "one-button keyboard" is a minimal i8042 keyboard controller emulation, not a full keyboard. It's there 
-                because Linux expects it during boot. The "partial RTC" is enough to let the guest read the time.
+                From the 
+                <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">Firecracker NSDI 2020 paper</a> 
+                (Agache et al., §3.1):
+            </p>
+            <blockquote>
+                "Reflecting its specialization for container and function workloads, Firecracker provides a limited number of 
+                emulated devices: network and block devices, serial ports, and partial i8042 (PS/2 keyboard controller) support."
+            </blockquote>
+            <p>
+                The i8042 keyboard controller emulation is minimal—just enough for the guest to signal a reboot request. It's not 
+                a full keyboard. Firecracker also emulates virtio-vsock for host-guest communication. No graphics, no PCI bus, no USB, 
+                no audio.
             </p>
             <p>
                 <strong>No graphics, no PCI bus, no USB.</strong> If the guest tries to access unsupported devices, the VM 
@@ -491,12 +499,11 @@ curl --unix-socket /tmp/firecracker.socket -X PUT \
                 <li><strong>cgroups:</strong> Creates cgroup v1 or v2 hierarchies (Lesson 01: cgroups limit resources). You pass 
                 <code>--cgroup cpuset.cpus=0</code> or <code>--cgroup memory.max=134217728</code> to the jailer, and it writes 
                 these limits before starting Firecracker. The Firecracker process and its children inherit the cgroup.</li>
-                <li><strong>seccomp-bpf:</strong> Applies a strict seccomp filter (Lesson 02: syscall filtering). Firecracker's 
-                default seccomp filter allows only ~60 syscalls. See 
-                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/src/seccomp.rs" target="_blank">src/firecracker/src/seccomp.rs</a> 
-                and the JSON filter definitions in 
-                <a href="https://github.com/firecracker-microvm/firecracker/tree/main/resources/seccomp" target="_blank">resources/seccomp/</a>. 
-                The filter is architecture-specific (x86_64, aarch64).</li>
+                <li><strong>seccomp-bpf:</strong> Applies a strict seccomp filter (Lesson 02: syscall filtering). For x86_64, 
+                Firecracker's default seccomp filters 
+                (<a href="https://github.com/firecracker-microvm/firecracker/blob/main/resources/seccomp/x86_64-unknown-linux-musl.json" target="_blank">resources/seccomp/x86_64-unknown-linux-musl.json</a>) 
+                allow 51 unique syscalls for the VMM thread, 32 for the API thread, and 27 for vCPU threads. The filters are 
+                architecture-specific (x86_64, aarch64).</li>
                 <li><strong>Privilege drop:</strong> Calls <code>setuid(2)</code> and <code>setgid(2)</code> to drop to a 
                 non-root user (you specify <code>--uid</code> and <code>--gid</code>). This ensures Firecracker runs as an 
                 unprivileged user inside the jail.</li>
@@ -541,7 +548,9 @@ curl --unix-socket /tmp/firecracker.socket -X PUT \
                     <code>/sys/fs/cgroup/</code> for cgroups, and calls <code>pivot_root(2)</code> + <code>chroot(2)</code> 
                     for filesystem isolation. You built a minimal sandbox with these primitives; the jailer does the same 
                     for Firecracker.</li>
-                    <li><strong>Lesson 02:</strong> The jailer applies seccomp-bpf filters (allow ~60 syscalls, block the rest) 
+                    <li><strong>Lesson 02:</strong> The jailer applies seccomp-bpf filters (for x86_64: 51 syscalls for VMM, 32 for API, 
+                    27 for vCPU threads; see 
+                    <a href="https://github.com/firecracker-microvm/firecracker/blob/main/resources/seccomp/x86_64-unknown-linux-musl.json" target="_blank">x86_64-unknown-linux-musl.json</a>) 
                     and uses <code>mknod(2)</code> + <code>chown(2)</code> to create device nodes inside the jail. You learned 
                     how seccomp filters work; Firecracker's filters are production-grade examples you can study in 
                     <code>resources/seccomp/*.json</code>.</li>
@@ -557,8 +566,8 @@ curl --unix-socket /tmp/firecracker.socket -X PUT \
                 are the only attack surface.</li>
                 <li><strong>Minimal device model:</strong> Fewer emulated devices = smaller attack surface. No graphics, 
                 no USB, no PCI bus.</li>
-                <li><strong>Seccomp:</strong> The Firecracker process itself can only make ~60 syscalls. Even if an attacker 
-                escapes the VM, they're still in a seccomp jail.</li>
+                <li><strong>Seccomp:</strong> The Firecracker process threads can only make a limited set of syscalls (for x86_64: 
+                51 for VMM, 32 for API, 27 for vCPU threads). Even if an attacker escapes the VM, they're still in a seccomp jail.</li>
                 <li><strong>chroot + namespaces:</strong> The process can't see the host filesystem or other network namespaces.</li>
                 <li><strong>cgroups:</strong> Resource exhaustion attacks are bounded by memory and CPU limits.</li>
                 <li><strong>Unprivileged user:</strong> The process runs as uid=1000 (or whatever you set), not root.</li>
@@ -698,9 +707,11 @@ graph LR
 
             <h3>Who Uses Firecracker for Evals/Sandboxes</h3>
             <ul>
-                <li><strong>AWS Lambda:</strong> All Lambda functions run in Firecracker microVMs. From the NSDI paper: 
-                "Firecracker [...] is the foundation of AWS Lambda and AWS Fargate." Lambda's cold-start time includes 
-                Firecracker boot.</li>
+                <li><strong>AWS Lambda:</strong> All Lambda functions run in Firecracker microVMs. From the 
+                <a href="https://www.usenix.org/system/files/nsdi20-paper-agache.pdf" target="_blank">NSDI 2020 paper</a> 
+                (Agache et al., §1): Firecracker "has been used in production in Lambda since 2018, where it powers millions of 
+                workloads and trillions of requests per month." Also (§4.1): "We have deployed Firecracker in two publically-available 
+                serverless compute services at Amazon Web Services (Lambda and Fargate)." Lambda's cold-start time includes Firecracker boot.</li>
                 <li><strong>E2B (e2b-dev/runtime):</strong> Uses Firecracker directly for agent sandboxes. Supports 
                 snapshot/restore and fork (one VM to step <em>k</em>, then fork N children). See the 
                 <a href="https://github.com/e2b-dev/infra" target="_blank">e2b-dev/infra repo</a> for their Terraform + 
@@ -1236,14 +1247,19 @@ if __name__ == "__main__":
                 <h3>The NSDI 2020 Paper</h3>
                 <ul>
                     <li><strong>"Firecracker: Lightweight Virtualization for Serverless Applications"</strong> (Agache et al., NSDI 2020): 
-                    <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">USENIX link</a></li>
+                    <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">USENIX link</a> | 
+                    <a href="https://www.usenix.org/system/files/nsdi20-paper-agache.pdf" target="_blank">PDF</a></li>
                     <li>Key quotes:
                         <ul>
-                            <li>"Firecracker [...] is the foundation of AWS Lambda and AWS Fargate."</li>
-                            <li>"Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net 
-                            devices, a serial console, a one-button keyboard, and a partial RTC."</li>
-                            <li>"Firecracker boots to a running guest in less than 125 milliseconds and uses less than 5 MiB of 
-                            memory overhead per microVM."</li>
+                            <li>(§1) "Firecracker has been used in production in Lambda since 2018, where it powers millions of workloads 
+                            and trillions of requests per month."</li>
+                            <li>(§4.1) "We have deployed Firecracker in two publically-available serverless compute services at Amazon Web 
+                            Services (Lambda and Fargate)."</li>
+                            <li>(§3.1) "Reflecting its specialization for container and function workloads, Firecracker provides a limited 
+                            number of emulated devices: network and block devices, serial ports, and partial i8042 (PS/2 keyboard controller) 
+                            support."</li>
+                            <li>(§1) "With the provided minimal Linux guest kernel configuration, [Firecracker] offers memory overhead of less 
+                            than 5MB per container, boots to application code in less than 125ms."</li>
                         </ul>
                     </li>
                 </ul>

@@ -29,7 +29,7 @@ const quizData = {
         }
     },
     3: {
-        question: "Firecracker's device model is minimal. According to the NSDI 2020 paper, which of the following is NOT emulated by Firecracker?",
+        question: "Firecracker's device model is minimal. According to the NSDI 2020 paper and design.md, which of the following is NOT emulated by Firecracker?",
         options: {
             a: "virtio-net (paravirtualized network device)",
             b: "virtio-block (paravirtualized block device)",
@@ -38,8 +38,8 @@ const quizData = {
         },
         correct: "c",
         feedback: {
-            correct: "✓ Correct! From the NSDI paper: 'Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net devices, a serial console, a one-button keyboard, and a partial RTC.' There is **no PCI bus**. Firecracker uses virtio devices in MMIO (memory-mapped I/O) mode, not PCI. The guest kernel detects virtio-mmio devices via device tree or ACPI, not PCI enumeration. This is why Firecracker boots so fast: no PCI bus initialization, no BIOS, no legacy hardware. QEMU emulates a full PCI bus; Firecracker does not.",
-            wrong: "✗ The correct answer is **c (PCI bus)**. From the NSDI paper: 'Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net devices, a serial console, a one-button keyboard, and a partial RTC.' Firecracker does NOT emulate a PCI bus. It uses virtio-mmio (memory-mapped I/O), not virtio-pci. The guest kernel detects devices via device tree/ACPI, not PCI enumeration. This minimalism (no BIOS, no PCI, no graphics) is why Firecracker boots in <= 125ms. QEMU emulates a full PC with PCI; Firecracker does not."
+            correct: "✓ Correct! From the NSDI paper (§3.1): 'Reflecting its specialization for container and function workloads, Firecracker provides a limited number of emulated devices: network and block devices, serial ports, and partial i8042 (PS/2 keyboard controller) support.' There is **no PCI bus**. Firecracker uses virtio devices in MMIO (memory-mapped I/O) mode, not PCI. The guest kernel detects virtio-mmio devices via device tree or ACPI, not PCI enumeration. This is why Firecracker boots so fast: no PCI bus initialization, no BIOS, no legacy hardware. QEMU emulates a full PCI bus; Firecracker does not.",
+            wrong: "✗ The correct answer is **c (PCI bus)**. From the NSDI paper (§3.1): 'Reflecting its specialization for container and function workloads, Firecracker provides a limited number of emulated devices: network and block devices, serial ports, and partial i8042 (PS/2 keyboard controller) support.' Firecracker does NOT emulate a PCI bus. It uses virtio-mmio (memory-mapped I/O), not virtio-pci. The guest kernel detects devices via device tree/ACPI, not PCI enumeration. This minimalism (no BIOS, no PCI, no graphics) is why Firecracker boots in <= 125ms. QEMU emulates a full PC with PCI; Firecracker does not."
         }
     },
     4: {
