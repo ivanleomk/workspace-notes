@@ -10,6 +10,7 @@ This series teaches you how to build production-grade eval infrastructure from f
 2. **[Lesson 01: Linux Namespaces and cgroups v2](01-linux-namespaces-cgroups/)** — The building blocks of every container ✅
 3. **[Lesson 02: seccomp-bpf and overlayfs](02-seccomp-overlayfs/)** — Syscall filtering and union filesystems ✅
 4. **[Lesson 03: runc vs gVisor vs Kata Containers](03-runc-gvisor-kata/)** — Container runtime comparison and isolation spectrum ✅
+5. **[Lesson 04: Firecracker Internals and Booting a microVM](04-firecracker-microvm/)** — Minimal VMMs, KVM, and ≤125ms boot times ✅
 
 ## Live Lessons
 
@@ -17,6 +18,7 @@ Visit the live interactive lessons at:
 - [Lesson 01: Linux Namespaces and cgroups v2](https://ivanleomk.github.io/workspace-notes/infra/01-linux-namespaces-cgroups/)
 - [Lesson 02: seccomp-bpf and overlayfs](https://ivanleomk.github.io/workspace-notes/infra/02-seccomp-overlayfs/)
 - [Lesson 03: runc vs gVisor vs Kata Containers](https://ivanleomk.github.io/workspace-notes/infra/03-runc-gvisor-kata/)
+- [Lesson 04: Firecracker Internals and Booting a microVM](https://ivanleomk.github.io/workspace-notes/infra/04-firecracker-microvm/)
 
 ## What You'll Learn
 

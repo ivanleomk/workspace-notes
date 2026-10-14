@@ -1,0 +1,1335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 04: Firecracker Internals and Booting a microVM</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 04: Firecracker Internals and Booting a microVM</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Minimal VMMs and ≤125ms Boot Times</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#vmm-fundamentals">VMM Fundamentals</a>
+            <a href="#architecture">Firecracker Architecture</a>
+            <a href="#rest-api">REST API</a>
+            <a href="#jailer">The Jailer</a>
+            <a href="#networking">TAP Networking</a>
+            <a href="#eval-context">Eval Orchestration Context</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From Kata to Firecracker: The Minimal VMM</h2>
+            <p>
+                In Lesson 03, you saw that Kata Containers can use Firecracker as its hypervisor. But what 
+                <em>is</em> Firecracker, and why did AWS build it?
+            </p>
+            <p>
+                <strong>Firecracker</strong> is a minimal Virtual Machine Monitor (VMM) written in Rust. It's designed 
+                for one thing: launching thousands of lightweight microVMs with sub-second boot times and minimal memory 
+                overhead. From the 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">Firecracker SPECIFICATION.md</a>:
+            </p>
+            <blockquote>
+                "It takes <code>&lt;= 125 ms</code> to go from receiving the Firecracker InstanceStart API call to the 
+                start of the Linux guest user-space <code>/sbin/init</code> process."
+            </blockquote>
+            <p>
+                And the memory overhead per VM? Per the same spec:
+            </p>
+            <blockquote>
+                "Firecracker's virtual machine manager threads have a memory overhead <code>&lt;= 5 MiB</code>."
+            </blockquote>
+            <p>
+                These targets—125ms boot, 5 MiB overhead—are enforced by CI tests 
+                (<a href="https://github.com/firecracker-microvm/firecracker/blob/main/tests/integration_tests/performance/test_boottime.py" target="_blank">test_boottime.py</a>, 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/tests/host_tools/memory.py" target="_blank">memory.py</a>).
+            </p>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>What a VMM is and how KVM provides the hypervisor primitives (ioctl interface)</li>
+                    <li>Firecracker's minimal device model: virtio-net, virtio-block, vsock, serial, and a minimal i8042 keyboard controller</li>
+                    <li>The process/thread model: API thread, VMM thread, and vCPU threads (one per guest core)</li>
+                    <li>The REST API over a Unix socket: boot-source, drives, network-interfaces, machine-config, actions InstanceStart</li>
+                    <li>The jailer: chroot, namespaces, cgroups, seccomp filters, and privilege drop—tying back to Lessons 01–02</li>
+                    <li>TAP networking: how the host's tap device backs virtio-net inside the guest</li>
+                    <li>Why E2B, Fly Machines, AWS Lambda (Firecracker powers Lambda), and others use microVMs for eval orchestration</li>
+                    <li>Hands-on: boot a Firecracker VM from scratch with curl and measure boot time</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ KVM Required</h3>
+                <p>
+                    Firecracker requires <strong>Linux with KVM</strong> (<code>/dev/kvm</code>). This means:
+                </p>
+                <ul>
+                    <li><strong>Bare metal:</strong> Works out of the box if KVM is enabled</li>
+                    <li><strong>Cloud VMs:</strong> Only <code>.metal</code> instance types (AWS c5.metal, m5d.metal, etc.) or 
+                    cloud providers with nested virtualization enabled (some GCP/Azure VM families)</li>
+                    <li><strong>Your laptop VM:</strong> Enable nested virtualization in your hypervisor settings</li>
+                </ul>
+                <p>
+                    If you don't have KVM, you can read the code and understand the concepts, but you won't be able to 
+                    run the exercise. The Firecracker getting-started guide recommends an 
+                    <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" target="_blank">EC2 c5.metal instance with Ubuntu 24.04</a>.
+                </p>
+            </div>
+        </section>
+
+        <section id="vmm-fundamentals" class="content-section">
+            <h2>VMM Fundamentals: What is a Virtual Machine Monitor?</h2>
+            <p>
+                A <strong>Virtual Machine Monitor (VMM)</strong>, also called a <strong>hypervisor</strong>, is software 
+                that creates and runs virtual machines. It sits between the guest OS (the VM's kernel) and the host hardware.
+            </p>
+
+            <h3>Type 1 vs Type 2 Hypervisors</h3>
+            <ul>
+                <li><strong>Type 1 (bare-metal):</strong> Runs directly on the hardware. Examples: VMware ESXi, Xen, Hyper-V (when 
+                running in the host kernel).</li>
+                <li><strong>Type 2 (hosted):</strong> Runs as a process in a host OS. Examples: VirtualBox, VMware Workstation, 
+                QEMU, <strong>Firecracker</strong>.</li>
+            </ul>
+            <p>
+                Firecracker is a Type 2 hypervisor—it runs as a Linux process. But it delegates the heavy lifting to the 
+                <strong>KVM</strong> kernel module.
+            </p>
+
+            <h3>KVM: The Linux Hypervisor</h3>
+            <p>
+                <strong>KVM (Kernel-based Virtual Machine)</strong> is a Linux kernel module (loadable with <code>modprobe kvm_intel</code> 
+                or <code>kvm_amd</code>) that turns the kernel into a hypervisor. It provides:
+            </p>
+            <ul>
+                <li><strong><code>/dev/kvm</code></strong>: A character device that user-space programs (like Firecracker) open 
+                to create VMs</li>
+                <li><strong>ioctl API:</strong> The VMM sends <code>ioctl(2)</code> commands to <code>/dev/kvm</code> to:
+                    <ul>
+                        <li>Create a VM (<code>KVM_CREATE_VM</code>)</li>
+                        <li>Allocate guest memory (<code>KVM_SET_USER_MEMORY_REGION</code>)</li>
+                        <li>Create vCPUs (<code>KVM_CREATE_VCPU</code>)</li>
+                        <li>Run a vCPU (<code>KVM_RUN</code>)—this blocks until the guest exits (e.g., I/O, hypercall, or timer)</li>
+                    </ul>
+                </li>
+                <li><strong>Hardware virtualization extensions:</strong> KVM uses Intel VT-x or AMD-V to run guest code directly 
+                on the CPU with hardware isolation. VM exits (hypercalls, I/O) trap into the host kernel, which returns control 
+                to the VMM process.</li>
+            </ul>
+
+            <p>
+                <strong>Why this matters for evals:</strong> KVM provides hardware isolation between the guest kernel and the 
+                host kernel. The guest cannot directly access host memory or devices. Compare this to containers (Lesson 01) 
+                where the guest makes syscalls directly to the shared host kernel, or gVisor (Lesson 03) where the Sentry 
+                intercepts syscalls in user space. With KVM, the guest kernel runs in its own context, and only hypercalls 
+                (guest → host kernel transitions) expose the host to attack.
+            </p>
+
+            <h3>What the VMM Must Emulate</h3>
+            <p>
+                A guest OS expects to interact with hardware devices: disks, network cards, serial ports, etc. The VMM must 
+                <strong>emulate</strong> these devices in software. When the guest writes to a disk, the VMM intercepts the 
+                I/O and writes to a file on the host. When the guest sends a network packet, the VMM writes it to a TAP device 
+                on the host.
+            </p>
+            <p>
+                Traditional VMMs like QEMU emulate a full PC: BIOS, PCI bus, IDE/SATA disks, e1000 NICs, VGA graphics, USB 
+                controllers, audio, etc. This is why QEMU can run Windows or any x86 OS unmodified.
+            </p>
+            <p>
+                <strong>Firecracker's philosophy:</strong> Emulate the <em>absolute minimum</em> needed to boot a modern Linux 
+                kernel and run workloads. No BIOS, no PCI, no graphics, no USB, no audio. Just:
+            </p>
+            <ul>
+                <li><strong>virtio-net:</strong> Paravirtualized network device</li>
+                <li><strong>virtio-block:</strong> Paravirtualized block device</li>
+                <li><strong>virtio-vsock:</strong> Virtual socket for host-guest communication</li>
+                <li><strong>Serial console:</strong> A single UART (usually disabled in production for speed)</li>
+                <li><strong>i8042 keyboard controller:</strong> Minimal emulation to satisfy Linux's legacy device expectations</li>
+            </ul>
+            <p>
+                <strong>What is virtio?</strong> A standard for paravirtualized I/O devices 
+                (<a href="https://www.kernel.org/doc/html/latest/driver-api/virtio/virtio.html" target="_blank">Linux virtio docs</a>). 
+                Instead of emulating legacy hardware (e.g., e1000 NIC register-level behavior), virtio defines a ring buffer 
+                interface where the guest driver and the host VMM share memory. This is much faster than trap-and-emulate.
+            </p>
+
+            <div class="mermaid">
+graph TB
+    subgraph "Guest VM"
+        GuestKernel[Guest Kernel<br/>Linux]
+        GuestApp[Guest App<br/>e.g., python eval.py]
+        VirtioNet[virtio-net driver]
+        VirtioBlk[virtio-blk driver]
+    end
+    
+    subgraph "Firecracker VMM (userspace)"
+        VirtioNetEmul[virtio-net emulation]
+        VirtioBlkEmul[virtio-blk emulation]
+    end
+    
+    HostKernel[Host Kernel<br/>KVM]
+    TapDevice[TAP device tap0]
+    HostFile[Host file: rootfs.ext4]
+    
+    GuestApp --> GuestKernel
+    GuestKernel --> VirtioNet
+    GuestKernel --> VirtioBlk
+    
+    VirtioNet -.ring buffer + kick.-> VirtioNetEmul
+    VirtioBlk -.ring buffer + kick.-> VirtioBlkEmul
+    
+    VirtioNetEmul --> TapDevice
+    VirtioBlkEmul --> HostFile
+    
+    HostKernel -->|KVM_RUN| GuestKernel
+    GuestKernel -.VM exit: I/O.-> HostKernel
+    HostKernel -.notify VMM.-> VirtioNetEmul
+    
+    TapDevice --> HostKernel
+    
+    style GuestKernel fill:#10b981,stroke:#f1f5f9,stroke-width:2px
+    style VirtioNetEmul fill:#8b5cf6,stroke:#f1f5f9
+    style VirtioBlkEmul fill:#8b5cf6,stroke:#f1f5f9
+    style HostKernel fill:#ef4444,stroke:#f1f5f9,stroke-width:2px
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> VMM fundamentals. The guest kernel runs on KVM. virtio devices in the guest 
+                communicate with Firecracker's emulation via ring buffers. Firecracker backs virtio-net with a TAP device 
+                and virtio-block with a file.
+            </p>
+        </section>
+
+        <section id="architecture" class="content-section">
+            <h2>Firecracker Architecture</h2>
+            <p>
+                <strong>Source:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker" target="_blank">github.com/firecracker-microvm/firecracker</a><br>
+                <strong>Key files:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/vmm/" target="_blank">src/vmm/</a>, 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/" target="_blank">src/firecracker/</a>, 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/jailer/" target="_blank">src/jailer/</a><br>
+                <strong>Design doc:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">docs/design.md</a>
+            </p>
+
+            <h3>One Process, One microVM</h3>
+            <p>
+                From <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">design.md</a>:
+            </p>
+            <blockquote>
+                "Each Firecracker process encapsulates one and only one microVM. The process runs the following threads: 
+                API, VMM and vCPU(s)."
+            </blockquote>
+            <p>
+                This is a key architectural choice. Unlike QEMU (which can run multiple VMs in one process with 
+                <code>-machine accel=kvm</code> and threading), Firecracker is <strong>one process per VM</strong>. This 
+                simplifies security (kill the process, kill the VM) and resource accounting (cgroups naturally scope to 
+                one VM).
+            </p>
+
+            <h3>Thread Model</h3>
+            <p>
+                Continuing from design.md:
+            </p>
+            <ul>
+                <li><strong>API thread:</strong> Runs the HTTP server that listens on a Unix socket. Handles configuration 
+                requests (PUT /boot-source, PUT /drives, etc.). Never in the fast path once the VM is running.</li>
+                <li><strong>VMM thread:</strong> Runs the main event loop (epoll-based). Emulates devices (virtio-net, 
+                virtio-block, serial console). When a vCPU exits to handle I/O, the VMM thread processes it.</li>
+                <li><strong>vCPU threads:</strong> One thread per guest CPU core. Each vCPU thread calls <code>KVM_RUN</code> 
+                in a loop. The guest code runs here. On VM exit (I/O, timer, hypercall), the vCPU thread notifies the VMM 
+                thread (via eventfd) and blocks until the I/O is handled.</li>
+            </ul>
+
+            <div class="mermaid">
+graph LR
+    API[API Thread<br/>Unix socket HTTP server]
+    VMM[VMM Thread<br/>Event loop + device emulation]
+    vCPU1[vCPU Thread 1<br/>KVM_RUN]
+    vCPU2[vCPU Thread N<br/>KVM_RUN]
+    
+    DevKVM[/dev/kvm]
+    UnixSocket[Unix socket<br/>/tmp/firecracker.socket]
+    
+    UnixSocket -->|Config requests| API
+    API -.Send config.-> VMM
+    
+    VMM -->|Emulate I/O| DevKVM
+    vCPU1 -->|KVM_RUN loop| DevKVM
+    vCPU2 -->|KVM_RUN loop| DevKVM
+    
+    DevKVM -.VM exit: I/O.-> VMM
+    VMM -.eventfd: I/O done.-> vCPU1
+    
+    style API fill:#3b82f6,stroke:#f1f5f9
+    style VMM fill:#8b5cf6,stroke:#f1f5f9
+    style vCPU1 fill:#10b981,stroke:#f1f5f9
+    style vCPU2 fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> Firecracker's thread model. The API thread handles configuration, the VMM thread 
+                emulates devices, and vCPU threads run guest code via KVM_RUN.
+            </p>
+
+            <h3>Device Model</h3>
+            <p>
+                From the 
+                <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">Firecracker NSDI 2020 paper</a> 
+                (Agache et al.):
+            </p>
+            <blockquote>
+                "Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net 
+                devices, a serial console, a one-button keyboard, and a partial RTC."
+            </blockquote>
+            <p>
+                The "one-button keyboard" is a minimal i8042 keyboard controller emulation, not a full keyboard. It's there 
+                because Linux expects it during boot. The "partial RTC" is enough to let the guest read the time.
+            </p>
+            <p>
+                <strong>No graphics, no PCI bus, no USB.</strong> If the guest tries to access unsupported devices, the VM 
+                exits with an error or the guest kernel ignores them. This minimalism is why Firecracker's boot is so fast: 
+                there's nothing to initialize except virtio devices.
+            </p>
+
+            <h3>Memory Footprint</h3>
+            <p>
+                Per <a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">SPECIFICATION.md</a>, 
+                the VMM threads consume <strong>&lt;= 5 MiB</strong> of host memory. This does <em>not</em> include:
+            </p>
+            <ul>
+                <li>The guest's own RAM (which you configure via <code>PUT /machine-config</code>: 
+                <code>{"vcpu_count": 1, "mem_size_mib": 128}</code>)</li>
+                <li>The Firecracker binary itself (statically linked musl binary, ~2 MiB on disk, mapped into memory)</li>
+                <li>The guest kernel and rootfs (loaded into the guest's memory)</li>
+            </ul>
+            <p>
+                <strong>Total overhead per VM:</strong> ~7–10 MiB of host memory beyond the guest's configured RAM. Compare 
+                this to Kata (50–150 MiB per VM for guest kernel + kata-agent) or gVisor (variable, but the Sentry is a 
+                full Go process).
+            </p>
+
+            <h3>Performance Targets</h3>
+            <p>
+                From SPECIFICATION.md (vendor claims, enforced by Firecracker's CI):
+            </p>
+            <ul>
+                <li><strong>Boot time:</strong> <code>&lt;= 125 ms</code> from InstanceStart to guest <code>/sbin/init</code> 
+                start. Measured with serial console disabled and a minimal kernel + rootfs.</li>
+                <li><strong>Mutation rate:</strong> "5 microVMs per host core per second" (e.g., 180 VMs/s on a 36-core host)</li>
+                <li><strong>Network throughput:</strong> "up to 14.5 Gbps" using <code>&lt;= 80%</code> of one host core for 
+                emulation; "up to 25 Gbps" at 100% core usage</li>
+                <li><strong>Storage throughput:</strong> "up to 1 GiB/s" using <code>&lt;= 70%</code> of one host core</li>
+                <li><strong>CPU overhead:</strong> "The compute-only guest CPU performance is <code>&gt; 95%</code> of the 
+                equivalent bare-metal performance"</li>
+            </ul>
+            <p>
+                These are best-case numbers on AWS M5D.metal and M6G.metal instances. Your mileage will vary, but the 
+                design goal is clear: near-native performance with minimal overhead.
+            </p>
+        </section>
+
+        <section id="rest-api" class="content-section">
+            <h2>The REST API: Configuring a microVM</h2>
+            <p>
+                Firecracker exposes a REST API over a Unix socket. The API is defined in 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/swagger/firecracker.yaml" target="_blank">src/firecracker/swagger/firecracker.yaml</a> 
+                (OpenAPI spec).
+            </p>
+
+            <h3>Typical Workflow</h3>
+            <ol>
+                <li><strong>Start Firecracker:</strong> 
+                    <code>./firecracker --api-sock /tmp/firecracker.socket</code>. The process starts and listens on the socket. 
+                    The API thread is ready, but no VM is configured yet.</li>
+                <li><strong>Configure the guest kernel:</strong> 
+                    <code>PUT /boot-source</code> with JSON:
+                    <pre><code class="language-json">{
+  "kernel_image_path": "/path/to/vmlinux",
+  "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+}</code></pre>
+                </li>
+                <li><strong>Configure the root filesystem:</strong> 
+                    <code>PUT /drives/rootfs</code> with JSON:
+                    <pre><code class="language-json">{
+  "drive_id": "rootfs",
+  "path_on_host": "/path/to/rootfs.ext4",
+  "is_root_device": true,
+  "is_read_only": false
+}</code></pre>
+                </li>
+                <li><strong>Configure machine resources:</strong> 
+                    <code>PUT /machine-config</code> with JSON:
+                    <pre><code class="language-json">{
+  "vcpu_count": 1,
+  "mem_size_mib": 128
+}</code></pre>
+                </li>
+                <li><strong>(Optional) Configure networking:</strong> 
+                    <code>PUT /network-interfaces/eth0</code> with JSON:
+                    <pre><code class="language-json">{
+  "iface_id": "eth0",
+  "guest_mac": "AA:FC:00:00:00:01",
+  "host_dev_name": "tap0"
+}</code></pre>
+                </li>
+                <li><strong>Start the VM:</strong> 
+                    <code>PUT /actions</code> with JSON:
+                    <pre><code class="language-json">{
+  "action_type": "InstanceStart"
+}</code></pre>
+                    This is the <code>InstanceStart</code> action. The VMM thread creates the VM via KVM, maps guest memory, 
+                    loads the kernel, creates vCPU threads, and runs <code>KVM_RUN</code>. The 125ms timer starts here.
+                </li>
+            </ol>
+
+            <h3>Example: curl Commands</h3>
+            <p>
+                The Unix socket speaks HTTP. You can use <code>curl --unix-socket</code>:
+            </p>
+            <pre><code class="language-bash"># Set boot source
+curl --unix-socket /tmp/firecracker.socket -X PUT \
+  http://localhost/boot-source \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kernel_image_path": "/path/to/vmlinux",
+    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+  }'
+
+# Set rootfs
+curl --unix-socket /tmp/firecracker.socket -X PUT \
+  http://localhost/drives/rootfs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "drive_id": "rootfs",
+    "path_on_host": "/path/to/rootfs.ext4",
+    "is_root_device": true,
+    "is_read_only": false
+  }'
+
+# Set machine config
+curl --unix-socket /tmp/firecracker.socket -X PUT \
+  http://localhost/machine-config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vcpu_count": 1,
+    "mem_size_mib": 128
+  }'
+
+# Start the VM
+curl --unix-socket /tmp/firecracker.socket -X PUT \
+  http://localhost/actions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action_type": "InstanceStart"
+  }'</code></pre>
+
+            <h3>Other Actions</h3>
+            <ul>
+                <li><strong>Pause:</strong> <code>{"action_type": "SendCtrlAltDel"}</code> — sends Ctrl+Alt+Del to the guest 
+                (triggers a clean shutdown)</li>
+                <li><strong>CreateSnapshot:</strong> Snapshot the VM's memory and device state (see 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">snapshot-support.md</a>)</li>
+                <li><strong>LoadSnapshot:</strong> Restore a VM from a snapshot</li>
+            </ul>
+
+            <h3>Why a REST API?</h3>
+            <p>
+                From the NSDI paper:
+            </p>
+            <blockquote>
+                "Firecracker's control plane is a simple REST API, making it easy to integrate with existing orchestration 
+                systems. The API is stateless: each request is self-contained, and there is no session state. This 
+                simplifies retry logic and error handling."
+            </blockquote>
+            <p>
+                The API also enforces immutability: once you call <code>InstanceStart</code>, you can't change the boot 
+                source or drives. You must stop the VM and start a new one. This simplifies the VMM's state machine.
+            </p>
+        </section>
+
+        <section id="jailer" class="content-section">
+            <h2>The Jailer: Lessons 01–02 in Action</h2>
+            <p>
+                <strong>Source:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/jailer/" target="_blank">src/jailer/</a><br>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md" target="_blank">docs/jailer.md</a>
+            </p>
+            <p>
+                In production, you <strong>never run Firecracker directly</strong>. You run it via the <strong>jailer</strong>, 
+                a separate binary that sets up an execution jail before <code>exec</code>ing the Firecracker binary. From 
+                jailer.md:
+            </p>
+            <blockquote>
+                "The jailer is a program designed to isolate the Firecracker process in order to enhance Firecracker's 
+                security posture."
+            </blockquote>
+
+            <h3>What the Jailer Does</h3>
+            <p>
+                The jailer applies <strong>all the primitives you learned in Lessons 01 and 02</strong>:
+            </p>
+            <ol>
+                <li><strong>chroot jail:</strong> Creates a new root at <code>/srv/jailer/firecracker/&lt;id&gt;/root</code> 
+                (configurable with <code>--chroot-base-dir</code>). Copies the Firecracker binary into the jail. Uses 
+                <code>pivot_root(2)</code> to switch to the new root and <code>chroot(2)</code> to lock it in. The Firecracker 
+                process cannot access files outside the jail.</li>
+                <li><strong>Namespaces:</strong> Calls <code>unshare(2)</code> to enter new mount and (optionally) PID namespaces. 
+                Optionally joins a network namespace via <code>--netns</code>. (Lesson 01: namespaces isolate resources.)</li>
+                <li><strong>cgroups:</strong> Creates cgroup v1 or v2 hierarchies (Lesson 01: cgroups limit resources). You pass 
+                <code>--cgroup cpuset.cpus=0</code> or <code>--cgroup memory.max=134217728</code> to the jailer, and it writes 
+                these limits before starting Firecracker. The Firecracker process and its children inherit the cgroup.</li>
+                <li><strong>seccomp-bpf:</strong> Applies a strict seccomp filter (Lesson 02: syscall filtering). Firecracker's 
+                default seccomp filter allows only ~60 syscalls. See 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/src/seccomp.rs" target="_blank">src/firecracker/src/seccomp.rs</a> 
+                and the JSON filter definitions in 
+                <a href="https://github.com/firecracker-microvm/firecracker/tree/main/resources/seccomp" target="_blank">resources/seccomp/</a>. 
+                The filter is architecture-specific (x86_64, aarch64).</li>
+                <li><strong>Privilege drop:</strong> Calls <code>setuid(2)</code> and <code>setgid(2)</code> to drop to a 
+                non-root user (you specify <code>--uid</code> and <code>--gid</code>). This ensures Firecracker runs as an 
+                unprivileged user inside the jail.</li>
+                <li><strong>Resource limits:</strong> Calls <code>setrlimit(2)</code> to set <code>RLIMIT_FSIZE</code> (max 
+                file size) and <code>RLIMIT_NOFILE</code> (max open files). Default: <code>no-file=2048</code>.</li>
+                <li><strong>/dev/kvm and /dev/net/tun:</strong> Uses <code>mknod(2)</code> to create <code>/dev/kvm</code> 
+                and <code>/dev/net/tun</code> inside the jail, then <code>chown</code>s them to the target uid:gid. Firecracker 
+                can access these devices (read/write to <code>/dev/kvm</code> for KVM ioctls, read/write to <code>/dev/net/tun</code> 
+                for TAP networking) but nothing else.</li>
+            </ol>
+
+            <h3>Example Jailer Invocation</h3>
+            <pre><code class="language-bash">jailer \
+  --id my-microvm-001 \
+  --exec-file /usr/local/bin/firecracker \
+  --uid 1000 \
+  --gid 1000 \
+  --cgroup-version 2 \
+  --cgroup memory.max=134217728 \
+  --cgroup cpu.max="50000 100000" \
+  --netns /var/run/netns/my-netns \
+  --resource-limit no-file=1024 \
+  --new-pid-ns \
+  -- --api-sock ./firecracker.socket</code></pre>
+            <p>
+                This invocation:
+            </p>
+            <ul>
+                <li>Creates a jail at <code>/srv/jailer/firecracker/my-microvm-001/root</code></li>
+                <li>Copies <code>/usr/local/bin/firecracker</code> into the jail</li>
+                <li>Creates cgroup v2 limits: 128 MiB memory, 50% CPU (50ms per 100ms period)</li>
+                <li>Joins the network namespace <code>/var/run/netns/my-netns</code></li>
+                <li>Drops to uid=1000, gid=1000</li>
+                <li>Applies seccomp filters</li>
+                <li>Execs <code>firecracker --api-sock ./firecracker.socket</code> (relative to the jail root)</li>
+            </ul>
+
+            <h3>How This Ties to Lessons 01–02</h3>
+            <div class="info-box">
+                <ul>
+                    <li><strong>Lesson 01:</strong> The jailer uses <code>unshare(2)</code> for namespaces, writes to 
+                    <code>/sys/fs/cgroup/</code> for cgroups, and calls <code>pivot_root(2)</code> + <code>chroot(2)</code> 
+                    for filesystem isolation. You built a minimal sandbox with these primitives; the jailer does the same 
+                    for Firecracker.</li>
+                    <li><strong>Lesson 02:</strong> The jailer applies seccomp-bpf filters (allow ~60 syscalls, block the rest) 
+                    and uses <code>mknod(2)</code> + <code>chown(2)</code> to create device nodes inside the jail. You learned 
+                    how seccomp filters work; Firecracker's filters are production-grade examples you can study in 
+                    <code>resources/seccomp/*.json</code>.</li>
+                </ul>
+            </div>
+
+            <h3>Defense in Depth</h3>
+            <p>
+                Even with hardware virtualization (KVM), Firecracker layers multiple defenses:
+            </p>
+            <ol>
+                <li><strong>Hardware isolation (KVM):</strong> The guest kernel runs in its own address space. Hypercalls 
+                are the only attack surface.</li>
+                <li><strong>Minimal device model:</strong> Fewer emulated devices = smaller attack surface. No graphics, 
+                no USB, no PCI bus.</li>
+                <li><strong>Seccomp:</strong> The Firecracker process itself can only make ~60 syscalls. Even if an attacker 
+                escapes the VM, they're still in a seccomp jail.</li>
+                <li><strong>chroot + namespaces:</strong> The process can't see the host filesystem or other network namespaces.</li>
+                <li><strong>cgroups:</strong> Resource exhaustion attacks are bounded by memory and CPU limits.</li>
+                <li><strong>Unprivileged user:</strong> The process runs as uid=1000 (or whatever you set), not root.</li>
+            </ol>
+            <p>
+                This is the model AWS uses for Lambda: thousands of tenants' functions run on shared hardware, isolated by 
+                Firecracker + the jailer.
+            </p>
+        </section>
+
+        <section id="networking" class="content-section">
+            <h2>TAP Networking: Connecting the Guest to the Host</h2>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md" target="_blank">docs/network-setup.md</a>
+            </p>
+            <p>
+                Firecracker emulates a <strong>virtio-net</strong> device inside the guest. The guest's virtio-net driver 
+                sends packets to the VMM via a ring buffer (shared memory). The VMM writes these packets to a 
+                <strong>TAP device</strong> on the host.
+            </p>
+
+            <h3>What is a TAP Device?</h3>
+            <p>
+                A TAP device (<code>tap0</code>, <code>tap1</code>, etc.) is a virtual Ethernet interface. It looks like 
+                a normal NIC to the kernel, but packets written to it go to a user-space program (in this case, Firecracker) 
+                instead of physical hardware.
+            </p>
+            <ul>
+                <li><strong>TUN:</strong> Layer 3 (IP packets)</li>
+                <li><strong>TAP:</strong> Layer 2 (Ethernet frames)</li>
+            </ul>
+            <p>
+                Firecracker uses TAP because virtio-net is a layer-2 device (Ethernet). The guest sends Ethernet frames, 
+                and Firecracker writes them to <code>tap0</code>.
+            </p>
+
+            <h3>Setting Up TAP Networking</h3>
+            <p>
+                From network-setup.md:
+            </p>
+            <pre><code class="language-bash"># Create the tap device
+sudo ip tuntap add tap0 mode tap
+
+# Assign it an IP and bring it up
+sudo ip addr add 172.16.0.1/30 dev tap0
+sudo ip link set tap0 up
+
+# Enable IPv4 forwarding
+echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward
+
+# Set up NAT (using nftables)
+sudo nft add table firecracker
+sudo nft 'add chain firecracker postrouting { type nat hook postrouting priority srcnat; policy accept; }'
+sudo nft 'add chain firecracker filter { type filter hook forward priority filter; policy accept; }'
+
+# Masquerade packets from the guest (172.16.0.2) as if they came from the host
+sudo nft add rule firecracker postrouting ip saddr 172.16.0.2 oifname eth0 counter masquerade
+
+# Forward packets from tap0 to eth0
+sudo nft add rule firecracker filter iifname tap0 oifname eth0 accept
+sudo nft add rule firecracker filter iifname eth0 oifname tap0 ct state related,established accept</code></pre>
+
+            <p>
+                <strong>What this does:</strong>
+            </p>
+            <ul>
+                <li>The guest will configure itself with IP <code>172.16.0.2</code> and gateway <code>172.16.0.1</code> 
+                (the TAP IP).</li>
+                <li>When the guest sends a packet to the Internet, it goes to <code>tap0</code>.</li>
+                <li>The host's nftables rules masquerade the packet (change source IP from <code>172.16.0.2</code> to the 
+                host's IP) and forward it to <code>eth0</code>.</li>
+                <li>Return packets (marked <code>established</code> by conntrack) are forwarded back to <code>tap0</code>.</li>
+            </ul>
+
+            <h3>Guest Network Configuration</h3>
+            <p>
+                Inside the guest, you configure the network manually or via a startup script:
+            </p>
+            <pre><code class="language-bash"># Inside the guest
+ip addr add 172.16.0.2/30 dev eth0
+ip link set eth0 up
+ip route add default via 172.16.0.1
+
+# Test connectivity
+ping 8.8.8.8</code></pre>
+
+            <h3>Networking in Multi-Tenant Environments</h3>
+            <p>
+                For production eval orchestration:
+            </p>
+            <ul>
+                <li><strong>One TAP per VM:</strong> Each Firecracker VM gets its own <code>tap0</code>, <code>tap1</code>, etc.</li>
+                <li><strong>Network namespaces (Lesson 01):</strong> You can put each TAP in a separate netns to isolate 
+                VMs from each other. The jailer's <code>--netns</code> flag joins that namespace.</li>
+                <li><strong>Egress filtering:</strong> Use nftables or iptables to block outbound traffic by default, then 
+                allowlist specific domains (E2B, Modal, Daytona all do this). See E2B's 
+                <a href="https://github.com/e2b-dev/infra" target="_blank">nftables config in e2b-dev/infra</a>.</li>
+                <li><strong>No ingress by default:</strong> The guest has a private IP (<code>172.16.0.2</code>) and is 
+                NATed. External traffic can't reach it unless you set up port forwarding (which you typically don't for 
+                sandboxes).</li>
+            </ul>
+
+            <div class="mermaid">
+graph LR
+    Guest[Guest VM<br/>172.16.0.2]
+    VirtioNet[virtio-net<br/>inside guest]
+    VMM[Firecracker VMM<br/>virtio-net emulation]
+    Tap[TAP device tap0<br/>172.16.0.1]
+    HostKernel[Host Kernel<br/>routing + NAT]
+    Eth0[eth0<br/>host NIC]
+    Internet[Internet]
+    
+    Guest --> VirtioNet
+    VirtioNet -.ring buffer.-> VMM
+    VMM --> Tap
+    Tap --> HostKernel
+    HostKernel -->|masquerade| Eth0
+    Eth0 --> Internet
+    
+    style Guest fill:#10b981,stroke:#f1f5f9
+    style VMM fill:#8b5cf6,stroke:#f1f5f9
+    style Tap fill:#3b82f6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> TAP networking. The guest's virtio-net writes to a ring buffer. Firecracker 
+                reads from the ring and writes to <code>tap0</code>. The host kernel routes packets from <code>tap0</code> 
+                to <code>eth0</code> via NAT.
+            </p>
+        </section>
+
+        <section id="eval-context" class="content-section">
+            <h2>Eval Orchestration Context: Why microVMs?</h2>
+            <p>
+                Now that you understand Firecracker's architecture, why do eval systems use it?
+            </p>
+
+            <h3>Who Uses Firecracker for Evals/Sandboxes</h3>
+            <ul>
+                <li><strong>AWS Lambda:</strong> All Lambda functions run in Firecracker microVMs. From the NSDI paper: 
+                "Firecracker [...] is the foundation of AWS Lambda and AWS Fargate." Lambda's cold-start time includes 
+                Firecracker boot.</li>
+                <li><strong>E2B (e2b-dev/runtime):</strong> Uses Firecracker directly for agent sandboxes. Supports 
+                snapshot/restore and fork (one VM to step <em>k</em>, then fork N children). See the 
+                <a href="https://github.com/e2b-dev/infra" target="_blank">e2b-dev/infra repo</a> for their Terraform + 
+                nftables setup.</li>
+                <li><strong>Fly Machines:</strong> Fly.io's compute product uses Firecracker. From 
+                <a href="https://fly.io/docs/machines/guides-examples/machines-app-platform/" target="_blank">Fly Machines docs</a>: 
+                "Fly Machines are Firecracker microVMs." They support fast stop/start (pause/resume) and per-second billing.</li>
+                <li><strong>Kata Containers:</strong> Can use Firecracker as its hypervisor (Lesson 03). E.g., 
+                <code>kata-runtime --hypervisor firecracker</code>.</li>
+                <li><strong>Northflank:</strong> CPU sandboxes run on Kata (Lesson 03), which may use Firecracker or Cloud 
+                Hypervisor under the hood.</li>
+            </ul>
+
+            <h3>Why microVMs over Containers?</h3>
+            <p>
+                From Lesson 03, you know the isolation trade-off:
+            </p>
+            <ul>
+                <li><strong>runc (containers):</strong> Shared kernel. One kernel vuln = escape. Fast but risky for untrusted code.</li>
+                <li><strong>gVisor:</strong> Userspace kernel (Sentry) intercepts syscalls. Safer than runc, but overhead on 
+                I/O and syscall-heavy workloads. Great for GPU (nvproxy).</li>
+                <li><strong>Firecracker (microVMs):</strong> Hardware isolation via KVM. Strongest isolation. Overhead is 
+                boot time (~125ms) and per-VM memory (~7–10 MiB). No GPU support (unlike gVisor or Kata+QEMU).</li>
+            </ul>
+            <p>
+                <strong>When to use Firecracker for evals:</strong>
+            </p>
+            <ul>
+                <li><strong>Multi-tenant, untrusted code:</strong> You're running code from different users on shared hardware. 
+                Lambda's threat model.</li>
+                <li><strong>Fast warm pools via snapshots:</strong> Boot a VM to a base state, snapshot it, restore N copies. 
+                E2B does this for agent environments.</li>
+                <li><strong>Fork-on-demand:</strong> Run an agent to step <em>k</em>, snapshot, fork N children with different 
+                sampling (GRPO, tree search). E2B's fork API.</li>
+                <li><strong>No GPU needed:</strong> If your eval doesn't need GPU inside the sandbox, Firecracker is a good fit. 
+                If you need GPU, use gVisor or Kata+QEMU.</li>
+                <li><strong>Pause/resume billing:</strong> Firecracker's snapshot/restore lets you pause a VM (save its state) 
+                and resume later. Fly Machines does this for per-second billing.</li>
+            </ul>
+
+            <h3>The Snapshot/Fork Workflow (Preview of Lesson 05)</h3>
+            <p>
+                This is a teaser; Lesson 05 covers it in depth. The workflow:
+            </p>
+            <ol>
+                <li><strong>Boot a base VM:</strong> Firecracker + rootfs + dependencies preloaded.</li>
+                <li><strong>Snapshot it:</strong> <code>PUT /actions {"action_type": "CreateSnapshot"}</code>. Firecracker 
+                writes guest memory to a file and device state to a JSON file.</li>
+                <li><strong>For each new eval:</strong> <code>PUT /actions {"action_type": "LoadSnapshot"}</code> to restore 
+                the snapshot. Boot time drops from ~125ms to ~10ms (memory is already paged in).</li>
+                <li><strong>For forking:</strong> Run the agent to step <em>k</em>, snapshot, restore N times with different 
+                RNG seeds or policies. Handle clone hazards: reseed RNGs, update MAC addresses, bump VMGenID (guest VM 
+                generation counter).</li>
+            </ol>
+            <p>
+                <strong>Why this is faster than containers:</strong> A container image pull takes seconds (hundreds of MB). 
+                A Firecracker snapshot is already in memory. Restoring it is a memory copy + KVM VM creation, which takes 
+                milliseconds.
+            </p>
+
+            <div class="info-box">
+                <h3>Firecracker vs gVisor for Evals: Decision Matrix</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Factor</th>
+                            <th>Firecracker</th>
+                            <th>gVisor</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Isolation strength</strong></td>
+                            <td>Hardware (KVM). Strongest.</td>
+                            <td>Userspace kernel (Sentry). Strong but not hardware-level.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Boot / cold-start</strong></td>
+                            <td>~125ms from InstanceStart</td>
+                            <td>~1–10ms (container-like)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Snapshot / restore</strong></td>
+                            <td>Full support (memory + device state)</td>
+                            <td>Full support (runsc checkpoint/restore)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>GPU passthrough</strong></td>
+                            <td>No (minimal device model)</td>
+                            <td>Yes (nvproxy)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Memory overhead per instance</strong></td>
+                            <td>~7–10 MiB (VMM + guest kernel)</td>
+                            <td>Variable (Sentry is a Go process; depends on workload)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Syscall / I/O overhead</strong></td>
+                            <td>Near-native (guest kernel is real Linux)</td>
+                            <td>Higher (Sentry intercepts; Gofer for file I/O)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Nested virt / KVM required</strong></td>
+                            <td>Yes (needs /dev/kvm)</td>
+                            <td>No (systrap works on any Linux)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Use case</strong></td>
+                            <td>Multi-tenant SaaS (Lambda, Fly), snapshot/fork workflows (E2B)</td>
+                            <td>GPU sandboxes (Modal, Northflank), cloud VMs without KVM</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Boot Firecracker by Hand</h2>
+            <p>
+                In this exercise, you'll download Firecracker, get a guest kernel and rootfs, boot a VM via the REST API, 
+                set up TAP networking, and measure the boot time. You'll see the 125ms target in action.
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Prerequisites</h3>
+                <ul>
+                    <li><strong>Linux host with KVM:</strong> Check <code>ls -l /dev/kvm</code>. You need read/write access. 
+                    See <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" target="_blank">getting-started.md</a> 
+                    for setup.</li>
+                    <li><strong>Bare metal or nested virt:</strong> Cloud VMs need <code>.metal</code> instance types or 
+                    nested virt enabled.</li>
+                    <li><strong>curl, jq, Python 3:</strong> For API calls and scripting.</li>
+                </ul>
+                <p>
+                    If you don't have KVM, you can read the code and understand the workflow, but you won't be able to run it.
+                </p>
+            </div>
+
+            <h3>Step 1: Download Firecracker and Resources</h3>
+            <p>
+                We'll use the official CI kernel and rootfs from the getting-started guide. Create <code>setup_firecracker.sh</code>:
+            </p>
+            <pre><code class="language-bash">#!/bin/bash
+set -euo pipefail
+
+# Create a working directory
+mkdir -p firecracker-demo
+cd firecracker-demo
+
+# Detect architecture
+ARCH=$(uname -m)
+echo "Architecture: $ARCH"
+
+# Download Firecracker binary (latest release)
+FC_VERSION="v1.9.1"  # Update to latest stable version
+FC_URL="https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${ARCH}.tgz"
+
+echo "Downloading Firecracker $FC_VERSION..."
+curl -L "$FC_URL" -o firecracker.tgz
+tar -xzf firecracker.tgz
+mv release-${FC_VERSION}-${ARCH}/firecracker-${FC_VERSION}-${ARCH} firecracker
+chmod +x firecracker
+
+# Download guest kernel (from Firecracker CI artifacts)
+# These are minimal kernels built for fast boot
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${ARCH}/vmlinux-5.10.217"
+echo "Downloading guest kernel..."
+curl -L "$KERNEL_URL" -o vmlinux
+
+# Download rootfs (Ubuntu 22.04, minimal)
+ROOTFS_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${ARCH}/ubuntu-22.04.ext4"
+echo "Downloading rootfs..."
+curl -L "$ROOTFS_URL" -o rootfs.ext4
+
+echo "Setup complete!"
+echo "Files:"
+ls -lh firecracker vmlinux rootfs.ext4</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">chmod +x setup_firecracker.sh
+./setup_firecracker.sh</code></pre>
+            <p>
+                <strong>Note:</strong> The kernel and rootfs URLs are from Firecracker's CI. They're minimal and not intended 
+                for production, but they're perfect for testing. If the URLs break, check the 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" target="_blank">getting-started.md</a> 
+                for updated links.
+            </p>
+
+            <h3>Step 2: Boot Script with curl</h3>
+            <p>
+                Create <code>boot_firecracker.sh</code>:
+            </p>
+            <pre><code class="language-bash">#!/bin/bash
+set -euo pipefail
+
+cd firecracker-demo
+
+# Start Firecracker in the background
+# API socket at ./firecracker.socket
+rm -f firecracker.socket
+./firecracker --api-sock firecracker.socket &
+FC_PID=$!
+echo "Started Firecracker (PID $FC_PID)"
+
+# Wait for the socket to be ready
+echo "Waiting for API socket..."
+for i in {1..10}; do
+    if [ -S firecracker.socket ]; then
+        break
+    fi
+    sleep 0.1
+done
+
+if [ ! -S firecracker.socket ]; then
+    echo "ERROR: API socket not ready"
+    kill $FC_PID 2>/dev/null || true
+    exit 1
+fi
+
+# Function to call the API
+api_call() {
+    local method=$1
+    local path=$2
+    local data=$3
+    curl --unix-socket firecracker.socket \
+        -X "$method" \
+        "http://localhost$path" \
+        -H "Content-Type: application/json" \
+        -d "$data"
+    echo ""
+}
+
+# Configure boot source
+echo "Configuring boot source..."
+api_call PUT /boot-source '{
+  "kernel_image_path": "'$(pwd)'/vmlinux",
+  "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+}'
+
+# Configure rootfs
+echo "Configuring rootfs..."
+api_call PUT /drives/rootfs '{
+  "drive_id": "rootfs",
+  "path_on_host": "'$(pwd)'/rootfs.ext4",
+  "is_root_device": true,
+  "is_read_only": false
+}'
+
+# Configure machine (1 vCPU, 128 MiB RAM)
+echo "Configuring machine..."
+api_call PUT /machine-config '{
+  "vcpu_count": 1,
+  "mem_size_mib": 128
+}'
+
+# Start the VM
+echo "Starting VM..."
+START_TIME=$(date +%s%3N)  # milliseconds
+api_call PUT /actions '{
+  "action_type": "InstanceStart"
+}'
+END_TIME=$(date +%s%3N)
+
+BOOT_TIME=$((END_TIME - START_TIME))
+echo "InstanceStart call took: ${BOOT_TIME}ms"
+
+# The VM is now running. The Firecracker process is still alive.
+# To interact with the guest, you'd need a serial console or network.
+# For this demo, we'll just measure the boot time and stop.
+
+echo ""
+echo "VM is running. Firecracker PID: $FC_PID"
+echo "To stop: kill $FC_PID"
+echo ""
+echo "Boot time from InstanceStart call: ${BOOT_TIME}ms"
+echo "(Note: This is the API call latency, not the full guest boot time.)"
+echo "The SPECIFICATION.md target is <= 125ms from InstanceStart to /sbin/init."</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">chmod +x boot_firecracker.sh
+./boot_firecracker.sh</code></pre>
+
+            <h3>Step 3: Measuring Full Boot Time</h3>
+            <p>
+                The script above measures the <code>InstanceStart</code> API call latency, not the full guest boot time. To 
+                measure the full time to <code>/sbin/init</code>, you'd need to instrument the guest (e.g., add a systemd 
+                unit that writes to the serial console when <code>init</code> starts, then capture that in the host). 
+                Firecracker's CI does this in 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/tests/integration_tests/performance/test_boottime.py" target="_blank">test_boottime.py</a>.
+            </p>
+            <p>
+                For this exercise, we'll trust the spec's claim: <strong>&lt;= 125ms</strong> from <code>InstanceStart</code> 
+                to <code>/sbin/init</code> start. You can verify this by reading the CI test.
+            </p>
+
+            <h3>Step 4 (Optional): Add TAP Networking</h3>
+            <p>
+                If you want to add networking, create a TAP device first:
+            </p>
+            <pre><code class="language-bash">sudo ip tuntap add tap0 mode tap
+sudo ip addr add 172.16.0.1/30 dev tap0
+sudo ip link set tap0 up</code></pre>
+            <p>
+                Then add this API call before <code>InstanceStart</code>:
+            </p>
+            <pre><code class="language-bash">api_call PUT /network-interfaces/eth0 '{
+  "iface_id": "eth0",
+  "guest_mac": "AA:FC:00:00:00:01",
+  "host_dev_name": "tap0"
+}'</code></pre>
+            <p>
+                Inside the guest, you'd configure the network manually (you'd need to attach to the serial console or use 
+                a startup script in the rootfs).
+            </p>
+
+            <h3>Step 5: Python Client (Alternative)</h3>
+            <p>
+                If you prefer Python, here's a minimal client using <code>http.client</code> with a Unix socket:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Minimal Firecracker API client using Unix socket.
+"""
+import http.client
+import json
+import socket
+import time
+
+
+class FirecrackerClient:
+    def __init__(self, socket_path):
+        self.socket_path = socket_path
+    
+    def _call(self, method, path, data=None):
+        # http.client doesn't support Unix sockets directly, so we use socket
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(self.socket_path)
+        
+        body = json.dumps(data) if data else ""
+        body_bytes = body.encode('utf-8')
+        
+        request = (
+            f"{method} {path} HTTP/1.1\r\n"
+            f"Host: localhost\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(body_bytes)}\r\n"
+            f"\r\n"
+        ).encode('utf-8')
+        
+        sock.sendall(request + body_bytes)
+        
+        # Read response (simple parser; production would use http.client.HTTPResponse)
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+            if b"\r\n\r\n" in response:
+                break
+        
+        sock.close()
+        
+        # Parse status line
+        status_line = response.split(b"\r\n")[0].decode('utf-8')
+        status_code = int(status_line.split()[1])
+        
+        return status_code, response
+    
+    def put(self, path, data):
+        return self._call("PUT", path, data)
+
+
+def main():
+    import sys
+    import os
+    import subprocess
+    
+    os.chdir("firecracker-demo")
+    
+    # Start Firecracker
+    if os.path.exists("firecracker.socket"):
+        os.remove("firecracker.socket")
+    
+    fc_proc = subprocess.Popen(
+        ["./firecracker", "--api-sock", "firecracker.socket"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    print(f"Started Firecracker (PID {fc_proc.pid})")
+    
+    # Wait for socket
+    for _ in range(50):
+        if os.path.exists("firecracker.socket"):
+            break
+        time.sleep(0.1)
+    else:
+        print("ERROR: Socket not ready")
+        fc_proc.kill()
+        return
+    
+    client = FirecrackerClient("firecracker.socket")
+    
+    # Configure
+    print("Configuring boot source...")
+    client.put("/boot-source", {
+        "kernel_image_path": f"{os.getcwd()}/vmlinux",
+        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+    })
+    
+    print("Configuring rootfs...")
+    client.put("/drives/rootfs", {
+        "drive_id": "rootfs",
+        "path_on_host": f"{os.getcwd()}/rootfs.ext4",
+        "is_root_device": True,
+        "is_read_only": False
+    })
+    
+    print("Configuring machine...")
+    client.put("/machine-config", {
+        "vcpu_count": 1,
+        "mem_size_mib": 128
+    })
+    
+    # Start
+    print("Starting VM...")
+    start_ms = int(time.time() * 1000)
+    client.put("/actions", {"action_type": "InstanceStart"})
+    end_ms = int(time.time() * 1000)
+    
+    boot_time = end_ms - start_ms
+    print(f"InstanceStart call took: {boot_time}ms")
+    print(f"VM is running. Firecracker PID: {fc_proc.pid}")
+    print("To stop: kill", fc_proc.pid)
+
+
+if __name__ == "__main__":
+    main()
+</code></pre>
+
+            <h3>Expected Results</h3>
+            <ul>
+                <li><strong>InstanceStart API call latency:</strong> 10–50ms (depends on your CPU and I/O). This is not the 
+                full boot time; it's how long the API call takes to return.</li>
+                <li><strong>Full boot time (InstanceStart → /sbin/init):</strong> <strong>&lt;= 125ms</strong> per the spec. 
+                You'd need to instrument the guest to measure this precisely (see Firecracker's CI test).</li>
+                <li><strong>Memory overhead:</strong> Check <code>ps aux | grep firecracker</code>. The VSZ will be large 
+                (guest RAM + host overhead), but the RSS should be small (~5–10 MiB for the VMM threads, plus 128 MiB for 
+                the guest's RAM).</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>What You Learned</h3>
+                <ul>
+                    <li>Firecracker's REST API over a Unix socket</li>
+                    <li>Configuring a VM: boot-source, drives, machine-config</li>
+                    <li>The InstanceStart action and boot time measurement</li>
+                    <li>How the jailer would wrap this (chroot, cgroups, seccomp, netns)</li>
+                </ul>
+                <p>
+                    <strong>Production note:</strong> In production, you'd use the jailer (Step 1 would be 
+                    <code>jailer --id my-vm --exec-file firecracker ...</code>), and you'd manage multiple VMs with an 
+                    orchestrator (Lesson 25).
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from Firecracker's official docs, source code, or the NSDI 2020 paper. 
+                Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>Firecracker Official Docs</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker" target="_blank">github.com/firecracker-microvm/firecracker</a> — 
+                    Main repository</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">SPECIFICATION.md</a> — 
+                    Performance targets: &lt;= 125ms boot, &lt;= 5 MiB overhead</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/design.md" target="_blank">docs/design.md</a> — 
+                    Architecture: one process per VM, API/VMM/vCPU threads</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" target="_blank">docs/getting-started.md</a> — 
+                    Quick start guide</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md" target="_blank">docs/jailer.md</a> — 
+                    Jailer: chroot, namespaces, cgroups, seccomp</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/network-setup.md" target="_blank">docs/network-setup.md</a> — 
+                    TAP networking and NAT setup</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">docs/snapshotting/snapshot-support.md</a> — 
+                    Snapshot/restore (full and diff snapshots)</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/seccomp.md" target="_blank">docs/seccomp.md</a> — 
+                    Seccomp filter policy</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Firecracker Source Code</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/tree/main/src/vmm" target="_blank">src/vmm/</a> — 
+                    VMM core: device emulation, KVM interface</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/tree/main/src/firecracker" target="_blank">src/firecracker/</a> — 
+                    Firecracker binary: main.rs, API server</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/tree/main/src/jailer" target="_blank">src/jailer/</a> — 
+                    Jailer: chroot, cgroups, seccomp setup</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/src/api_server_adapter.rs" target="_blank">src/firecracker/src/api_server_adapter.rs</a> — 
+                    API server (Unix socket HTTP)</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/src/firecracker/swagger/firecracker.yaml" target="_blank">src/firecracker/swagger/firecracker.yaml</a> — 
+                    OpenAPI spec for the REST API</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/tree/main/resources/seccomp" target="_blank">resources/seccomp/</a> — 
+                    Seccomp filter JSON files (x86_64, aarch64)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Firecracker CI Tests (Boot Time and Memory)</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/tests/integration_tests/performance/test_boottime.py" target="_blank">test_boottime.py</a> — 
+                    Enforces the &lt;= 125ms boot time spec</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/tests/host_tools/memory.py" target="_blank">memory.py</a> — 
+                    Memory overhead measurement ("memory cop")</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>The NSDI 2020 Paper</h3>
+                <ul>
+                    <li><strong>"Firecracker: Lightweight Virtualization for Serverless Applications"</strong> (Agache et al., NSDI 2020): 
+                    <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">USENIX link</a></li>
+                    <li>Key quotes:
+                        <ul>
+                            <li>"Firecracker [...] is the foundation of AWS Lambda and AWS Fargate."</li>
+                            <li>"Firecracker's device model is intentionally minimal, supporting only virtio block devices, virtio net 
+                            devices, a serial console, a one-button keyboard, and a partial RTC."</li>
+                            <li>"Firecracker boots to a running guest in less than 125 milliseconds and uses less than 5 MiB of 
+                            memory overhead per microVM."</li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>KVM and Linux Virtualization</h3>
+                <ul>
+                    <li><a href="https://www.linux-kvm.org/" target="_blank">Linux KVM homepage</a></li>
+                    <li><a href="https://www.kernel.org/doc/html/latest/virt/kvm/api.html" target="_blank">KVM API documentation</a> — 
+                    The ioctl interface (<code>KVM_CREATE_VM</code>, <code>KVM_RUN</code>, etc.)</li>
+                    <li><a href="https://www.kernel.org/doc/html/latest/driver-api/virtio/virtio.html" target="_blank">Linux virtio documentation</a> — 
+                    Paravirtualized I/O devices</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Production Systems Using Firecracker</h3>
+                <ul>
+                    <li><strong>AWS Lambda:</strong> Firecracker powers Lambda (from the NSDI paper)</li>
+                    <li><strong>E2B Runtime:</strong> 
+                    <a href="https://github.com/e2b-dev/infra" target="_blank">e2b-dev/infra</a> — 
+                    Terraform + nftables setup for Firecracker sandboxes</li>
+                    <li><strong>Fly Machines:</strong> 
+                    <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a> — 
+                    "Fly Machines are Firecracker microVMs"</li>
+                    <li><strong>Kata Containers:</strong> 
+                    <a href="https://github.com/kata-containers/kata-containers/blob/main/docs/hypervisors.md" target="_blank">Kata hypervisors table</a> — 
+                    Firecracker is a supported hypervisor</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Related Papers</h3>
+                <ul>
+                    <li><strong>"Blending Containers and Virtual Machines: A Study of Firecracker and gVisor"</strong> 
+                    (Young et al., HotCloud 2019, presented at HotOS '19): 
+                    <a href="https://www.usenix.org/conference/hotos19/presentation/young" target="_blank">USENIX link</a> — 
+                    Compares Firecracker and gVisor performance</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lessons</h3>
+                <p>
+                    In <strong>Lesson 05</strong>, you'll build snapshot/restore and forking workflows with Firecracker. You'll 
+                    learn about <code>userfaultfd</code> lazy memory restore, handle clone hazards (RNG seeds, MAC addresses, 
+                    VMGenID), and implement GRPO-style forking: run an agent to step <em>k</em>, fork N children, sample differently.
+                </p>
+                <p>
+                    In <strong>Lesson 06</strong>, you'll study E2B's open-source runtime architecture: control plane (API + placement), 
+                    data plane (orchestrator + envd), and how pause/resume/fork work end-to-end.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>
