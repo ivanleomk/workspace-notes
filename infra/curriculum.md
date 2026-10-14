@@ -38,7 +38,7 @@ Harden your sandbox with syscall filtering and union filesystems. Understand Doc
 **03. runc vs gVisor vs Kata Containers** ✅ *Complete*  
 Compare the three major container runtimes: runc (shared kernel), gVisor (userspace kernel), and Kata (hardware virtualization). Measure syscall and I/O overhead on real eval workloads.
 
-**04. Firecracker Internals and Booting a microVM** 📝 *Planned*  
+**04. Firecracker Internals and Booting a microVM** ✅ *Complete*  
 Dive into AWS's minimal VMM. Boot Firecracker by hand via its API, set up tap networking, and understand the jailer's security model. Target: ≤125ms from InstanceStart to guest init.
 
 ### Phase 2: Snapshot, Restore, and Forking (Lessons 05–06)
