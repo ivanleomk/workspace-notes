@@ -208,6 +208,52 @@ Lessons alternate between tracks to build foundations while exploring cutting-ed
   - Metric category coverage across scenarios
 - **Status:** Complete
 
+### Lesson 10 - Tülu 3: Open Post-Training ✅
+- **Track:** B (SOTA)
+- **Paper:** Tülu 3: Pushing Frontiers in Open Language Model Post-Training (Lambert et al., Allen AI, 2024)
+- **Path:** [`10-tulu3-open-post-training/`](10-tulu3-open-post-training/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/10-tulu3-open-post-training/](https://ivanleomk.github.io/workspace-notes/10-tulu3-open-post-training/)
+- **Topics:**
+  - Complete end-to-end open post-training pipeline: Data Curation → SFT → DPO → RLVR
+  - 23.3M curated prompts, 939K used in SFT with skill-specific synthetic data
+  - On-policy DPO preference data and length-normalized loss
+  - RLVR: Reinforcement Learning with Verifiable Rewards (math, instruction-following)
+  - Development vs unseen evaluation splits to detect overfitting
+  - Aggressive decontamination and transparent data provenance
+  - State-of-the-art results: Tülu 3 70B matches Claude 3.5 Haiku, surpasses Llama 3.1 Instruct
+  - Bridge to curriculum: unifies Lessons 02 (RLHF), 04 (DPO), 06 (GRPO), 08 (CAI), 09 (HELM)
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Tülu 3 data explorer across 5 skill categories
+  - Stage-by-stage performance progression charts
+  - Tülu 3 70B vs competitors comparison
+  - Training pipeline visualization
+- **Status:** Complete
+
+### Lesson 11 - IFEval: Instruction-Following Evaluation ✅
+- **Track:** A (Foundations)
+- **Paper:** Instruction-Following Evaluation for Large Language Models (Zhou et al., Google Research, 2023)
+- **Path:** [`11-ifeval-instruction-following/`](11-ifeval-instruction-following/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/](https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/)
+- **Topics:**
+  - Verifiable instructions: objective, programmatic evaluation without judge models
+  - 25 types of verifiable instructions across 5 categories (Keywords, Language, Length, Content, Format)
+  - 541 prompts with 1-3 instructions each, testing multi-constraint satisfaction
+  - Strict vs loose accuracy: exact matching vs formatting-tolerant verification
+  - Prompt-level (all constraints) vs instruction-level (individual constraints) metrics
+  - GPT-4 results: 76.89% prompt-level strict, 83.57% instruction-level strict
+  - Detectable Format is hardest category (~75% GPT-4, ~40% PaLM 2 S); Language is easiest (~95%/~80%)
+  - Bridge to Tülu 3 (Lesson 10): IFEval as RLVR target with verifiable rewards
+  - Complements MT-Bench (Lesson 05): IFEval measures precision, MT-Bench measures quality
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Instruction type explorer: browse 25 verifiable instruction types with examples
+  - Interactive constraint checker: type responses and see strict/loose verification results
+  - Overall performance comparison charts (GPT-4 vs PaLM 2 S)
+  - Instruction category difficulty radar chart
+  - Strict vs loose gap visualization
+- **Status:** Complete
+
 ## How to View Lessons
 
 ### 🌐 Live on GitHub Pages
@@ -222,6 +268,8 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 07: HumanEval & Code Evaluation](https://ivanleomk.github.io/workspace-notes/07-humaneval-code-benchmarks/)
 - [Lesson 08: Constitutional AI](https://ivanleomk.github.io/workspace-notes/08-constitutional-ai/)
 - [Lesson 09: HELM - Holistic Evaluation](https://ivanleomk.github.io/workspace-notes/09-helm-holistic-evaluation/)
+- [Lesson 10: Tülu 3 - Open Post-Training](https://ivanleomk.github.io/workspace-notes/10-tulu3-open-post-training/)
+- [Lesson 11: IFEval - Instruction-Following Evaluation](https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/)
 
 ### 💻 Local Serving (for development)
 ```bash
