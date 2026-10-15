@@ -16,14 +16,14 @@ function createOverallChart() {
             datasets: [
                 {
                     label: 'GPT-4',
-                    data: [76.89, 83.57, 79.30, 85.37],
+                    data: [76.89, 83.57, 79.10, 85.37],
                     backgroundColor: 'rgba(59, 130, 246, 0.8)',
                     borderColor: 'rgba(59, 130, 246, 1)',
                     borderWidth: 2
                 },
                 {
                     label: 'PaLM 2 S',
-                    data: [43.07, 55.76, 46.95, 59.11],
+                    data: [43.07, 35.76, 46.95, 59.11],
                     backgroundColor: 'rgba(139, 92, 246, 0.8)',
                     borderColor: 'rgba(139, 92, 246, 1)',
                     borderWidth: 2
@@ -79,11 +79,11 @@ function createCategoryChart() {
     new Chart(ctx, {
         type: 'radar',
         data: {
-            labels: ['Keywords', 'Language', 'Length\nConstraints', 'Detectable\nContent', 'Detectable\nFormat'],
+            labels: ['change_case', 'combination', 'detectable_content', 'detectable_format', 'keywords', 'language', 'length_constraint', 'punctuation', 'startend'],
             datasets: [
                 {
                     label: 'GPT-4',
-                    data: [86, 95, 78, 82, 76],
+                    data: [80, 73, 96, 93, 84, 96, 72, 66, 93],
                     backgroundColor: 'rgba(59, 130, 246, 0.2)',
                     borderColor: 'rgba(59, 130, 246, 1)',
                     borderWidth: 2,
@@ -94,7 +94,7 @@ function createCategoryChart() {
                 },
                 {
                     label: 'PaLM 2 S',
-                    data: [62, 80, 50, 57, 44],
+                    data: [48, 37, 73, 68, 60, 96, 40, 53, 45],
                     backgroundColor: 'rgba(139, 92, 246, 0.2)',
                     borderColor: 'rgba(139, 92, 246, 1)',
                     borderWidth: 2,
@@ -111,7 +111,7 @@ function createCategoryChart() {
             plugins: {
                 title: {
                     display: true,
-                    text: 'Instruction-Level Strict Accuracy by Category (approximate, from Figure 2)',
+                    text: 'Instruction-Level Strict Accuracy by Category (approximate, read off Figure 2)',
                     color: '#f1f5f9',
                     font: { size: 16, weight: 'bold' }
                 },
