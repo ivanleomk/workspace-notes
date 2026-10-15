@@ -645,11 +645,11 @@ graph LR
 
             <h3>Real Systems That Use Forking</h3>
             <ul>
-                <li><strong>E2B:</strong> Supports a <code>fork</code> API. From the README: "up to a hundred per request." 
-                (<a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a>)</li>
-                <li><strong>Morph:</strong> <code>branch(count=n)</code> API. From the docs: "snapshot, branch, and restore… 
-                in under 250ms" (vendor claim). 
-                (<a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a>)</li>
+                <li><strong>E2B:</strong> Supports a <code>fork</code> API. From the docs: "With the SDKs and the CLI you can request up to 20 forks at once." 
+                (<a href="https://docs.e2b.dev/sandbox/fork" target="_blank">E2B fork docs</a>)</li>
+                <li><strong>Morph:</strong> <code>branch(count=n)</code> API. From the docs: "snapshot, branch, and restore entire computational environments in under 250ms" (vendor claim). 
+                (<a href="https://cloud.morph.so/docs/developers" target="_blank">Morph developers page</a>; 
+                the branch API itself is at <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">branch docs</a>)</li>
                 <li><strong>Daytona:</strong> VM class supports "pause / resume, fork, and hot snapshots." 
                 (<a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a>)</li>
                 <li><strong>Modal:</strong> Supports <strong>memory snapshots</strong> (experimental) for debugging. Filesystem 
@@ -819,13 +819,14 @@ graph LR
             <h3>Morph Cloud (Infinibranch)</h3>
             <p>
                 <strong>Documentation:</strong> 
-                <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a>
+                <a href="https://cloud.morph.so/docs/developers" target="_blank">Morph developers page</a> | 
+                <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">branch API docs</a>
             </p>
             <p>
-                From the docs:
+                From the developers page:
             </p>
             <blockquote>
-                "snapshot, branch, and restore… in under 250ms" (vendor claim)
+                "snapshot, branch, and restore entire computational environments in under 250ms" (vendor claim)
             </blockquote>
             <p>
                 Morph's API is shaped around VMs. A snapshot carries <code>vcpus</code>, <code>memory</code>, and 
@@ -881,10 +882,10 @@ graph LR
             <h3>Fly Machines</h3>
             <p>
                 <strong>Documentation:</strong> 
-                <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a>
+                <a href="https://fly.io/docs/machines/overview/" target="_blank">Fly Machines overview</a>
             </p>
             <p>
-                From the docs: "Fly Machines are Firecracker microVMs." Fly supports fast stop/start (pause/resume). A stopped 
+                Fly Machines are built on Firecracker microVMs. Fly supports fast stop/start (pause/resume). A stopped 
                 machine stays assembled, so start is "usually… well under a second" (vendor claim). Fly also offers 
                 <code>clone</code> (fork) and volumes (persistent storage).
             </p>
@@ -1035,7 +1036,7 @@ if __name__ == "__main__":
 python3 warm_pool_sim.py</code></pre>
             <p>
                 <strong>Expected output:</strong> Cold creates take ~100ms each. Warm pool acquire is near-instant (μs), since 
-                sandboxes are already warmed. Speedup: ~1000x for acquire latency (ignoring pool initialization cost).
+                sandboxes are already warmed. Speedup: ~1000x for acquire latency (a result of this toy simulator's chosen latencies, not a measured production figure; ignoring pool initialization cost).
             </p>
 
             <h3>Part 2: GRPO Fork Simulator (Python)</h3>
@@ -1273,7 +1274,9 @@ if __name__ == "__main__":
                     <li><a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">ARCHITECTURE.md</a> — 
                     Control plane, data plane, userfaultfd, NBD CoW rootfs, pause/resume/fork</li>
                     <li><a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a> — 
-                    Pause (~4s per GiB, vendor claim), resume (~1s, vendor claim), fork ("up to a hundred per request")</li>
+                    Pause (~4s per GiB, vendor claim), resume (~1s, vendor claim)</li>
+                    <li><a href="https://docs.e2b.dev/sandbox/fork" target="_blank">E2B fork docs</a> — 
+                    "With the SDKs and the CLI you can request up to 20 forks at once"</li>
                 </ul>
             </div>
 
@@ -1281,8 +1284,9 @@ if __name__ == "__main__":
                 <h3>Other Production Systems</h3>
                 <ul>
                     <li><strong>Morph Cloud:</strong> 
-                        <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a> — 
-                        <code>branch(count=n)</code> API, "snapshot, branch, and restore… in under 250ms" (vendor claim)</li>
+                        <a href="https://cloud.morph.so/docs/developers" target="_blank">Morph developers page</a> — 
+                        "snapshot, branch, and restore entire computational environments in under 250ms" (vendor claim); 
+                        <code>branch(count=n)</code> API at <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">branch docs</a></li>
                     <li><strong>Daytona:</strong> 
                         <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a> — 
                         Container vs VM classes, pause/resume/fork/hot snapshots</li>
@@ -1342,10 +1346,10 @@ if __name__ == "__main__":
                 <ul>
                     <li><strong>E2B:</strong> Pause ~4s per GiB, resume ~1s (
                     <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
-                    <li><strong>Morph:</strong> Snapshot/branch/restore in under 250ms (
-                    <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">source</a>)</li>
+                    <li><strong>Morph:</strong> Snapshot/branch/restore entire computational environments in under 250ms (
+                    <a href="https://cloud.morph.so/docs/developers" target="_blank">source</a>)</li>
                     <li><strong>Fly:</strong> Start "usually… well under a second" (
-                    <a href="https://fly.io/docs/machines/" target="_blank">source</a>)</li>
+                    <a href="https://fly.io/docs/machines/overview/" target="_blank">source</a>)</li>
                 </ul>
                 <p>
                     These are self-reported by the providers. Your results will vary based on memory size, network latency, 
