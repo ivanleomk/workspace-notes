@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 11: IFEval - Instruction Following Evaluation</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 11: IFEval - Instruction Following Evaluation</h1>
+            <p class="subtitle">Track A: Foundations | Paper: Zhou et al. (2023)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#what-is-ifeval">What is IFEval?</a>
+            <a href="#nine-categories">9 Instruction Categories</a>
+            <a href="#verifiable-vs-subjective">Verifiable vs Subjective</a>
+            <a href="#strict-vs-loose">Strict vs Loose Accuracy</a>
+            <a href="#results">Results & Analysis</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#data-explorer">Data Explorer</a>
+            <a href="#post-training">Post-Training Connection</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Why Evaluate Instruction Following?</h2>
+            <p>
+                Language models are increasingly used as <strong>instruction-following assistants</strong>—
+                users give specific instructions and expect models to comply precisely. But how well do models 
+                actually follow instructions?
+            </p>
+            <p>
+                Traditional benchmarks test knowledge (MMLU), reasoning (GSM8K), or code generation (HumanEval). 
+                IFEval focuses specifically on <strong>instruction-following ability</strong>—can a model satisfy 
+                explicit constraints like "write in all caps", "use exactly 250 words", or "include keywords X, Y, Z"?
+            </p>
+
+            <div class="info-box">
+                <h3>Key Innovation: Verifiable Constraints</h3>
+                <p>
+                    IFEval uses <strong>objectively verifiable instructions</strong> that can be checked 
+                    programmatically, without human judgment. This makes evaluation:
+                </p>
+                <ul>
+                    <li><strong>Objective:</strong> No ambiguity—either the constraint is satisfied or it isn't</li>
+                    <li><strong>Scalable:</strong> Automated checking instead of manual human evaluation</li>
+                    <li><strong>Reproducible:</strong> Same result every time, no inter-annotator disagreement</li>
+                    <li><strong>Training-friendly:</strong> Clear binary signal for reinforcement learning</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="what-is-ifeval" class="content-section">
+            <h2>What is IFEval?</h2>
+            <p>
+                <strong>IFEval</strong> (Instruction-Following Evaluation) is a benchmark introduced by Zhou et al. (2023) 
+                to measure how well language models follow explicit, verifiable instructions.
+            </p>
+
+            <div class="info-box">
+                <h3>Key Facts</h3>
+                <ul>
+                    <li><strong>541 prompts</strong> with 1-3 verifiable instructions each</li>
+                    <li><strong>~1,100 total instructions</strong> across 25 distinct instruction types</li>
+                    <li><strong>9 categories:</strong> change_case, combination, detectable_content, detectable_format, 
+                        keywords, language, length_constraint, punctuation, startend</li>
+                    <li><strong>Two accuracy levels:</strong> Prompt-level (all instructions must pass) and 
+                        instruction-level (per-instruction accuracy)</li>
+                    <li><strong>Two strictness levels:</strong> Strict (exact compliance) and loose (allows minor deviations)</li>
+                </ul>
+            </div>
+
+            <h3>Example Instructions</h3>
+            <div class="code-box">
+                <p><strong>Example 1 (length_constraint):</strong></p>
+                <p>"Write a 250-word essay about climate change."</p>
+                <p><em>Verification:</em> Count words, check if exactly 250.</p>
+            </div>
+
+            <div class="code-box">
+                <p><strong>Example 2 (keywords + change_case):</strong></p>
+                <p>"write a paragraph about space exploration that includes the words 'galaxy', 'telescope', 
+                   and 'discovery'. your entire response should be in lowercase."</p>
+                <p><em>Verification:</em> Check all three keywords present AND all letters are lowercase.</p>
+            </div>
+
+            <div class="code-box">
+                <p><strong>Example 3 (startend + punctuation):</strong></p>
+                <p>"Write about technology. Start with 'In the modern world' and end with 'transforming society'. 
+                   Do not use any commas."</p>
+                <p><em>Verification:</em> Check first/last phrases match exactly AND no commas in the response.</p>
+            </div>
+        </section>
+
+        <section id="nine-categories" class="content-section">
+            <h2>The 9 Instruction Categories</h2>
+            <p>
+                IFEval organizes instructions into 9 categories, each testing a different dimension of 
+                instruction-following ability. Figure 2 from the paper shows per-category performance:
+            </p>
+
+            <div class="chart-container">
+                <canvas id="radar-chart"></canvas>
+            </div>
+
+            <h3>Category Breakdown</h3>
+
+            <div class="category-grid">
+                <div class="category-card">
+                    <h4>1. change_case</h4>
+                    <p><strong>Task:</strong> Change or maintain specific case (uppercase, lowercase, title case)</p>
+                    <p><strong>Example:</strong> "Write in ALL CAPS" or "use only lowercase letters"</p>
+                    <p><strong>GPT-4:</strong> ~80% | <strong>PaLM 2 S:</strong> ~48%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>2. combination</h4>
+                    <p><strong>Task:</strong> Satisfy multiple constraints simultaneously</p>
+                    <p><strong>Example:</strong> "Write 200 words, include 'robot' 3 times, use no commas, end with 'future'"</p>
+                    <p><strong>GPT-4:</strong> ~73% | <strong>PaLM 2 S:</strong> ~37%</p>
+                    <p class="difficulty-note">⚠️ <strong>Hardest category for both models</strong></p>
+                </div>
+
+                <div class="category-card">
+                    <h4>3. detectable_content</h4>
+                    <p><strong>Task:</strong> Include specific phrases or sections</p>
+                    <p><strong>Example:</strong> "Add a postscript starting with 'P.S.'" or "End with 'Does this make sense?'"</p>
+                    <p><strong>GPT-4:</strong> ~96% | <strong>PaLM 2 S:</strong> ~73%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>4. detectable_format</h4>
+                    <p><strong>Task:</strong> Use specific formatting structures</p>
+                    <p><strong>Example:</strong> "Format as a bulleted list" or "Write 4 stanzas with 4 lines each"</p>
+                    <p><strong>GPT-4:</strong> ~93% | <strong>PaLM 2 S:</strong> ~68%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>5. keywords</h4>
+                    <p><strong>Task:</strong> Include or exclude specific words</p>
+                    <p><strong>Example:</strong> "Include 'galaxy', 'telescope', 'discovery'" or "Don't use the word 'computer'"</p>
+                    <p><strong>GPT-4:</strong> ~84% | <strong>PaLM 2 S:</strong> ~60%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>6. language</h4>
+                    <p><strong>Task:</strong> Respond in a specific language</p>
+                    <p><strong>Example:</strong> "Write in French" or "Translate to Spanish"</p>
+                    <p><strong>GPT-4:</strong> ~96% | <strong>PaLM 2 S:</strong> ~96%</p>
+                    <p class="difficulty-note">✓ <strong>Easiest category—both models tie</strong></p>
+                </div>
+
+                <div class="category-card">
+                    <h4>7. length_constraint</h4>
+                    <p><strong>Task:</strong> Precise word or character count</p>
+                    <p><strong>Example:</strong> "Write exactly 250 words" or "Between 100-120 words"</p>
+                    <p><strong>GPT-4:</strong> ~72% | <strong>PaLM 2 S:</strong> ~40%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>8. punctuation</h4>
+                    <p><strong>Task:</strong> Specific punctuation rules</p>
+                    <p><strong>Example:</strong> "Don't use commas" or "End every sentence with !"</p>
+                    <p><strong>GPT-4:</strong> ~66% | <strong>PaLM 2 S:</strong> ~53%</p>
+                </div>
+
+                <div class="category-card">
+                    <h4>9. startend</h4>
+                    <p><strong>Task:</strong> Start/end with specific words or phrases</p>
+                    <p><strong>Example:</strong> "Start with 'In conclusion' and end with 'thank you'"</p>
+                    <p><strong>GPT-4:</strong> ~93% | <strong>PaLM 2 S:</strong> ~45%</p>
+                    <p class="difficulty-note">⚠️ <strong>Biggest performance gap (48 points)</strong></p>
+                </div>
+            </div>
+        </section>
+
+        <section id="verifiable-vs-subjective" class="content-section">
+            <h2>Verifiable vs Subjective Evaluation</h2>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h3>Verifiable (IFEval)</h3>
+                    <ul>
+                        <li><strong>Objective:</strong> Programmatically checkable</li>
+                        <li><strong>Binary:</strong> Pass or fail, no ambiguity</li>
+                        <li><strong>Scalable:</strong> Automated checking</li>
+                        <li><strong>Examples:</strong>
+                            <ul>
+                                <li>Word count is exactly 250</li>
+                                <li>Response contains keyword "robot"</li>
+                                <li>All text is lowercase</li>
+                                <li>No commas present</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="comparison-card">
+                    <h3>Subjective (MT-Bench, AlpacaEval)</h3>
+                    <ul>
+                        <li><strong>Subjective:</strong> Requires human/LLM judgment</li>
+                        <li><strong>Graded:</strong> Quality scales, inter-rater variance</li>
+                        <li><strong>Manual:</strong> Human evaluation or LLM-as-judge</li>
+                        <li><strong>Examples:</strong>
+                            <ul>
+                                <li>Is the response helpful?</li>
+                                <li>Does it sound natural?</li>
+                                <li>Is the explanation clear?</li>
+                                <li>Is the tone appropriate?</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h4>Why Both Matter</h4>
+                <p>
+                    <strong>Verifiable evaluation</strong> (IFEval) tests precise control and constraint satisfaction—
+                    critical for tool use, API calls, and structured output generation.
+                </p>
+                <p>
+                    <strong>Subjective evaluation</strong> (MT-Bench, AlpacaEval) tests helpfulness, creativity, 
+                    and user satisfaction—critical for conversational AI and assistant quality.
+                </p>
+                <p>
+                    Modern post-training pipelines (Lesson 10: Tülu 3) optimize <strong>both</strong>: use verifiable 
+                    rewards for RLVR on IFEval/GSM8K/MATH, and use preference learning (DPO) for subjective quality.
+                </p>
+            </div>
+        </section>
+
+        <section id="strict-vs-loose" class="content-section">
+            <h2>Strict vs Loose Accuracy</h2>
+            <p>
+                IFEval defines two levels of strictness when checking instruction compliance:
+            </p>
+
+            <h3>Strict vs Loose Verification</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h3>Strict</h3>
+                    <p><strong>Exact compliance required</strong></p>
+                    <ul>
+                        <li><strong>Word count:</strong> Exactly 250 words (not 249 or 251)</li>
+                        <li><strong>Keywords:</strong> Must appear the exact number of times specified</li>
+                        <li><strong>Format:</strong> Must match the pattern precisely</li>
+                    </ul>
+                </div>
+
+                <div class="comparison-card">
+                    <h3>Loose</h3>
+                    <p><strong>Minor deviations allowed</strong></p>
+                    <ul>
+                        <li><strong>Word count:</strong> 249-251 acceptable for "250 words"</li>
+                        <li><strong>Keywords:</strong> Meeting minimum threshold counts as success</li>
+                        <li><strong>Format:</strong> Small formatting variations accepted</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Prompt-Level vs Instruction-Level</h3>
+            <p>
+                IFEval reports accuracy at two granularities:
+            </p>
+            <ul>
+                <li><strong>Prompt-level:</strong> ALL instructions in a prompt must pass (if any instruction fails, 
+                    the entire prompt fails)</li>
+                <li><strong>Instruction-level:</strong> Each instruction is scored independently</li>
+            </ul>
+
+            <div class="chart-container">
+                <canvas id="strict-loose-chart"></canvas>
+            </div>
+
+            <div class="info-box">
+                <h4>Key Insights from Table 3</h4>
+                <ul>
+                    <li><strong>GPT-4 strict-loose gap:</strong> ~2.2 points (prompt-level). Small gap suggests 
+                        GPT-4 either gets it exactly right or misses entirely—few "near misses".</li>
+                    <li><strong>PaLM 2 S strict-loose gap:</strong> ~3.9 points (prompt-level). Larger gap indicates 
+                        more attempts that are close but not exact.</li>
+                    <li><strong>Instruction-level higher than prompt-level:</strong> GPT-4's instruction-level strict 
+                        (83.57%) exceeds prompt-level strict (76.89%) because a single failed instruction fails the entire prompt.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results & Analysis</h2>
+
+            <h3>Overall Performance (Table 3)</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">76.89%</div>
+                    <div class="stat-label">GPT-4 Prompt-Level Strict</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">83.57%</div>
+                    <div class="stat-label">GPT-4 Inst-Level Strict</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">43.07%</div>
+                    <div class="stat-label">PaLM 2 S Prompt-Level Strict</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">35.76%</div>
+                    <div class="stat-label">PaLM 2 S Inst-Level Strict</div>
+                </div>
+            </div>
+
+            <h3>Key Findings</h3>
+
+            <div class="info-box">
+                <h4>1. Combination Instructions Are Hardest</h4>
+                <p>
+                    Both models struggle most with <strong>combination</strong> instructions (satisfying multiple 
+                    constraints simultaneously). GPT-4 achieves only ~73%, and PaLM 2 S drops to ~37%. This reveals 
+                    a fundamental challenge: models can often handle individual constraints but fail when required 
+                    to satisfy them all together.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>2. Language Instructions Are Easiest</h4>
+                <p>
+                    Both models achieve ~96% on <strong>language</strong> instructions (responding in French, Spanish, etc.). 
+                    This is the only category where they tie, indicating multilingual capabilities are well-developed 
+                    in modern LLMs.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>3. Precise Control Varies Widely by Category</h4>
+                <p>
+                    GPT-4 excels at <strong>startend</strong> (~93%) and <strong>detectable_content</strong> (~96%), 
+                    but struggles with <strong>punctuation</strong> (~66%). PaLM 2 S shows even more variation: 
+                    strong on <strong>language</strong> (~96%) and decent on <strong>detectable_content</strong> (~73%), 
+                    but very weak on <strong>combination</strong> (~37%) and <strong>startend</strong> (~45%).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>4. Largest Performance Gap: startend</h4>
+                <p>
+                    The <strong>startend</strong> category shows a 48-point gap (GPT-4 ~93% vs PaLM 2 S ~45%)—the 
+                    largest difference across all categories. This suggests GPT-4 has much better control over response 
+                    boundaries, likely due to superior instruction-tuning or architectural advantages.
+                </p>
+            </div>
+
+            <h3>Why IFEval Matters for Post-Training</h3>
+            <p>
+                IFEval's verifiable nature makes it ideal for <strong>Reinforcement Learning from Verifiable Rewards</strong> 
+                (RLVR, introduced in Lesson 10: Tülu 3):
+            </p>
+            <ul>
+                <li><strong>No reward model needed:</strong> Instruction compliance can be checked programmatically</li>
+                <li><strong>Binary signal:</strong> Clear pass/fail for each constraint</li>
+                <li><strong>Training-friendly:</strong> Immediate feedback for RL optimization</li>
+                <li><strong>Complements subjective tasks:</strong> Use RLVR for IFEval/GSM8K/MATH (verifiable) 
+                    and DPO for chat quality (subjective)</li>
+            </ul>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of IFEval and instruction-following evaluation:</p>
+
+            <div class="quiz-container">
+                <div class="quiz-question" data-question="1">
+                    <p class="question-text"><strong>Q1:</strong> What makes IFEval's evaluation approach different from benchmarks like MT-Bench or AlpacaEval?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It uses human annotators to judge response quality</button>
+                        <button class="quiz-option" data-answer="correct">It uses verifiable constraints that can be checked programmatically</button>
+                        <button class="quiz-option" data-answer="wrong">It tests general knowledge across multiple domains</button>
+                        <button class="quiz-option" data-answer="wrong">It requires LLM-as-judge evaluation</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="2">
+                    <p class="question-text"><strong>Q2:</strong> How many instruction categories does IFEval evaluate (as shown in Figure 2)?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">5 categories</button>
+                        <button class="quiz-option" data-answer="wrong">7 categories</button>
+                        <button class="quiz-option" data-answer="correct">9 categories</button>
+                        <button class="quiz-option" data-answer="wrong">12 categories</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="3">
+                    <p class="question-text"><strong>Q3:</strong> Which instruction category is the EASIEST for both GPT-4 and PaLM 2 S?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">detectable_content</button>
+                        <button class="quiz-option" data-answer="correct">language</button>
+                        <button class="quiz-option" data-answer="wrong">startend</button>
+                        <button class="quiz-option" data-answer="wrong">punctuation</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="4">
+                    <p class="question-text"><strong>Q4:</strong> Which instruction category is the HARDEST for both models?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">length_constraint</button>
+                        <button class="quiz-option" data-answer="wrong">punctuation</button>
+                        <button class="quiz-option" data-answer="correct">combination</button>
+                        <button class="quiz-option" data-answer="wrong">change_case</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="5">
+                    <p class="question-text"><strong>Q5:</strong> What is the approximate strict-loose gap for GPT-4 at the prompt level (Table 3)?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">~10 points (large gap, many near-misses)</button>
+                        <button class="quiz-option" data-answer="wrong">~6 points (moderate gap)</button>
+                        <button class="quiz-option" data-answer="correct">~2.2 points (small gap, usually exact or wrong)</button>
+                        <button class="quiz-option" data-answer="wrong">0 points (no difference)</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="6">
+                    <p class="question-text"><strong>Q6:</strong> PaLM 2 S has a larger strict-loose gap than GPT-4. What does this suggest?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">PaLM 2 S is better at following instructions</button>
+                        <button class="quiz-option" data-answer="correct">PaLM 2 S makes more "near miss" errors (close but not exact)</button>
+                        <button class="quiz-option" data-answer="wrong">PaLM 2 S is worse at language understanding</button>
+                        <button class="quiz-option" data-answer="wrong">PaLM 2 S ignores instructions entirely</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="7">
+                    <p class="question-text"><strong>Q7:</strong> Which category shows the BIGGEST performance gap between GPT-4 and PaLM 2 S?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">combination (~36 point gap)</button>
+                        <button class="quiz-option" data-answer="correct">startend (~48 point gap)</button>
+                        <button class="quiz-option" data-answer="wrong">length_constraint (~32 point gap)</button>
+                        <button class="quiz-option" data-answer="wrong">detectable_format (~25 point gap)</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="8">
+                    <p class="question-text"><strong>Q8:</strong> What's the difference between prompt-level and instruction-level accuracy?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">They're the same, just different names</button>
+                        <button class="quiz-option" data-answer="correct">Prompt-level requires ALL instructions to pass; instruction-level scores each independently</button>
+                        <button class="quiz-option" data-answer="wrong">Prompt-level uses strict checking; instruction-level uses loose</button>
+                        <button class="quiz-option" data-answer="wrong">Prompt-level is for GPT-4; instruction-level is for PaLM 2 S</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="9">
+                    <p class="question-text"><strong>Q9:</strong> How does IFEval connect to other lessons on verifiable evaluation?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">It doesn't—IFEval is completely different from math and code benchmarks</button>
+                        <button class="quiz-option" data-answer="correct">Like GSM8K (math) and HumanEval (code), IFEval provides verifiable ground truth for training</button>
+                        <button class="quiz-option" data-answer="wrong">IFEval replaces the need for subjective evaluation entirely</button>
+                        <button class="quiz-option" data-answer="wrong">IFEval only applies to base models, not post-trained assistants</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-question" data-question="10">
+                    <p class="question-text"><strong>Q10:</strong> Which statement best describes PaLM 2 S's performance across categories?</p>
+                    <div class="quiz-options">
+                        <button class="quiz-option" data-answer="wrong">Consistent performance across all categories (~50% on everything)</button>
+                        <button class="quiz-option" data-answer="correct">Very uneven: strong on language (~96%), weak on combination (~37%) and startend (~45%)</button>
+                        <button class="quiz-option" data-answer="wrong">Better than GPT-4 on most categories</button>
+                        <button class="quiz-option" data-answer="wrong">Fails completely on all instruction types</button>
+                    </div>
+                    <div class="feedback"></div>
+                </div>
+
+                <div class="quiz-score"></div>
+                <button id="reset-quiz" class="reset-button">Reset Quiz</button>
+            </div>
+        </section>
+
+        <section id="data-explorer" class="content-section">
+            <h2>Data Explorer: Sample IFEval Instructions</h2>
+            <p>Explore example instructions from each of the 9 categories:</p>
+
+            <div class="category-examples">
+                <div class="example-card">
+                    <h4>change_case</h4>
+                    <p class="instruction">"Write a 100-word summary of climate change. Your entire response should be in lowercase letters, no capital letters are allowed."</p>
+                    <p class="verification"><strong>Verification:</strong> All letters must be lowercase</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>combination</h4>
+                    <p class="instruction">"Write a 150-word essay about democracy that: (1) contains exactly 5 paragraphs, (2) includes the word 'liberty' at least 3 times, (3) ends with the word 'future', and (4) uses no commas."</p>
+                    <p class="verification"><strong>Verification:</strong> Must satisfy all 4 constraints simultaneously</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>detectable_content</h4>
+                    <p class="instruction">"Write a blog post about artificial intelligence that includes a postscript starting with 'P.S.'"</p>
+                    <p class="verification"><strong>Verification:</strong> Must contain 'P.S.' followed by additional text</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>detectable_format</h4>
+                    <p class="instruction">"List 5 benefits of exercise. Format your answer as a bulleted list using asterisks (*)."</p>
+                    <p class="verification"><strong>Verification:</strong> Must use '* ' at the start of each line</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>keywords</h4>
+                    <p class="instruction">"Write a paragraph about space exploration that includes the words 'galaxy', 'telescope', and 'discovery'."</p>
+                    <p class="verification"><strong>Verification:</strong> All three keywords must appear</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>language</h4>
+                    <p class="instruction">"Write a 50-word description of Paris in French."</p>
+                    <p class="verification"><strong>Verification:</strong> Response must be in French</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>length_constraint</h4>
+                    <p class="instruction">"Write a story about friendship in exactly 250 words. No more, no less."</p>
+                    <p class="verification"><strong>Verification:</strong> Word count must be exactly 250</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>punctuation</h4>
+                    <p class="instruction">"Write a 100-word paragraph about technology without using any commas."</p>
+                    <p class="verification"><strong>Verification:</strong> No commas allowed</p>
+                </div>
+
+                <div class="example-card">
+                    <h4>startend</h4>
+                    <p class="instruction">"Write about the importance of education. Your response must start with the word 'Education' and end with the word 'future'."</p>
+                    <p class="verification"><strong>Verification:</strong> First word is 'Education', last word is 'future'</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="post-training" class="content-section">
+            <h2>Connection to Post-Training</h2>
+            <p>
+                IFEval has become a critical benchmark in modern post-training pipelines because it provides 
+                <strong>verifiable rewards</strong> that enable more reliable reinforcement learning.
+            </p>
+
+            <h3>RLVR: Reinforcement Learning from Verifiable Rewards</h3>
+            <p>
+                In <strong>Lesson 10 (Tülu 3)</strong>, we saw how RLVR extends reinforcement learning to tasks with 
+                objective ground truth. IFEval is perfect for this:
+            </p>
+            <ul>
+                <li><strong>No learned reward model:</strong> Unlike RLHF (Lesson 02), which needs a trained reward model, 
+                    IFEval instructions can be checked programmatically</li>
+                <li><strong>Binary feedback:</strong> Each instruction either passes or fails—no ambiguity</li>
+                <li><strong>Scalable training:</strong> Generate many responses, check compliance automatically, 
+                    and use passing examples as positive signals for RL</li>
+            </ul>
+
+            <h3>Multi-Objective Optimization</h3>
+            <p>
+                Modern post-training combines:
+            </p>
+            <ul>
+                <li><strong>Verifiable tasks (RLVR):</strong> IFEval, GSM8K, MATH, HumanEval—objective correctness</li>
+                <li><strong>Subjective tasks (DPO):</strong> Chat quality, helpfulness, safety—preference learning</li>
+            </ul>
+            <p>
+                This dual approach ensures models are both <strong>precisely controllable</strong> (IFEval) and 
+                <strong>naturally helpful</strong> (preference data).
+            </p>
+
+            <h3>Tülu 3 Results on IFEval</h3>
+            <div class="info-box">
+                <p>
+                    Tülu 3 70B applies RLVR to IFEval, improving instruction-following accuracy:
+                </p>
+                <ul>
+                    <li><strong>SFT baseline:</strong> 82.1%</li>
+                    <li><strong>+ DPO:</strong> 82.6% (+0.5 points)</li>
+                    <li><strong>+ RLVR:</strong> 83.2% (+0.6 points from DPO, +1.1 total)</li>
+                </ul>
+                <p>
+                    The gains are modest but consistent, showing that verifiable rewards help even when base 
+                    instruction-following is already strong.
+                </p>
+            </div>
+
+            <h3>Cross-Lesson Connections</h3>
+            <table class="connection-table">
+                <thead>
+                    <tr>
+                        <th>Lesson</th>
+                        <th>Benchmark</th>
+                        <th>Verification Type</th>
+                        <th>Training Use</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>03 - GSM8K</td>
+                        <td>Math reasoning</td>
+                        <td>Parse final answer, check correctness</td>
+                        <td>RLVR / GRPO</td>
+                    </tr>
+                    <tr>
+                        <td>06 - DeepSeekMath</td>
+                        <td>Advanced math</td>
+                        <td>Answer extraction + symbolic verification</td>
+                        <td>GRPO</td>
+                    </tr>
+                    <tr>
+                        <td>07 - HumanEval</td>
+                        <td>Code generation</td>
+                        <td>Run unit tests</td>
+                        <td>RLVR / Rejection sampling</td>
+                    </tr>
+                    <tr>
+                        <td><strong>11 - IFEval</strong></td>
+                        <td><strong>Instruction following</strong></td>
+                        <td><strong>Programmatic constraint checking</strong></td>
+                        <td><strong>RLVR</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p>
+                All four benchmarks share the same key property: <strong>verifiable ground truth</strong> that enables 
+                objective, scalable evaluation and training.
+            </p>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resources-grid">
+                <div class="resource-card">
+                    <h4>📄 Original Paper</h4>
+                    <p><a href="https://arxiv.org/abs/2311.07911" target="_blank">Instruction-Following Evaluation for Large Language Models</a></p>
+                    <p>Zhou et al. (2023)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h4>💻 Code & Data</h4>
+                    <p><a href="https://github.com/google-research/google-research/tree/master/instruction_following_eval" target="_blank">IFEval on GitHub</a></p>
+                    <p>Evaluation code and dataset</p>
+                </div>
+
+                <div class="resource-card">
+                    <h4>🔗 Related Benchmarks</h4>
+                    <p>GSM8K (Lesson 03), HumanEval (Lesson 07), MT-Bench (Lesson 05)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h4>🔗 Post-Training Application</h4>
+                    <p>Tülu 3 RLVR (Lesson 10)—using IFEval for verifiable RL</p>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <h4>Key Takeaways</h4>
+                <ol>
+                    <li><strong>IFEval measures verifiable instruction-following</strong> across 9 categories with 
+                        objective, programmatic checking</li>
+                    <li><strong>Combination instructions are hardest</strong> for both GPT-4 (~73%) and PaLM 2 S (~37%)—
+                        satisfying multiple constraints simultaneously is difficult</li>
+                    <li><strong>Language instructions are easiest</strong>, with both models achieving ~96% accuracy</li>
+                    <li><strong>GPT-4 excels at precise control</strong>, especially on startend (~93% vs ~45% for PaLM 2 S)</li>
+                    <li><strong>Verifiable constraints enable RLVR</strong>, allowing post-training with objective rewards 
+                        instead of learned reward models</li>
+                </ol>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>Part of the Post-Training Curriculum | <a href="../curriculum.md">View Full Curriculum</a></p>
+    </footer>
+
+    <script src="charts.js"></script>
+    <script src="quiz.js"></script>
+</body>
+</html>
