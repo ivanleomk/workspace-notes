@@ -43,7 +43,7 @@ Dive into AWS's minimal VMM. Boot Firecracker by hand via its API, set up tap ne
 
 ### Phase 2: Snapshot, Restore, and Forking (Lessons 05–06)
 
-**05. Snapshot/Restore and Forking Agent State** 📝 *Planned*  
+**05. Snapshot/Restore and Forking Agent State** ✅ *Complete*  
 Build fast warm pools with Firecracker snapshots and `userfaultfd` lazy memory. Implement GRPO-style forking: run an agent to step *k*, fork N children, sample differently. Handle clone hazards (RNG seeds, MAC addresses, VMGenID).
 
 **06. E2B's Open-Source Runtime Architecture** 📝 *Planned*  

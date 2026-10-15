@@ -1,0 +1,1398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 05: Snapshot/Restore and Forking Agent State</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 05: Snapshot/Restore and Forking Agent State</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Warm Pools, userfaultfd, and GRPO-Style Forking</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#why-snapshot">Why Snapshot/Restore</a>
+            <a href="#firecracker-snapshots">Firecracker Snapshots</a>
+            <a href="#userfaultfd">userfaultfd Lazy Memory</a>
+            <a href="#clone-hazards">Clone Hazards</a>
+            <a href="#grpo-forking">GRPO-Style Forking</a>
+            <a href="#criu">CRIU</a>
+            <a href="#real-systems">Real Systems</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From Cold Boot to Warm Resume: The Throughput Lever</h2>
+            <p>
+                In Lesson 04, you booted Firecracker from scratch and measured the ≤125ms target from <code>InstanceStart</code> 
+                to guest <code>/sbin/init</code>. But what if you need to run <strong>10,000 eval episodes</strong>? Or train 
+                an RL policy where every episode boots a fresh sandbox?
+            </p>
+            <p>
+                <strong>Cold boot doesn't scale.</strong> Even at 125ms per boot, 10,000 boots = 21 minutes of pure boot time, 
+                ignoring the actual eval work. And that's with a minimal kernel and rootfs. Add real dependencies (Python packages, 
+                git clones, pip install), and your "boot" becomes multi-second setup per instance.
+            </p>
+
+            <h3>Enter Snapshot/Restore</h3>
+            <p>
+                <strong>Snapshot/restore</strong> is the lever that transforms eval throughput. The idea:
+            </p>
+            <ol>
+                <li><strong>Boot once.</strong> Start a Firecracker VM, install dependencies, warm up the environment, and get 
+                to a ready state.</li>
+                <li><strong>Snapshot.</strong> Capture the full guest memory (RAM contents) and device state (virtio ring buffers, 
+                CPU registers, etc.) to files on the host.</li>
+                <li><strong>Restore N times.</strong> For each eval, restore the snapshot instead of cold-booting. The VM resumes 
+                exactly where it left off, with all packages installed and caches warm.</li>
+            </ol>
+            <p>
+                From 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">Firecracker's snapshot-support.md</a>:
+            </p>
+            <blockquote>
+                "A snapshot can be used to restore a microVM to the exact state captured at snapshot time."
+            </blockquote>
+            <p>
+                <strong>Why this is faster than cold boot:</strong>
+            </p>
+            <ul>
+                <li><strong>No kernel decompression or device initialization.</strong> The guest kernel and virtio devices are 
+                already initialized in the snapshot.</li>
+                <li><strong>No userspace init.</strong> <code>/sbin/init</code>, systemd, and startup scripts already ran. 
+                The snapshot captures a running system.</li>
+                <li><strong>Dependencies pre-installed.</strong> <code>pip install</code>, <code>git clone</code>, and cache 
+                warming happened once, before the snapshot. Every restore inherits that state.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>Why snapshot/restore beats cold boot for eval throughput: boot once, restore N times</li>
+                    <li>Firecracker's snapshot format: memory file (guest RAM) + state file (device state JSON)</li>
+                    <li>Full vs diff snapshots: full captures entire memory, diff captures only dirty pages (developer preview)</li>
+                    <li>userfaultfd: lazy page-in from disk/object storage, so restore doesn't wait for the full memory file</li>
+                    <li>Clone hazards: RNG seeds, MAC addresses, VMGenID—and why this breaks determinism for forked rollouts</li>
+                    <li>GRPO-style forking: run agent to step <em>k</em>, snapshot, fork N children, reseed RNGs, sample differently</li>
+                    <li>How E2B, Morph, Daytona, and Modal use snapshots for warm pools and agent forking</li>
+                    <li>Hands-on: build a Python warm-pool simulator and measure "prefix once, fork N" vs "replay N times"</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="why-snapshot" class="content-section">
+            <h2>Why Snapshot/Restore Beats Cold Create</h2>
+            
+            <h3>The Setup Tax</h3>
+            <p>
+                Real eval workloads don't run on minimal kernels. They need:
+            </p>
+            <ul>
+                <li><strong>Dependencies:</strong> <code>pip install transformers torch</code> can take 10–30 seconds, even with 
+                fast mirrors and local caches.</li>
+                <li><strong>Repository clones:</strong> <code>git clone https://github.com/large-repo</code> transfers MBs or GBs.</li>
+                <li><strong>Warm-up:</strong> First import of a large library (PyTorch, TensorFlow) is slow; subsequent imports 
+                are faster thanks to <code>__pycache__</code> and system caches.</li>
+                <li><strong>Per-task setup:</strong> SWE-bench instances install per-repo environments and check out specific commits.</li>
+            </ul>
+            <p>
+                <strong>Problem:</strong> If you cold-boot for every eval episode, you pay this tax N times. For 10,000 episodes, 
+                that's 10,000× the setup cost.
+            </p>
+
+            <h3>The Snapshot Solution</h3>
+            <p>
+                With snapshot/restore:
+            </p>
+            <ol>
+                <li><strong>Template creation:</strong> Boot a VM, run all setup (pip install, git clone, warm imports), then 
+                <strong>snapshot</strong> it. This is now your <strong>template</strong>.</li>
+                <li><strong>Per-eval restore:</strong> For each eval, <strong>restore</strong> the template snapshot. The VM 
+                starts with all packages installed, repos cloned, and caches warm. Setup cost: zero.</li>
+            </ol>
+
+            <div class="mermaid">
+graph TD
+    subgraph "Cold Boot (N times)"
+        CB1[Boot VM 1] --> Setup1[pip install + git clone]
+        CB2[Boot VM 2] --> Setup2[pip install + git clone]
+        CB3[Boot VM N] --> Setup3[pip install + git clone]
+        Setup1 --> Eval1[Run eval 1]
+        Setup2 --> Eval2[Run eval 2]
+        Setup3 --> EvalN[Run eval N]
+    end
+    
+    subgraph "Snapshot/Restore (1 setup + N restores)"
+        Boot[Boot VM once] --> SetupOnce[pip install + git clone]
+        SetupOnce --> Snapshot[Take snapshot]
+        Snapshot --> Template[Template snapshot]
+        Template --> Restore1[Restore 1]
+        Template --> Restore2[Restore 2]
+        Template --> RestoreN[Restore N]
+        Restore1 --> FastEval1[Run eval 1]
+        Restore2 --> FastEval2[Run eval 2]
+        RestoreN --> FastEvalN[Run eval N]
+    end
+    
+    style Snapshot fill:#10b981,stroke:#f1f5f9
+    style Template fill:#8b5cf6,stroke:#f1f5f9
+    style Restore1 fill:#3b82f6,stroke:#f1f5f9
+    style Restore2 fill:#3b82f6,stroke:#f1f5f9
+    style RestoreN fill:#3b82f6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> Cold boot pays setup cost N times. Snapshot/restore pays it once, then restores N times instantly.
+            </p>
+
+            <h3>Speed Comparison</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Operation</th>
+                        <th>Cold Boot</th>
+                        <th>Snapshot Restore</th>
+                        <th>Source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Firecracker InstanceStart → /sbin/init</td>
+                        <td>≤125ms (spec target)</td>
+                        <td>Skipped (already booted)</td>
+                        <td><a href="https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md" target="_blank">SPECIFICATION.md</a></td>
+                    </tr>
+                    <tr>
+                        <td>Restore VM state + memory</td>
+                        <td>N/A</td>
+                        <td>~1–10ms (memory copy + KVM VM creation)</td>
+                        <td>Measured by practitioners; varies by memory size</td>
+                    </tr>
+                    <tr>
+                        <td>E2B resume (vendor claim)</td>
+                        <td>N/A</td>
+                        <td>~1s (with userfaultfd + object storage)</td>
+                        <td><a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a></td>
+                    </tr>
+                    <tr>
+                        <td>pip install transformers</td>
+                        <td>~10–30s</td>
+                        <td>0s (already installed in snapshot)</td>
+                        <td>Typical observed behavior</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="info-box">
+                <h3>Key Takeaway</h3>
+                <p>
+                    <strong>Snapshot/restore is a time-shift:</strong> you move all setup cost from per-eval time to 
+                    per-template time. Boot once, snapshot, restore N times. This is why E2B's "create" API call actually 
+                    resumes a snapshot—cold boot would be too slow.
+                </p>
+            </div>
+        </section>
+
+        <section id="firecracker-snapshots" class="content-section">
+            <h2>Firecracker Snapshot Mechanics</h2>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">snapshot-support.md</a>
+            </p>
+
+            <h3>What a Snapshot Contains</h3>
+            <p>
+                A Firecracker snapshot consists of:
+            </p>
+            <ol>
+                <li><strong>Memory file:</strong> The raw contents of guest RAM. This is the guest kernel, running processes, 
+                page cache, etc. For a VM with 1 GiB of RAM, this file is 1 GiB (uncompressed). You can optionally compress it 
+                with zstd or similar.</li>
+                <li><strong>State file (JSON):</strong> Device state (virtio-net/block/vsock ring buffer positions, vCPU 
+                registers, serial console state, etc.). This is small (tens of KB).</li>
+                <li><strong>(Optional) Diff memory file:</strong> For <strong>diff snapshots</strong> (developer preview), only 
+                the dirty pages since the base snapshot are saved. This shrinks the memory file when changes are small.</li>
+            </ol>
+
+            <h3>Creating a Snapshot</h3>
+            <p>
+                Via the Firecracker API:
+            </p>
+            <pre><code class="language-bash">curl --unix-socket /tmp/firecracker.socket -X PUT \
+  http://localhost/actions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action_type": "CreateSnapshot",
+    "payload": {
+      "snapshot_type": "Full",
+      "snapshot_path": "/path/to/snapshot_state.json",
+      "mem_file_path": "/path/to/snapshot_memory.bin"
+    }
+  }'</code></pre>
+            <p>
+                This <strong>pauses the VM</strong>, writes the memory and state files, and then you can stop Firecracker. 
+                The VM is frozen at the moment of snapshot.
+            </p>
+
+            <h3>Restoring a Snapshot</h3>
+            <p>
+                You start a new Firecracker process and tell it to load a snapshot:
+            </p>
+            <pre><code class="language-bash">curl --unix-socket /tmp/firecracker2.socket -X PUT \
+  http://localhost/snapshot/load \
+  -H "Content-Type: application/json" \
+  -d '{
+    "snapshot_path": "/path/to/snapshot_state.json",
+    "mem_backend": {
+      "backend_type": "File",
+      "backend_path": "/path/to/snapshot_memory.bin"
+    },
+    "enable_diff_snapshots": false,
+    "resume_vm": true
+  }'</code></pre>
+            <p>
+                <strong>What happens:</strong>
+            </p>
+            <ol>
+                <li>Firecracker <code>mmap</code>s the memory file. The guest's RAM is backed by this file.</li>
+                <li>It deserializes the device state from the JSON.</li>
+                <li>It creates a new KVM VM (<code>KVM_CREATE_VM</code>), maps the memory, restores vCPU registers, and 
+                calls <code>KVM_RUN</code>.</li>
+                <li>The guest resumes execution <strong>exactly where it left off</strong> when the snapshot was taken. 
+                No reboot, no init—just continuation.</li>
+            </ol>
+
+            <div class="mermaid">
+sequenceDiagram
+    participant Host
+    participant Firecracker
+    participant KVM
+    participant GuestMemFile as Guest Memory File
+
+    Host->>Firecracker: CreateSnapshot
+    Firecracker->>KVM: Pause VM
+    Firecracker->>GuestMemFile: Write guest RAM to disk
+    Firecracker->>Host: Write device state JSON
+    Note over Host,GuestMemFile: Snapshot complete
+
+    Host->>Firecracker: LoadSnapshot
+    Firecracker->>GuestMemFile: mmap memory file
+    Firecracker->>KVM: KVM_CREATE_VM
+    Firecracker->>KVM: KVM_SET_USER_MEMORY_REGION (mapped to file)
+    Firecracker->>KVM: Restore vCPU registers
+    Firecracker->>KVM: KVM_RUN
+    Note over KVM: Guest resumes mid-flight
+    KVM-->>Firecracker: (VM running)
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> Snapshot writes memory + state. Restore mmap's the memory file, recreates the KVM VM, 
+                and resumes execution.
+            </p>
+
+            <h3>Full vs Diff Snapshots</h3>
+            <p>
+                From snapshot-support.md:
+            </p>
+            <blockquote>
+                "Diff snapshots (developer preview) capture only the dirty memory pages since the last snapshot."
+            </blockquote>
+            <ul>
+                <li><strong>Full snapshot:</strong> Captures all guest memory. Size = guest RAM size. Always works.</li>
+                <li><strong>Diff snapshot:</strong> Captures only pages modified since a base snapshot. Much smaller if changes 
+                are small (e.g., an agent ran for 10 seconds, touching ~50 MB). Still <strong>developer preview</strong> as of 
+                Firecracker v1.9; test before production use.</li>
+            </ul>
+            <p>
+                <strong>Use case for diff snapshots:</strong> You run an agent to step <em>k</em>, take a diff snapshot, fork 
+                N children. Each child's diff is small (only the RNG state and per-child data changed). Storage cost for N children 
+                is much lower than N full snapshots.
+            </p>
+
+            <div class="info-box">
+                <h3>Important: Snapshots Are Not Portable Across Kernel Versions</h3>
+                <p>
+                    From snapshot-support.md: "Snapshot compatibility is ensured only for snapshots taken with the same Firecracker 
+                    binary version and on hosts with the same kernel version." If you snapshot on kernel 5.10 and restore on 6.1, 
+                    KVM internal state may have changed. For production, pin your host kernel version or test carefully.
+                </p>
+            </div>
+        </section>
+
+        <section id="userfaultfd" class="content-section">
+            <h2>userfaultfd: Lazy Memory on Restore</h2>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/handling-page-faults-on-snapshot-resume.md" target="_blank">handling-page-faults-on-snapshot-resume.md</a>
+            </p>
+
+            <h3>The Problem: Waiting for 1 GiB Transfers</h3>
+            <p>
+                Imagine you store snapshots in S3 or object storage (as E2B does). A 1 GiB memory file takes time to download 
+                over the network. If you wait for the full file before resuming the VM, your "fast" snapshot restore becomes slow.
+            </p>
+            <p>
+                <strong>userfaultfd</strong> solves this.
+            </p>
+
+            <h3>What is userfaultfd?</h3>
+            <p>
+                From the Linux man page 
+                (<a href="https://man7.org/linux/man-pages/man2/userfaultfd.2.html" target="_blank">userfaultfd(2)</a>) 
+                and Firecracker's doc:
+            </p>
+            <blockquote>
+                "userfaultfd is a Linux kernel feature that allows a userspace process to handle page faults."
+            </blockquote>
+            <p>
+                Normally, when a process accesses unmapped memory, the kernel handles the page fault (allocates a page, zeros it 
+                or loads it from disk, maps it). With <strong>userfaultfd</strong>, the kernel sends a notification to a userspace 
+                handler, which can:
+            </p>
+            <ul>
+                <li>Load the page from a file, network, or object storage</li>
+                <li>Decompress it</li>
+                <li>Map it into the faulting process</li>
+            </ul>
+            <p>
+                <strong>This is lazy loading:</strong> the VM starts running with <em>no</em> memory pages mapped. As the guest 
+                touches pages (code, data, stack), Firecracker's userfaultfd handler loads them on demand.
+            </p>
+
+            <h3>How Firecracker Uses userfaultfd</h3>
+            <p>
+                From handling-page-faults-on-snapshot-resume.md:
+            </p>
+            <blockquote>
+                "Firecracker… can configure guest memory to be handled by a userspace page fault handler."
+            </blockquote>
+            <p>
+                The workflow:
+            </p>
+            <ol>
+                <li>Firecracker creates a userfaultfd descriptor via the <code>userfaultfd(2)</code> syscall.</li>
+                <li>It registers the guest memory range with the userfaultfd.</li>
+                <li>On snapshot restore, Firecracker <code>mmap</code>s the guest memory range but does <strong>not</strong> 
+                immediately read the snapshot file into it.</li>
+                <li>When the guest accesses a page (e.g., executing code at address 0x400000), the kernel sends a userfaultfd 
+                event to Firecracker's handler thread.</li>
+                <li>The handler reads that 4 KiB page from the snapshot file (or object storage) and calls <code>UFFDIO_COPY</code> 
+                to map it.</li>
+                <li>The guest resumes. The page fault is transparent to the guest.</li>
+            </ol>
+
+            <div class="mermaid">
+sequenceDiagram
+    participant Guest
+    participant KVM
+    participant Firecracker_Handler as Firecracker userfaultfd handler
+    participant SnapshotStorage as Snapshot file / S3
+
+    Guest->>KVM: Access page at address X
+    KVM->>KVM: Page not mapped
+    KVM->>Firecracker_Handler: userfaultfd event: page X
+    Firecracker_Handler->>SnapshotStorage: Read 4 KiB at offset X
+    SnapshotStorage-->>Firecracker_Handler: Page data
+    Firecracker_Handler->>KVM: UFFDIO_COPY (map page)
+    KVM-->>Guest: Resume (page now present)
+    Guest->>Guest: Continue execution
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> userfaultfd lazy page-in. The guest's first access to a page triggers a fault; 
+                Firecracker's handler fetches it from storage and maps it.
+            </p>
+
+            <h3>Why This Is Fast</h3>
+            <p>
+                <strong>Hot pages load first, cold pages load on demand (or never).</strong>
+            </p>
+            <ul>
+                <li>The guest's first instructions (kernel code, init process) are in the first few MB of memory. Those pages 
+                fault immediately and are loaded.</li>
+                <li>Large allocations that the guest never touches (e.g., a 512 MiB buffer allocated but not yet written) 
+                never fault, so those pages are never transferred.</li>
+                <li>Total transfer time is proportional to the <strong>working set</strong> (pages actually accessed), not 
+                the full memory size.</li>
+            </ul>
+            <p>
+                E2B reports (vendor claim, 
+                <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a>):
+            </p>
+            <blockquote>
+                "Resume takes approximately 1 second."
+            </blockquote>
+            <p>
+                This is for a ~1 GiB snapshot with userfaultfd from object storage. Without userfaultfd, you'd wait for the 
+                full 1 GiB download.
+            </p>
+
+            <h3>Prefetching Hot Pages</h3>
+            <p>
+                E2B's runtime (
+                <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a>) 
+                includes a prefetcher:
+            </p>
+            <blockquote>
+                "A final optimize pass 'records which pages a boot actually touches'."
+            </blockquote>
+            <p>
+                This means: during template creation, E2B tracks which pages are accessed during a typical boot. On restore, 
+                it prefetches those pages <em>before</em> the VM starts, so the first faults are instant. Cold pages still 
+                fault on demand.
+            </p>
+        </section>
+
+        <section id="clone-hazards" class="content-section">
+            <h2>Clone Hazards: Why Restoring N Times Breaks Things</h2>
+            <p>
+                You take a snapshot and restore it 10 times. Now you have 10 VMs. But they're <strong>clones</strong>—they 
+                started from identical memory. This causes problems.
+            </p>
+
+            <h3>Hazard 1: Shared RNG State (Breaks Determinism)</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/random-for-clones.md" target="_blank">random-for-clones.md</a>
+            </p>
+            <p>
+                From random-for-clones.md:
+            </p>
+            <blockquote>
+                "When you restore a snapshot… the guest OS entropy pool is in the exact same state… Clones of a snapshot 
+                produce the same sequence of random numbers."
+            </blockquote>
+            <p>
+                <strong>What this means for evals:</strong>
+            </p>
+            <ul>
+                <li>All 10 clones call <code>/dev/urandom</code> and get <strong>identical bytes</strong>.</li>
+                <li>Python's <code>random.random()</code> (seeded from <code>/dev/urandom</code> at startup) produces 
+                identical values across all 10 clones.</li>
+                <li>If you're sampling from an LLM with <code>temperature=0.8</code>, all 10 rollouts produce 
+                <strong>identical</strong> samples—not independent samples.</li>
+            </ul>
+            <p>
+                <strong>This is a determinism hazard:</strong> for GRPO-style forking (run to step <em>k</em>, fork N children, 
+                sample differently), you need <strong>independent</strong> RNG state per child. Without reseeding, your N 
+                rollouts are copies, not independent trials.
+            </p>
+
+            <h3>Fixing RNG Clones</h3>
+            <p>
+                From random-for-clones.md, Firecracker recommends two mitigations:
+            </p>
+            <ol>
+                <li><strong>VMGenID (VM Generation Counter):</strong> Firecracker exposes a device that increments a counter 
+                on every restore. The guest kernel's RNG can read this and reseed. Requires guest kernel support 
+                (CONFIG_VMGENID=y, available in Linux 5.18+).</li>
+                <li><strong>Manual reseed:</strong> After restore, write entropy to <code>/dev/urandom</code> from the host 
+                or a startup script. Example:
+                    <pre><code class="language-bash"># Inside the guest, after restore
+dd if=/dev/random of=/dev/urandom bs=32 count=1</code></pre>
+                    Or, if you control the workload:
+                    <pre><code class="language-python">import random
+import os
+
+# After fork, reseed Python's RNG with OS entropy
+random.seed(os.urandom(32))</code></pre>
+                </li>
+            </ol>
+
+            <h3>Hazard 2: Shared MAC Addresses (Breaks Networking)</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/network-for-clones.md" target="_blank">network-for-clones.md</a>
+            </p>
+            <p>
+                From network-for-clones.md:
+            </p>
+            <blockquote>
+                "Restored microVMs… share the same MAC and IP addresses."
+            </blockquote>
+            <p>
+                If all 10 clones use MAC <code>AA:FC:00:00:00:01</code> and IP <code>172.16.0.2</code>, they collide on the 
+                host network. Packets meant for clone 1 might arrive at clone 5. This breaks connectivity.
+            </p>
+
+            <h3>Fixing Network Clones</h3>
+            <p>
+                From network-for-clones.md:
+            </p>
+            <blockquote>
+                "Each clone should be placed in its own network namespace."
+            </blockquote>
+            <p>
+                The workflow:
+            </p>
+            <ol>
+                <li>Create a network namespace per clone:
+                    <pre><code class="language-bash">ip netns add clone-1
+ip netns add clone-2</code></pre>
+                </li>
+                <li>Create a unique TAP device per clone:
+                    <pre><code class="language-bash">ip tuntap add tap1 mode tap
+ip tuntap add tap2 mode tap</code></pre>
+                </li>
+                <li>Assign each TAP a unique IP (e.g., <code>172.16.0.1</code> for tap1, <code>172.16.1.1</code> for tap2).</li>
+                <li>When restoring, configure Firecracker to use the per-clone TAP and MAC.</li>
+                <li>Inside the guest, reconfigure the network after restore (assign the per-clone IP).</li>
+            </ol>
+            <p>
+                <strong>Alternative:</strong> Disable networking entirely for evals that don't need it (safer and simpler).
+            </p>
+
+            <h3>Hazard 3: Time Skew</h3>
+            <p>
+                The snapshot captures the guest's wall clock. If you snapshot at time T and restore 10 minutes later, the 
+                guest's clock is 10 minutes behind. Some applications (certificate validation, TTL checks) break.
+            </p>
+            <p>
+                <strong>Fix:</strong> Sync the guest clock after restore. If the guest has virtio-rtc or NTP, it will 
+                auto-sync. For quick restores, this may not matter (the guest runs for seconds, not hours).
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Clone Hazards Are Correctness Bugs, Not Just Performance Issues</h3>
+                <p>
+                    Shared RNG state means your N "independent" rollouts are actually identical. This breaks GRPO, tree search, 
+                    and any algorithm that assumes independent sampling. <strong>Always reseed after restore.</strong>
+                </p>
+            </div>
+        </section>
+
+        <section id="grpo-forking" class="content-section">
+            <h2>GRPO-Style Forking: Run to Step k, Fork N Children</h2>
+
+            <h3>The GRPO Use Case</h3>
+            <p>
+                <strong>GRPO (Group Relative Policy Optimization)</strong> is an RL algorithm where, at each training step, 
+                you sample <strong>G</strong> rollouts from the same state and compare them. The idea: run the agent to a 
+                decision point, then sample G different continuations.
+            </p>
+            <p>
+                <strong>Naive approach:</strong> Run the agent to step <em>k</em>, save the state, then replay from that state 
+                G times. Problem: you pay the cost of steps 0 to <em>k</em> <strong>G times</strong>.
+            </p>
+            <p>
+                <strong>Forking approach:</strong> Run the agent to step <em>k</em> <strong>once</strong>, snapshot, then 
+                <strong>fork</strong> G clones from the snapshot. Each clone continues from step <em>k</em> with different 
+                sampling. You pay the prefix cost once, not G times.
+            </p>
+
+            <div class="mermaid">
+graph LR
+    Start[Start state] --> Step1[Step 1]
+    Step1 --> Step2[Step 2]
+    Step2 --> StepK[Step k: decision point]
+    StepK --> Snapshot[Snapshot VM]
+    
+    Snapshot --> Fork1[Fork 1: sample A]
+    Snapshot --> Fork2[Fork 2: sample B]
+    Snapshot --> ForkG[Fork G: sample N]
+    
+    Fork1 --> Rollout1[Rollout 1]
+    Fork2 --> Rollout2[Rollout 2]
+    ForkG --> RolloutG[Rollout G]
+    
+    Rollout1 --> Compare[Compare outcomes<br/>GRPO update]
+    Rollout2 --> Compare
+    RolloutG --> Compare
+    
+    style StepK fill:#f59e0b,stroke:#f1f5f9
+    style Snapshot fill:#10b981,stroke:#f1f5f9
+    style Fork1 fill:#3b82f6,stroke:#f1f5f9
+    style Fork2 fill:#3b82f6,stroke:#f1f5f9
+    style ForkG fill:#3b82f6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 4:</strong> GRPO-style forking. Run to step k once, snapshot, fork G children, sample differently.
+            </p>
+
+            <h3>Why This Requires Snapshot/Fork</h3>
+            <p>
+                <strong>Without snapshots:</strong> To replay from step <em>k</em>, you need to serialize the entire environment 
+                state (filesystem, process memory, open sockets, etc.). This is hard and brittle. Some things (kernel state, 
+                device buffers) can't be serialized from userspace.
+            </p>
+            <p>
+                <strong>With Firecracker snapshots:</strong> The VM is the environment. Snapshot = entire environment state. 
+                Restore = perfect replay. No serialization logic needed.
+            </p>
+
+            <h3>The Forking Workflow</h3>
+            <ol>
+                <li><strong>Boot template:</strong> Start a VM with dependencies pre-installed (restored from a base template 
+                snapshot).</li>
+                <li><strong>Run prefix:</strong> Execute the agent's policy for steps 0 to <em>k</em>. The agent interacts 
+                with the environment (runs code, edits files, etc.).</li>
+                <li><strong>Snapshot at decision point:</strong> When you reach step <em>k</em> (a decision point where you 
+                want G samples), call Firecracker's <code>CreateSnapshot</code>. This captures the VM mid-flight.</li>
+                <li><strong>Fork G children:</strong> Restore the snapshot G times (either on the same host or across hosts). 
+                Each child is a clone of the step-<em>k</em> VM.</li>
+                <li><strong>Reseed RNGs:</strong> After restore, write unique entropy to each child's <code>/dev/urandom</code> 
+                or reseed the application's RNG. This ensures independent sampling.</li>
+                <li><strong>Sample differently:</strong> Each child runs the policy from step <em>k</em> with different sampling 
+                (temperature, top-k, seed). They produce G independent rollouts.</li>
+                <li><strong>Collect outcomes:</strong> Each child writes its trajectory and outcome to object storage (or 
+                returns it via an API).</li>
+                <li><strong>GRPO update:</strong> Compare the G outcomes and compute the policy gradient update.</li>
+            </ol>
+
+            <h3>Real Systems That Use Forking</h3>
+            <ul>
+                <li><strong>E2B:</strong> Supports a <code>fork</code> API. From the README: "up to a hundred per request." 
+                (<a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a>)</li>
+                <li><strong>Morph:</strong> <code>branch(count=n)</code> API. From the docs: "snapshot, branch, and restore… 
+                in under 250ms" (vendor claim). 
+                (<a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a>)</li>
+                <li><strong>Daytona:</strong> VM class supports "pause / resume, fork, and hot snapshots." 
+                (<a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a>)</li>
+                <li><strong>Modal:</strong> Supports <strong>memory snapshots</strong> (experimental) for debugging. Filesystem 
+                snapshots (images) are the standard way to share setup across sandboxes. 
+                (<a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal snapshots docs</a>)</li>
+            </ul>
+        </section>
+
+        <section id="criu" class="content-section">
+            <h2>CRIU: Process-Level Checkpoint/Restore</h2>
+            <p>
+                <strong>CRIU (Checkpoint/Restore In Userspace)</strong> is an alternative to VM snapshots. It checkpoints 
+                <strong>process trees</strong> (not entire VMs) from userspace.
+            </p>
+            <p>
+                <strong>Homepage:</strong> 
+                <a href="https://github.com/checkpoint-restore/criu" target="_blank">github.com/checkpoint-restore/criu</a>
+            </p>
+
+            <h3>How CRIU Works</h3>
+            <p>
+                CRIU uses <code>ptrace(2)</code> and <code>/proc</code> to capture:
+            </p>
+            <ul>
+                <li>Process memory (heap, stack, mmap regions)</li>
+                <li>Open file descriptors and their positions</li>
+                <li>Process IDs, parent/child relationships</li>
+                <li>Namespaces (mount, network, pid, etc.)</li>
+                <li>cgroup membership</li>
+                <li>Signal handlers, timers, etc.</li>
+            </ul>
+            <p>
+                On restore, CRIU reconstructs the process tree: creates processes with the same PIDs, maps memory, reopens 
+                files, and resumes execution.
+            </p>
+
+            <h3>CRIU vs Firecracker Snapshots</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Aspect</th>
+                        <th>CRIU</th>
+                        <th>Firecracker Snapshots</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Scope</strong></td>
+                        <td>Process tree (userspace only)</td>
+                        <td>Entire VM (kernel + userspace)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Kernel state</strong></td>
+                        <td>Not captured (relies on host kernel)</td>
+                        <td>Fully captured (guest kernel is part of the snapshot)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Portability</strong></td>
+                        <td>Fragile: host kernel version/config must match</td>
+                        <td>Requires same Firecracker version + kernel version (still fragile, but VM boundary helps)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Overhead</strong></td>
+                        <td>No VM overhead</td>
+                        <td>~7–10 MiB per VM (Firecracker VMM)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Isolation</strong></td>
+                        <td>Container-level (shared kernel)</td>
+                        <td>Hardware-level (KVM)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Restore speed</strong></td>
+                        <td>Fast (no VM boot)</td>
+                        <td>Fast (VM resume, no boot)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Integration</strong></td>
+                        <td>Docker (<code>docker checkpoint</code>), LXC, OpenVZ</td>
+                        <td>Firecracker (native), E2B, Morph, Daytona</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>When to Use CRIU</h3>
+            <p>
+                <strong>Use CRIU when:</strong>
+            </p>
+            <ul>
+                <li>You're checkpointing simple process trees (single-process or parent+children).</li>
+                <li>You control the host kernel version (so checkpoints are portable).</li>
+                <li>You don't need VM-level isolation (container-level is OK).</li>
+            </ul>
+            <p>
+                <strong>Use Firecracker snapshots when:</strong>
+            </p>
+            <ul>
+                <li>You need to capture the entire environment (kernel + userspace).</li>
+                <li>The guest does complex things (kernel modules, device interactions).</li>
+                <li>You want hardware isolation (KVM).</li>
+                <li>You're already using Firecracker for other reasons.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>gVisor Checkpoint/Restore</h3>
+                <p>
+                    <strong>gVisor</strong> (Lesson 03) also supports checkpoint/restore via <code>runsc checkpoint</code> 
+                    and <code>runsc restore</code>. Because the Sentry <em>is</em> the kernel, gVisor serializes the entire 
+                    kernel state without needing kernel cooperation. This is more robust than CRIU (which depends on the host 
+                    kernel's checkpoint interface) but still lighter than a full VM snapshot. gVisor's checkpoint/restore supports 
+                    lazy loading (<code>--background</code>) and GPU state (<code>cuda-checkpoint</code>). 
+                    (<a href="https://gvisor.dev/docs/user_guide/checkpoint_restore/" target="_blank">gVisor checkpoint docs</a>)
+                </p>
+            </div>
+        </section>
+
+        <section id="real-systems" class="content-section">
+            <h2>How Real Systems Use Snapshot/Restore</h2>
+
+            <h3>E2B Runtime</h3>
+            <p>
+                <strong>Repository:</strong> 
+                <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> (formerly e2b-dev/infra)<br>
+                <strong>Documentation:</strong> 
+                <a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">ARCHITECTURE.md</a>
+            </p>
+            <p>
+                From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "Fresh creates, resumes after a pause, and forks all take the same path."
+            </blockquote>
+            <p>
+                <strong>What this means:</strong>
+            </p>
+            <ul>
+                <li>A <strong>template</strong> is a pre-booted Firecracker VM snapshot. Templates are built in layers (each 
+                layer is hashed), and a final optimize pass records which pages a boot touches.</li>
+                <li><strong>Create</strong> resumes a template snapshot via userfaultfd (lazy memory) and an NBD-served 
+                copy-on-write rootfs.</li>
+                <li><strong>Pause</strong> diffs memory and disk against the template and uploads the diff to object storage.</li>
+                <li><strong>Resume</strong> prefers the node that still has the diff cached. If not, it fetches from object 
+                storage.</li>
+                <li><strong>Fork</strong> checkpoints the original in place and spreads children across nodes.</li>
+            </ul>
+            <p>
+                E2B's architecture includes:
+            </p>
+            <ul>
+                <li><strong>Control plane:</strong> API + Postgres + Redis + ClickHouse. Handles placement and quotas.</li>
+                <li><strong>Data plane:</strong> Per-node orchestrator that drives Firecracker. Sandbox traffic goes directly 
+                to the node (never through the API).</li>
+                <li><strong>Per-node mechanisms:</strong>
+                    <ul>
+                        <li><code>uffd/</code>: userfaultfd lazy memory, with optional prefetcher for known-hot pages</li>
+                        <li><code>nbd/</code> and <code>rootfs/</code>: copy-on-write rootfs served by an in-process NBD server</li>
+                        <li><code>network/</code>: netns + veth "slots"</li>
+                        <li>cgroup CPU quotas applied before the guest runs</li>
+                    </ul>
+                </li>
+            </ul>
+            <p>
+                <strong>Idempotency:</strong> E2B's API offers opt-in request idempotency with a TTL (default 86,400s per 
+                ARCHITECTURE.md). Use this in your orchestrator for retry safety.
+            </p>
+
+            <h3>Morph Cloud (Infinibranch)</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a>
+            </p>
+            <p>
+                From the docs:
+            </p>
+            <blockquote>
+                "snapshot, branch, and restore… in under 250ms" (vendor claim)
+            </blockquote>
+            <p>
+                Morph's API is shaped around VMs. A snapshot carries <code>vcpus</code>, <code>memory</code>, and 
+                <code>disk_size</code>. The <code>branch</code> API (<code>POST /api/instance/:id/branch</code> with 
+                <code>count</code>) saves a hidden synchronous snapshot and starts <code>count</code> children.
+            </p>
+            <p>
+                <strong>Content-addressed snapshots:</strong> The snapshot <code>digest</code> field gives you 
+                <code>hash(setup) → snapshot</code>, so you can cache and reuse snapshots for identical setup steps.
+            </p>
+
+            <h3>Daytona</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a>
+            </p>
+            <p>
+                Daytona has two sandbox classes:
+            </p>
+            <ul>
+                <li><strong>Container:</strong> "dedicated namespaces and enforced resource limits" (shared kernel, no snapshots)</li>
+                <li><strong>VM:</strong> "full virtual machine with its own kernel," which enables "pause / resume, fork, and 
+                hot snapshots"</li>
+            </ul>
+            <p>
+                <strong>Note:</strong> Daytona's public repo (AGPL-3.0) is no longer maintained; the README (as of June 2026) 
+                says "core development has moved to a private codebase." Self-hosting means maintaining a fork of legacy code.
+            </p>
+
+            <h3>Modal Sandboxes</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal sandbox snapshots</a>
+            </p>
+            <p>
+                Modal supports three kinds of snapshots:
+            </p>
+            <ol>
+                <li><strong>Filesystem snapshots (images):</strong> Standard Modal images (e.g., built with 
+                <code>Image.build(...).publish</code>). Any number of sandboxes can start from one image. This is the 
+                recommended way to share setup.</li>
+                <li><strong>Directory snapshots:</strong> Snapshot a specific directory (e.g., <code>/workspace</code>) 
+                and restore it into another sandbox. TTL default: 30 days.</li>
+                <li><strong>Memory snapshots (experimental):</strong> Snapshot a running sandbox's memory. TTL: 7 days. 
+                <strong>Sharp edges:</strong> taking a memory snapshot <strong>terminates</strong> the sandbox; you cannot 
+                snapshot while an exec is running; restore requires the same instance type; no GPU support.</li>
+            </ol>
+            <p>
+                <strong>For forking:</strong> Use filesystem snapshots (images) to share setup. Memory snapshots are better 
+                for debugging than production forking.
+            </p>
+
+            <h3>Fly Machines</h3>
+            <p>
+                <strong>Documentation:</strong> 
+                <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a>
+            </p>
+            <p>
+                From the docs: "Fly Machines are Firecracker microVMs." Fly supports fast stop/start (pause/resume). A stopped 
+                machine stays assembled, so start is "usually… well under a second" (vendor claim). Fly also offers 
+                <code>clone</code> (fork) and volumes (persistent storage).
+            </p>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Warm-Pool Simulator and GRPO Forking</h2>
+            <p>
+                In this exercise, you'll build a <strong>minimal Python warm-pool and fork simulator</strong> that demonstrates 
+                the speedup of "prefix once, fork N" vs "replay N times." This runs on any laptop (no KVM required).
+            </p>
+            <p>
+                Then, for those with Linux + KVM access, we provide a <strong>real Firecracker snapshot + fork example</strong> 
+                (clearly marked optional).
+            </p>
+
+            <div class="info-box">
+                <h3>Exercise Goals</h3>
+                <ul>
+                    <li>Model a warm pool: pre-create M "sandboxes" (simulated as Python objects), measure acquire/release latency</li>
+                    <li>Model GRPO forking: run prefix once (simulated expensive setup), "snapshot" state, "fork" N children 
+                    with different RNG seeds, measure total time vs N full replays</li>
+                    <li>Demonstrate RNG clone hazard: fork without reseeding → identical samples</li>
+                </ul>
+            </div>
+
+            <h3>Part 1: Warm-Pool Simulator (Python, runs anywhere)</h3>
+            <p>
+                Create <code>warm_pool_sim.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Warm-pool simulator: pre-create sandboxes, measure acquire latency.
+"""
+import asyncio
+import time
+from typing import List, Dict
+import random
+
+
+class Sandbox:
+    """Simulated sandbox."""
+    def __init__(self, sid: str):
+        self.sid = sid
+        self.state = {}  # Simulated state
+    
+    async def setup(self):
+        """Simulate expensive setup (pip install, git clone)."""
+        await asyncio.sleep(0.1)  # 100ms setup
+        self.state["setup_done"] = True
+    
+    def exec_command(self, cmd: str) -> str:
+        """Simulate command execution."""
+        return f"Sandbox {self.sid}: ran {cmd}"
+    
+    def snapshot(self) -> Dict:
+        """Simulate taking a snapshot."""
+        return self.state.copy()
+    
+    def restore(self, snapshot: Dict):
+        """Simulate restoring from snapshot."""
+        self.state = snapshot.copy()
+
+
+class WarmPool:
+    """Warm pool manager."""
+    def __init__(self, size: int):
+        self.size = size
+        self.pool: List[Sandbox] = []
+        self.available: asyncio.Queue = asyncio.Queue()
+    
+    async def initialize(self):
+        """Pre-create and warm up sandboxes."""
+        print(f"Initializing warm pool with {self.size} sandboxes...")
+        start = time.time()
+        
+        # Create sandboxes concurrently
+        tasks = [self._create_and_warm(i) for i in range(self.size)]
+        self.pool = await asyncio.gather(*tasks)
+        
+        for sb in self.pool:
+            await self.available.put(sb)
+        
+        elapsed = time.time() - start
+        print(f"Warm pool initialized in {elapsed:.2f}s ({elapsed/self.size:.3f}s per sandbox)")
+    
+    async def _create_and_warm(self, idx: int) -> Sandbox:
+        """Create a sandbox and run setup."""
+        sb = Sandbox(f"sb-{idx:03d}")
+        await sb.setup()
+        return sb
+    
+    async def acquire(self) -> Sandbox:
+        """Acquire a sandbox from the pool."""
+        return await self.available.get()
+    
+    async def release(self, sb: Sandbox):
+        """Return a sandbox to the pool."""
+        await self.available.put(sb)
+
+
+async def benchmark_cold_vs_warm():
+    """Compare cold create vs warm pool acquire."""
+    
+    # Cold create
+    print("\n=== Cold Create ===")
+    cold_times = []
+    for i in range(10):
+        start = time.time()
+        sb = Sandbox(f"cold-{i}")
+        await sb.setup()
+        elapsed = time.time() - start
+        cold_times.append(elapsed)
+    
+    print(f"Cold create (10 runs): mean={sum(cold_times)/len(cold_times)*1000:.1f}ms")
+    
+    # Warm pool
+    print("\n=== Warm Pool ===")
+    pool = WarmPool(size=5)
+    await pool.initialize()
+    
+    warm_times = []
+    for i in range(10):
+        start = time.time()
+        sb = await pool.acquire()
+        elapsed = time.time() - start
+        warm_times.append(elapsed)
+        # Use sandbox
+        sb.exec_command(f"echo test-{i}")
+        # Release
+        await pool.release(sb)
+    
+    print(f"Warm acquire (10 runs): mean={sum(warm_times)/len(warm_times)*1000:.1f}ms")
+    print(f"Speedup: {sum(cold_times)/sum(warm_times):.1f}x")
+
+
+async def main():
+    await benchmark_cold_vs_warm()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">chmod +x warm_pool_sim.py
+python3 warm_pool_sim.py</code></pre>
+            <p>
+                <strong>Expected output:</strong> Cold creates take ~100ms each. Warm pool acquire is near-instant (μs), since 
+                sandboxes are already warmed. Speedup: ~1000x for acquire latency (ignoring pool initialization cost).
+            </p>
+
+            <h3>Part 2: GRPO Fork Simulator (Python)</h3>
+            <p>
+                Create <code>grpo_fork_sim.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+GRPO fork simulator: run prefix once, fork N, sample differently.
+Demonstrates RNG clone hazard if you forget to reseed.
+"""
+import asyncio
+import time
+import random
+import copy
+
+
+class Agent:
+    """Simulated agent with RNG state."""
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        self.rng = random.Random()
+        self.rng.seed(42)  # Shared initial seed
+        self.trajectory = []
+    
+    async def run_prefix(self, k: int):
+        """Run steps 0 to k (expensive prefix)."""
+        for step in range(k):
+            await asyncio.sleep(0.01)  # Simulate step cost
+            action = self.rng.randint(0, 10)
+            self.trajectory.append((step, action))
+    
+    def snapshot(self) -> dict:
+        """Snapshot agent state (trajectory + RNG state)."""
+        return {
+            "trajectory": copy.deepcopy(self.trajectory),
+            "rng_state": self.rng.getstate()
+        }
+    
+    def restore(self, snapshot: dict):
+        """Restore from snapshot."""
+        self.trajectory = copy.deepcopy(snapshot["trajectory"])
+        self.rng.setstate(snapshot["rng_state"])
+    
+    def reseed(self, seed: int):
+        """Reseed RNG (fixes clone hazard)."""
+        self.rng.seed(seed)
+    
+    def sample_action(self) -> int:
+        """Sample next action."""
+        return self.rng.randint(0, 100)
+
+
+async def grpo_naive(k: int, g: int):
+    """Naive GRPO: replay prefix G times."""
+    print(f"\n=== Naive GRPO (replay prefix {g} times) ===")
+    start = time.time()
+    
+    rollouts = []
+    for i in range(g):
+        agent = Agent(f"naive-{i}")
+        await agent.run_prefix(k)  # Run prefix from scratch
+        action = agent.sample_action()
+        rollouts.append(action)
+    
+    elapsed = time.time() - start
+    print(f"Rollouts: {rollouts}")
+    print(f"Time: {elapsed:.2f}s")
+    return rollouts, elapsed
+
+
+async def grpo_fork_no_reseed(k: int, g: int):
+    """GRPO with fork, but NO reseed (demonstrates RNG hazard)."""
+    print(f"\n=== GRPO Fork (NO reseed - demonstrates hazard) ===")
+    start = time.time()
+    
+    # Run prefix once
+    base_agent = Agent("base")
+    await base_agent.run_prefix(k)
+    snapshot = base_agent.snapshot()
+    
+    # Fork G children
+    rollouts = []
+    for i in range(g):
+        agent = Agent(f"fork-no-reseed-{i}")
+        agent.restore(snapshot)  # Clone without reseed
+        action = agent.sample_action()
+        rollouts.append(action)
+    
+    elapsed = time.time() - start
+    print(f"Rollouts: {rollouts}")
+    print(f"Time: {elapsed:.2f}s")
+    print(f"⚠️  All rollouts identical? {len(set(rollouts)) == 1}")
+    return rollouts, elapsed
+
+
+async def grpo_fork_with_reseed(k: int, g: int):
+    """GRPO with fork AND reseed (correct)."""
+    print(f"\n=== GRPO Fork (WITH reseed - correct) ===")
+    start = time.time()
+    
+    # Run prefix once
+    base_agent = Agent("base")
+    await base_agent.run_prefix(k)
+    snapshot = base_agent.snapshot()
+    
+    # Fork G children with unique seeds
+    rollouts = []
+    for i in range(g):
+        agent = Agent(f"fork-reseed-{i}")
+        agent.restore(snapshot)
+        agent.reseed(42 + i)  # Unique seed per child
+        action = agent.sample_action()
+        rollouts.append(action)
+    
+    elapsed = time.time() - start
+    print(f"Rollouts: {rollouts}")
+    print(f"Time: {elapsed:.2f}s")
+    print(f"Speedup vs naive: {time_naive / elapsed:.1f}x")
+    print(f"✓ Rollouts are independent? {len(set(rollouts)) > 1}")
+    return rollouts, elapsed
+
+
+async def main():
+    k = 10  # Prefix length
+    g = 8   # Number of rollouts
+    
+    global time_naive
+    _, time_naive = await grpo_naive(k, g)
+    _, time_no_reseed = await grpo_fork_no_reseed(k, g)
+    _, time_reseed = await grpo_fork_with_reseed(k, g)
+    
+    print(f"\n=== Summary ===")
+    print(f"Naive (replay {g}x): {time_naive:.2f}s")
+    print(f"Fork no reseed: {time_no_reseed:.2f}s (but WRONG: identical samples)")
+    print(f"Fork with reseed: {time_reseed:.2f}s (correct)")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">python3 grpo_fork_sim.py</code></pre>
+            <p>
+                <strong>Expected output:</strong>
+            </p>
+            <ul>
+                <li><strong>Naive:</strong> Replays prefix 8 times. Time: ~0.8s (10 steps × 0.01s × 8 rollouts).</li>
+                <li><strong>Fork no reseed:</strong> Prefix runs once (~0.1s), forks 8 times. <strong>BUT</strong> all 8 
+                rollouts produce <strong>identical</strong> actions because RNG state is cloned.</li>
+                <li><strong>Fork with reseed:</strong> Prefix runs once, forks 8 times with unique seeds. Rollouts are 
+                <strong>independent</strong>. Time: ~0.1s. Speedup: ~8x vs naive.</li>
+            </ul>
+
+            <div class="info-box warning">
+                <h3>⚠️ Key Lesson</h3>
+                <p>
+                    Without reseeding, forked rollouts are <strong>identical</strong>, not independent. This breaks GRPO and 
+                    any algorithm that assumes independent samples. <strong>Always reseed after fork/restore.</strong>
+                </p>
+            </div>
+
+            <h3>Part 3 (Optional): Real Firecracker Snapshot + Fork</h3>
+            <p>
+                If you have <strong>Linux with KVM</strong>, you can try real Firecracker snapshotting. This builds on Lesson 04's 
+                exercise. <strong>Skip this if you don't have KVM</strong>—the simulator above teaches the concepts.
+            </p>
+            <div class="info-box">
+                <h3>Prerequisites for Real Firecracker</h3>
+                <ul>
+                    <li>Linux host with <code>/dev/kvm</code></li>
+                    <li>Firecracker binary and kernel/rootfs from Lesson 04</li>
+                    <li>Lesson 04's setup completed</li>
+                </ul>
+                <p>
+                    Detailed steps are in Lesson 04. The workflow here:
+                </p>
+                <ol>
+                    <li>Boot a Firecracker VM (use Lesson 04's boot script)</li>
+                    <li>Call <code>CreateSnapshot</code> API</li>
+                    <li>Restore the snapshot 3 times (fork 3 clones)</li>
+                    <li>Demonstrate that without unique network namespaces, clones collide</li>
+                </ol>
+                <p>
+                    This is an advanced exercise. Refer to 
+                    <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">snapshot-support.md</a> 
+                    and 
+                    <a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/network-for-clones.md" target="_blank">network-for-clones.md</a> 
+                    for full instructions.
+                </p>
+            </div>
+
+            <h3>What You Learned</h3>
+            <ul>
+                <li>Warm pools eliminate per-request setup cost</li>
+                <li>GRPO forking runs prefix once, forks N times → speedup proportional to N</li>
+                <li>RNG clone hazard: without reseeding, forked rollouts are identical (breaks independence)</li>
+                <li>Real Firecracker snapshots capture full VM state (memory + devices) and restore in milliseconds</li>
+            </ul>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from official documentation, production codebases, or vendor claims 
+                (marked as such). Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>Firecracker Snapshotting Documentation</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">snapshot-support.md</a> — 
+                    Full vs diff snapshots, create/restore API, compatibility</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/handling-page-faults-on-snapshot-resume.md" target="_blank">handling-page-faults-on-snapshot-resume.md</a> — 
+                    userfaultfd lazy memory, how Firecracker handles page faults</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/random-for-clones.md" target="_blank">random-for-clones.md</a> — 
+                    RNG clone hazard, VMGenID, reseeding mitigations</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/network-for-clones.md" target="_blank">network-for-clones.md</a> — 
+                    MAC/IP clone hazard, network namespace per clone</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>E2B Runtime (Open Source)</h3>
+                <ul>
+                    <li><a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> — 
+                    Main repository (formerly e2b-dev/infra)</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">ARCHITECTURE.md</a> — 
+                    Control plane, data plane, userfaultfd, NBD CoW rootfs, pause/resume/fork</li>
+                    <li><a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a> — 
+                    Pause (~4s per GiB, vendor claim), resume (~1s, vendor claim), fork ("up to a hundred per request")</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Other Production Systems</h3>
+                <ul>
+                    <li><strong>Morph Cloud:</strong> 
+                        <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">Morph branch docs</a> — 
+                        <code>branch(count=n)</code> API, "snapshot, branch, and restore… in under 250ms" (vendor claim)</li>
+                    <li><strong>Daytona:</strong> 
+                        <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a> — 
+                        Container vs VM classes, pause/resume/fork/hot snapshots</li>
+                    <li><strong>Modal:</strong> 
+                        <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal sandbox snapshots</a> — 
+                        Filesystem snapshots (images), directory snapshots, memory snapshots (experimental, 7-day TTL)</li>
+                    <li><strong>Fly Machines:</strong> 
+                        <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a> — 
+                        Firecracker microVMs, fast stop/start, clone</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Linux userfaultfd</h3>
+                <ul>
+                    <li><a href="https://man7.org/linux/man-pages/man2/userfaultfd.2.html" target="_blank">userfaultfd(2) man page</a> — 
+                    Userspace page fault handling</li>
+                    <li><a href="https://docs.kernel.org/admin-guide/mm/userfaultfd.html" target="_blank">Linux kernel userfaultfd docs</a> — 
+                    Use cases, ioctl interface</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>CRIU (Checkpoint/Restore In Userspace)</h3>
+                <ul>
+                    <li><a href="https://github.com/checkpoint-restore/criu" target="_blank">github.com/checkpoint-restore/criu</a> — 
+                    Main repository</li>
+                    <li><a href="https://criu.org/Main_Page" target="_blank">criu.org</a> — 
+                    Documentation, use cases (Docker, LXC, OpenVZ)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor Checkpoint/Restore</h3>
+                <ul>
+                    <li><a href="https://gvisor.dev/docs/user_guide/checkpoint_restore/" target="_blank">gVisor checkpoint/restore docs</a> — 
+                    <code>runsc checkpoint/restore</code>, lazy restore (<code>--background</code>), GPU support (<code>cuda-checkpoint</code>)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Related Papers and Talks</h3>
+                <ul>
+                    <li><strong>"Firecracker: Lightweight Virtualization for Serverless Applications"</strong> (Agache et al., NSDI 2020): 
+                    <a href="https://www.usenix.org/conference/nsdi20/presentation/agache" target="_blank">USENIX link</a> | 
+                    <a href="https://www.usenix.org/system/files/nsdi20-paper-agache.pdf" target="_blank">PDF</a></li>
+                    <li><strong>GRPO context:</strong> Group Relative Policy Optimization is used in various RL papers for comparing 
+                    multiple rollouts from the same state. Snapshot/fork is the infrastructure that makes this efficient.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Vendor Claims Summary</h3>
+                <p>
+                    Numbers marked as vendor claims (not independently verified):
+                </p>
+                <ul>
+                    <li><strong>E2B:</strong> Pause ~4s per GiB, resume ~1s (
+                    <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
+                    <li><strong>Morph:</strong> Snapshot/branch/restore in under 250ms (
+                    <a href="https://cloud.morph.so/docs/documentation/instances/branch" target="_blank">source</a>)</li>
+                    <li><strong>Fly:</strong> Start "usually… well under a second" (
+                    <a href="https://fly.io/docs/machines/" target="_blank">source</a>)</li>
+                </ul>
+                <p>
+                    These are self-reported by the providers. Your results will vary based on memory size, network latency, 
+                    and host performance.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lesson</h3>
+                <p>
+                    In <strong>Lesson 06</strong>, you'll study E2B's full open-source runtime architecture in depth: how the 
+                    control plane (API + placement) and data plane (orchestrator + envd) work together, how pause/resume/fork 
+                    are implemented end-to-end, and how to deploy E2B Embed locally for self-hosted snapshot/fork workflows.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>
