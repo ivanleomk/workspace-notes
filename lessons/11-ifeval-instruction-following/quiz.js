@@ -59,12 +59,12 @@ const quizQuestions = [
         question: "Which instruction category is hardest for models according to IFEval results?",
         options: [
             "Keywords (include/exclude specific words)",
+            "Combination (satisfying multiple constraints simultaneously)",
             "Language (respond in a specific language)",
-            "Detectable Format (JSON, bullets, titles, structure)",
-            "Length Constraints (word/sentence/paragraph counts)"
+            "Detectable Format (JSON, bullets, titles, structure)"
         ],
-        correct: 2,
-        explanation: "Figure 2 in the paper shows instruction-level strict accuracy by category. Detectable Format is the hardest category for both GPT-4 (~75-80%) and PaLM 2 S (~40-50%). Format constraints like JSON structure, exact bullet counts, and specific markdown patterns require precise structural compliance—transformers struggle with this. Language is easiest (~95% for GPT-4, ~80% for PaLM 2 S) since models trained on multilingual data can switch languages readily. Keywords and length constraints fall in between."
+        correct: 1,
+        explanation: "Figure 2 in the paper shows instruction-level strict accuracy by category. Combination is the hardest category for both GPT-4 (~73%) and PaLM 2 S (~37%). Satisfying multiple constraints simultaneously (e.g., word count + keywords + format + start/end phrases) requires models to correctly handle all constraints together—missing even one constraint fails the entire instruction. Language is easiest (~96% for both models) since multilingual capabilities are well-developed. Detectable Format (~93% GPT-4, ~68% PaLM 2 S) and Keywords (~84% GPT-4, ~60% PaLM 2 S) fall in between."
     },
     {
         question: "How does IFEval relate to Tülu 3's RLVR stage (from Lesson 10)?",

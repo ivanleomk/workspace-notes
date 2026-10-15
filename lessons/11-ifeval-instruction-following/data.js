@@ -176,37 +176,62 @@ const modelData = {
     gpt4: {
         promptStrict: 76.89,
         instStrict: 83.57,
-        promptLoose: 79.30,
+        promptLoose: 79.10,
         instLoose: 85.37
     },
     palm2: {
         promptStrict: 43.07,
-        instStrict: 55.76,
+        instStrict: 35.76,
         promptLoose: 46.95,
         instLoose: 59.11
     }
 };
 
-// Approximate instruction-level strict accuracy by category (inferred from Figure 2)
+// Approximate instruction-level strict accuracy by category (read off Figure 2)
 const categoryPerformance = {
+    change_case: {
+        gpt4: 80,
+        palm2: 48,
+        description: "Changing or maintaining case (uppercase/lowercase)"
+    },
+    combination: {
+        gpt4: 73,
+        palm2: 37,
+        description: "Satisfying multiple constraints simultaneously - hardest for both models"
+    },
+    detectable_content: {
+        gpt4: 96,
+        palm2: 73,
+        description: "Including specific phrases or sections"
+    },
+    detectable_format: {
+        gpt4: 93,
+        palm2: 68,
+        description: "Using specific formatting structures"
+    },
     keywords: {
-        gpt4: 86,
-        palm2: 62
+        gpt4: 84,
+        palm2: 60,
+        description: "Including or excluding specific words"
     },
     language: {
-        gpt4: 95,
-        palm2: 80
+        gpt4: 96,
+        palm2: 96,
+        description: "Responding in a specific language - easiest category, both models tie"
     },
-    lengthConstraints: {
-        gpt4: 78,
-        palm2: 50
+    length_constraint: {
+        gpt4: 72,
+        palm2: 40,
+        description: "Precise word or character count"
     },
-    detectableContent: {
-        gpt4: 82,
-        palm2: 57
+    punctuation: {
+        gpt4: 66,
+        palm2: 53,
+        description: "Specific punctuation rules"
     },
-    detectableFormat: {
-        gpt4: 76,
-        palm2: 44
+    startend: {
+        gpt4: 93,
+        palm2: 45,
+        description: "Starting/ending with specific words - biggest performance gap (48 points)"
     }
 };

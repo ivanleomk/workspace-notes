@@ -337,20 +337,20 @@
             <h3>Instruction-Level Breakdown: Which Constraints Are Hardest?</h3>
             <p>
                 Figure 2 in the paper shows instruction-level strict accuracy separated by instruction category. 
-                Key findings:
+                Key findings from all 9 categories:
             </p>
 
             <ul>
-                <li><strong>Detectable Format:</strong> Both models struggle most with format constraints (JSON, 
-                specific structures, highlighted sections). GPT-4 ~75-80%, PaLM 2 S ~40-50%</li>
-                <li><strong>Keywords:</strong> Relatively easier—GPT-4 ~85-90%, PaLM 2 S ~60-70%—but keyword 
-                frequency and forbidden words still challenge models</li>
-                <li><strong>Length Constraints:</strong> Moderate difficulty. Exact word/sentence counts are hard; 
-                approximate ranges ("around N words") are easier</li>
-                <li><strong>Language:</strong> High accuracy for both (GPT-4 ~95%, PaLM 2 S ~80%). Responding 
-                entirely in a specified language is relatively straightforward</li>
-                <li><strong>Detectable Content:</strong> Postscripts and placeholders are moderately hard 
-                (GPT-4 ~80%, PaLM 2 S ~55%)</li>
+                <li><strong>Hardest - Combination:</strong> Satisfying multiple constraints simultaneously is most difficult. 
+                GPT-4 ~73%, PaLM 2 S ~37%—both models struggle when required to handle several constraints together</li>
+                <li><strong>Easiest - Language:</strong> Both models achieve ~96%—multilingual capabilities are well-developed</li>
+                <li><strong>Biggest Gap - startend:</strong> GPT-4 ~93% vs PaLM 2 S ~45% (48-point difference)—GPT-4 has 
+                much better control over response boundaries</li>
+                <li><strong>Detectable Format:</strong> GPT-4 ~93%, PaLM 2 S ~68%—format constraints like specific 
+                structures work well for GPT-4 but are challenging for PaLM 2 S</li>
+                <li><strong>Keywords:</strong> GPT-4 ~84%, PaLM 2 S ~60%—keyword inclusion/exclusion is moderately difficult</li>
+                <li><strong>Length Constraints:</strong> GPT-4 ~72%, PaLM 2 S ~40%—exact word counts remain challenging</li>
+                <li><strong>Punctuation:</strong> GPT-4 ~66%, PaLM 2 S ~53%—punctuation rules are hard for both models</li>
             </ul>
 
             <h3>Why Even GPT-4 Struggles</h3>
@@ -487,7 +487,7 @@ These machine learning systems continue to improve with more data.</textarea>
                 <canvas id="categoryChart"></canvas>
                 <p class="chart-caption">
                     Approximate instruction-level strict accuracy by category, inferred from Figure 2 in the paper. 
-                    Detectable Format is the hardest category for both models, while Language is easiest.
+                    Combination is the hardest category for both models (~73% GPT-4, ~37% PaLM 2 S), while Language is easiest (~96% for both).
                 </p>
             </div>
 
