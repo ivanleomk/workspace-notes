@@ -23,6 +23,7 @@ Lessons alternate tracks to interleave theory with practice.
 | 08 | B | ✅ Complete | Constitutional AI | Bai et al. (2022) |
 | 09 | A | ✅ Complete | Holistic Evaluation (HELM) | Liang et al. (2022) |
 | 10 | B | ✅ Complete | Tülu 3: Open Post-Training | Lambert et al. (Allen AI, 2024) |
+| 11 | A | ✅ Complete | IFEval: Verifiable Instruction-Following | Zhou et al. (Google Research, 2023) |
 
 ## Learning Objectives by Track
 
@@ -63,9 +64,10 @@ Each lesson includes:
 - ✅ Lesson 08 (Track B): Constitutional AI (Bai et al., 2022)
 - ✅ Lesson 09 (Track A): HELM - Holistic Evaluation of Language Models (Liang et al., 2022)
 - ✅ Lesson 10 (Track B): Tülu 3 - Open Post-Training (Lambert et al., Allen AI, 2024)
+- ✅ Lesson 11 (Track A): IFEval - Verifiable Instruction-Following Evaluation (Zhou et al., Google Research, 2023)
 
 **Next Up:**
-The core curriculum is complete! Lessons 01-10 cover the fundamentals of benchmarking (Track A) and post-training techniques (Track B). Future lessons could explore: iterative preference learning, multi-turn RLHF, safety-specific RL, or domain adaptation for specialized models.
+Lesson 12 (Track B): The next post-training technique could explore iterative preference learning, multi-turn RLHF, safety-specific RL, or domain adaptation for specialized models.
 
 ## How to Request a Lesson
 
