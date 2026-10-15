@@ -176,12 +176,12 @@ const modelData = {
     gpt4: {
         promptStrict: 76.89,
         instStrict: 83.57,
-        promptLoose: 79.10,
+        promptLoose: 79.30,
         instLoose: 85.37
     },
     palm2: {
         promptStrict: 43.07,
-        instStrict: 35.76,
+        instStrict: 55.76,
         promptLoose: 46.95,
         instLoose: 59.11
     }
