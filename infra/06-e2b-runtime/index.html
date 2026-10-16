@@ -627,7 +627,7 @@ graph LR
                     <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a>:
                 </p>
                 <ul>
-                    <li><strong>Pause:</strong> "approximately 4 seconds per GiB of RAM" (vendor claim, includes 
+                    <li><strong>Pause:</strong> "approximately 4 seconds per 1 GiB of RAM" (vendor claim, includes 
                     memory snapshot capture + diff export + upload to object storage)</li>
                     <li><strong>Resume:</strong> "approximately 1 second" (vendor claim, includes diff download + 
                     apply + Firecracker LoadSnapshot + userfaultfd lazy page-in for hot pages)</li>
@@ -994,7 +994,7 @@ print("\n=== Pause Sandbox ===")
 measure("Pause", lambda: sandbox.pause())
 
 print("\n=== Resume Sandbox ===")
-measure("Resume", lambda: sandbox.resume())
+measure("Resume", lambda: sandbox.connect())
 
 print("\n=== Post-Resume Exec ===")
 output = measure("Exec after resume", exec_hello)
@@ -1009,23 +1009,18 @@ print("\nDone!")</code></pre>
             </p>
             <pre><code class="language-bash">python3 sandbox_lifecycle.py</code></pre>
             <p>
-                <strong>Expected output (approximate timings, local Embed):</strong>
+                <strong>What to observe:</strong> The script prints timing measurements for each operation. Latency 
+                varies based on your hardware (CPU, disk speed, RAM), the size of the sandbox's working set, and 
+                whether the node has cached the template's snapshot. Print and compare your own measurements rather 
+                than expecting specific numbers.
             </p>
-            <ul>
-                <li><strong>Create from template:</strong> ~1000-2000ms (first create: fetch snapshot from storage, 
-                userfaultfd page-in; subsequent creates on the same node are faster due to page cache)</li>
-                <li><strong>Exec echo:</strong> ~50-100ms (includes Connect RPC round-trip + shell spawn)</li>
-                <li><strong>Exec python:</strong> ~200-300ms (Python interpreter startup + compute)</li>
-                <li><strong>Pause:</strong> ~1000-3000ms (snapshot memory + rootfs, export diff, upload to local 
-                storage; time scales with sandbox RAM and dirty pages)</li>
-                <li><strong>Resume:</strong> ~500-1500ms (fetch diff, apply, LoadSnapshot)</li>
-                <li><strong>Exec after resume:</strong> ~50-100ms (same as before pause)</li>
-            </ul>
             <p>
-                <strong>Note:</strong> These are ballpark figures for a local Embed deployment on a laptop/VM. 
-                E2B Cloud (with distributed object storage and optimized networking) reports ~1s resume (vendor 
-                claim). Independent benchmarks report ~28ms for Firecracker snapshot restore alone (256MB working 
-                set, NVMe).
+                <strong>Context:</strong> E2B Cloud (with distributed object storage and optimized networking) reports 
+                pause takes approximately 4 seconds per 1 GiB of RAM and resume takes approximately 1 second (vendor 
+                claims from <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a>). 
+                Independent benchmarks report ~28ms median restore latency for Firecracker snapshot restore alone (256MB 
+                working set, NVMe, from <a href="https://doi.org/10.63721/26jsea0149" target="_blank">DOI 10.63721/26jsea0149</a>). 
+                Your local Embed deployment will have different characteristics.
             </p>
 
             <h3>Step 6 (Optional): Fork a Sandbox</h3>
@@ -1091,7 +1086,7 @@ print("Done!")</code></pre>
                 <li>How to deploy E2B Embed locally (Docker Compose)</li>
                 <li>How to build a template from a Docker image</li>
                 <li>How to create, exec, pause, resume, and kill sandboxes via the SDK</li>
-                <li>Latency characteristics of each operation (create ~1s, exec ~50-100ms, pause ~1-3s, resume ~0.5-1.5s)</li>
+                <li>How to measure latency characteristics of each operation in your own environment</li>
                 <li>How fork works: checkpoint parent, resume N children with unique state</li>
             </ul>
 
@@ -1219,7 +1214,7 @@ print("Done!")</code></pre>
                     Numbers marked as vendor claims (self-reported by E2B, not independently verified):
                 </p>
                 <ul>
-                    <li><strong>Pause:</strong> "approximately 4 seconds per GiB of RAM" (
+                    <li><strong>Pause:</strong> "approximately 4 seconds per 1 GiB of RAM" (
                     <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
                     <li><strong>Resume:</strong> "approximately 1 second" (
                     <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
