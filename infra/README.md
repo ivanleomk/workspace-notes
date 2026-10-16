@@ -12,6 +12,7 @@ This series teaches you how to build production-grade eval infrastructure from f
 4. **[Lesson 03: runc vs gVisor vs Kata Containers](03-runc-gvisor-kata/)** — Container runtime comparison and isolation spectrum ✅
 5. **[Lesson 04: Firecracker Internals and Booting a microVM](04-firecracker-microvm/)** — Minimal VMMs, KVM, and ≤125ms boot times ✅
 6. **[Lesson 05: Snapshot/Restore and Forking Agent State](05-snapshot-restore-forking/)** — Warm pools, userfaultfd, and GRPO-style forking ✅
+7. **[Lesson 06: E2B's Open-Source Runtime Architecture](06-e2b-runtime/)** — Production snapshot/fork system with control/data plane separation ✅
 
 ## Live Lessons
 
@@ -21,6 +22,7 @@ Visit the live interactive lessons at:
 - [Lesson 03: runc vs gVisor vs Kata Containers](https://ivanleomk.github.io/workspace-notes/infra/03-runc-gvisor-kata/)
 - [Lesson 04: Firecracker Internals and Booting a microVM](https://ivanleomk.github.io/workspace-notes/infra/04-firecracker-microvm/)
 - [Lesson 05: Snapshot/Restore and Forking Agent State](https://ivanleomk.github.io/workspace-notes/infra/05-snapshot-restore-forking/)
+- [Lesson 06: E2B's Open-Source Runtime Architecture](https://ivanleomk.github.io/workspace-notes/infra/06-e2b-runtime/)
 
 ## What You'll Learn
 

@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 06: E2B's Open-Source Runtime Architecture</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 06: E2B's Open-Source Runtime Architecture</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Production Snapshot/Fork System</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#architecture-overview">Architecture Overview</a>
+            <a href="#control-plane">Control Plane</a>
+            <a href="#data-plane">Data Plane</a>
+            <a href="#template-building">Template Building</a>
+            <a href="#snapshot-resume">Snapshot & Resume</a>
+            <a href="#fork">Fork</a>
+            <a href="#comparison">Comparison to Lessons 04-05</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From First Principles to Production: E2B's Runtime</h2>
+            <p>
+                In Lessons 04 and 05, you booted Firecracker by hand, created snapshots via curl commands, and 
+                simulated GRPO-style forking in Python. Now you'll see how a <strong>production system</strong> 
+                orchestrates thousands of these workflows at scale.
+            </p>
+            <p>
+                <strong>E2B Runtime</strong> (
+                <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a>, 
+                Apache-2.0 license, formerly e2b-dev/infra) is the complete open-source backend that powers E2B 
+                Cloud. It provides isolated sandboxes—Firecracker microVMs that resume from snapshots, run agent 
+                code, and pause when idle—along with the API, orchestration, networking, storage, and template 
+                building needed to run them in production.
+            </p>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>Why production sandbox systems separate control plane (API + placement) from data plane 
+                    (Firecracker + orchestrator)</li>
+                    <li>How E2B's architecture maps requests: SDK → REST API → placement → orchestrator → Firecracker → envd</li>
+                    <li>Template building: Docker image → ext4 rootfs → Firecracker boot → snapshot → object storage</li>
+                    <li>How pause/resume/fork work end-to-end: userfaultfd lazy memory, NBD copy-on-write rootfs, 
+                    and diff storage</li>
+                    <li>Where snapshots and memory files live, and how they are loaded lazily to minimize restore latency</li>
+                    <li>How envd (the in-VM daemon) exposes process/filesystem APIs over Connect RPC and REST (port 49983)</li>
+                    <li>Hands-on: deploy E2B Embed locally and create/pause/resume/fork a sandbox, measuring latency at each step</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ Scope and Source Verification</h3>
+                <p>
+                    <strong>Repository correction:</strong> The curriculum originally referenced 
+                    <code>e2b-dev/runtime</code> as the main OSS repo, which is correct. This lesson uses 
+                    <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> 
+                    (formerly e2b-dev/infra) as the authoritative source.
+                </p>
+                <p>
+                    <strong>"E2B Embed"</strong> is the single-node deployment bundle (Docker Compose, Terraform, 
+                    or Kubernetes) described in 
+                    <a href="https://github.com/e2b-dev/runtime/tree/main/embed" target="_blank">runtime/embed/</a>. 
+                    The hands-on exercise walks through local Embed deployment.
+                </p>
+                <p>
+                    <strong>All performance numbers and architecture claims cite primary sources</strong> (E2B's 
+                    ARCHITECTURE.md, source code, official docs, or labeled as vendor claims when self-reported).
+                </p>
+            </div>
+        </section>
+
+        <section id="architecture-overview" class="content-section">
+            <h2>Architecture Overview: Control Plane vs Data Plane</h2>
+            <p>
+                From 
+                <a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">E2B's ARCHITECTURE.md</a>:
+            </p>
+            <blockquote>
+                "Two ideas drive the design: <br>
+                1. <strong>A sandbox is a resumed snapshot.</strong> Templates are pre-booted VM snapshots 
+                (memory + disk + VM state) stored in object storage. 'Creating' a sandbox means restoring a 
+                snapshot, which is why startup is fast.<br>
+                2. <strong>Control plane and data plane are separate.</strong> The API decides <em>where</em> a 
+                sandbox runs and tracks <em>that</em> it runs (Postgres/Redis); the orchestrator on each node 
+                owns <em>how</em> it runs (Firecracker, networking, storage). Sandbox traffic never passes through 
+                the API."
+            </blockquote>
+
+            <h3>Why Separate Control and Data Planes?</h3>
+            <p>
+                <strong>Scalability:</strong> The API can be horizontally scaled (stateless, load-balanced) 
+                independently of orchestrator nodes (which are stateful: each owns its running VMs).
+            </p>
+            <p>
+                <strong>Latency:</strong> Sandbox traffic (exec commands, file reads/writes) goes directly from 
+                the SDK to the orchestrator node's proxy, then to envd inside the VM. It never hops through the 
+                central API, avoiding an extra network round-trip.
+            </p>
+            <p>
+                <strong>Blast radius:</strong> An API restart or deploy doesn't kill running sandboxes. The 
+                orchestrator keeps them alive and reconnects to the API when it returns.
+            </p>
+
+            <div class="mermaid">
+graph TB
+    subgraph clients["Client (SDK / CLI)"]
+        SDK[SDK]
+    end
+    
+    LB[Load Balancer<br/>api.* wildcard]
+    
+    subgraph controlplane["Control Plane (API nodes)"]
+        API[API Service<br/>REST :80, gRPC :5009/:5109]
+        CP[Client Proxy<br/>:3002]
+    end
+    
+    subgraph datastores["State"]
+        PG[(PostgreSQL<br/>teams, templates, builds)]
+        RD[(Redis<br/>running sandboxes, routing)]
+        CH[(ClickHouse<br/>metrics, logs)]
+        OS[(Object Storage<br/>GCS/S3 snapshots)]
+    end
+    
+    subgraph dataplane["Data Plane (Sandbox Nodes)"]
+        ORCH[Orchestrator<br/>gRPC :5008, proxy :5007]
+        subgraph vm["Firecracker microVM"]
+            ENVD[envd :49983]
+            USERPROC[User processes]
+        end
+    end
+    
+    SDK -->|1. Create sandbox<br/>REST API| LB
+    LB --> API
+    API -->|2. Placement:<br/>pick node| RD
+    API -->|3. gRPC Create| ORCH
+    ORCH -->|4. Resume snapshot| OS
+    ORCH --> ENVD
+    ENVD --> USERPROC
+    
+    SDK -.->|5. Exec/files<br/>(direct)| CP
+    CP -.->|lookup node| RD
+    CP -.->|forward :5007| ORCH
+    ORCH -.-> ENVD
+    
+    API --> PG
+    API --> CH
+    ORCH --> OS
+    ORCH --> CH
+    
+    style API fill:#3b82f6,stroke:#f1f5f9
+    style ORCH fill:#8b5cf6,stroke:#f1f5f9
+    style ENVD fill:#10b981,stroke:#f1f5f9
+    style OS fill:#f59e0b,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> E2B's control and data plane separation. Lifecycle requests (create, 
+                pause, resume) go through the API. Execution traffic (exec, file I/O) bypasses the API via the 
+                client proxy, which routes directly to the orchestrator node and envd.
+            </p>
+
+            <h3>The Components</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Package</th>
+                        <th>Runs On</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>API</strong></td>
+                        <td><code>packages/api</code></td>
+                        <td>Control plane</td>
+                        <td>Public REST API; sandbox lifecycle, placement, auth, quotas</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Orchestrator</strong></td>
+                        <td><code>packages/orchestrator</code></td>
+                        <td>Every sandbox node</td>
+                        <td>Runs Firecracker VMs: create, pause, resume, kill, checkpoint</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Template manager</strong></td>
+                        <td><code>packages/orchestrator</code></td>
+                        <td>Build nodes</td>
+                        <td>Builds templates from Docker images and build steps</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Client proxy</strong></td>
+                        <td><code>packages/client-proxy</code></td>
+                        <td>Control plane</td>
+                        <td>Edge router: sandbox URL → correct node, auto-resume on traffic</td>
+                    </tr>
+                    <tr>
+                        <td><strong>envd</strong></td>
+                        <td><code>packages/envd</code></td>
+                        <td>Inside every VM</td>
+                        <td>In-VM agent: process/filesystem/port API (Connect RPC + REST :49983)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Dashboard API</strong></td>
+                        <td><code>packages/dashboard-api</code></td>
+                        <td>Control plane</td>
+                        <td>Backend for web dashboard (teams, builds, admin)</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <strong>Supporting packages:</strong> <code>packages/shared</code> (protos, telemetry, storage 
+                clients), <code>packages/db</code> (Postgres migrations), <code>packages/clickhouse</code> 
+                (ClickHouse schema), <code>packages/local-dev</code> (Docker Compose stack for local development).
+            </p>
+        </section>
+
+        <section id="control-plane" class="content-section">
+            <h2>Control Plane: API, Placement, and Client Proxy</h2>
+
+            <h3>API Service (<code>packages/api</code>)</h3>
+            <p>
+                The control plane entry point, written in Go (Gin framework), port 80 (REST) and 5009/5109 (gRPC). 
+                OpenAPI spec: <code>GET /openapi.json</code>.
+            </p>
+            <p>
+                <strong>Key responsibilities:</strong>
+            </p>
+            <ul>
+                <li><strong>Authentication:</strong> Team API keys (<code>X-API-Key</code>, <code>e2b_</code> prefix), 
+                OIDC JWTs, admin tokens. Backed by Postgres + Redis team cache.</li>
+                <li><strong>Sandbox lifecycle:</strong> Create, list, kill, pause, resume, connect, metrics, logs. 
+                Writes running sandbox records to Redis (source of truth for <em>running</em> sandboxes). Persistent 
+                entities (templates, builds, snapshots, teams) live in Postgres.</li>
+                <li><strong>Placement:</strong> Keeps a live map of orchestrator nodes (discovered via Nomad, 
+                Kubernetes, or static list). Uses a <strong>best-of-K</strong> algorithm: sample K ready nodes, 
+                score by CPU load and hugepage-pool load, pick lowest. Retry with backoff on 
+                <code>ResourceExhausted</code>.</li>
+                <li><strong>Rate limiting:</strong> Per-team, per-operation-group budgets enforced via Redis 
+                (distributed rate limiter). Returns HTTP 429 with <code>Retry-After</code> when exhausted.</li>
+                <li><strong>Secrets:</strong> <code>/secrets</code> API for customer secret management. Secrets 
+                are stored as <em>markers</em>; orchestrator resolves markers to values at sandbox egress (envd 
+                never sees the secret value).</li>
+            </ul>
+
+            <h3>Placement: Best-of-K with Overcommit</h3>
+            <p>
+                From ARCHITECTURE.md (<code>internal/orchestrator/placement/</code>):
+            </p>
+            <blockquote>
+                "Sample K ready nodes, score by the higher of CPU load and hugepage-pool load, pick the lowest; 
+                retry on exhausted nodes."
+            </blockquote>
+            <p>
+                <strong>Why best-of-K instead of global min?</strong> Sampling K nodes (e.g., K=3) is cheaper 
+                than querying all nodes. It converges to the least-loaded node with high probability when the 
+                fleet is large, and it avoids a single coordination bottleneck.
+            </p>
+            <p>
+                <strong>Hugepage scoring:</strong> Enabled by default (<code>BEST_OF_K_HUGEPAGE_MEMORY</code>). 
+                E2B uses hugepages for guest memory to reduce TLB misses. A node with exhausted hugepage pools 
+                scores high, steering placement away from it.
+            </p>
+
+            <h3>Client Proxy (<code>packages/client-proxy</code>)</h3>
+            <p>
+                Runs on control-plane nodes (port 3002). Routes sandbox URLs (
+                <code>https://{port}-{sandboxID}.domain</code>) to the correct orchestrator node. Queries Redis 
+                for <code>sandbox:routing:{id}</code> (written by the orchestrator), then forwards HTTP/gRPC 
+                traffic to the node's proxy (:5007), which forwards to envd (:49983).
+            </p>
+            <p>
+                <strong>Auto-resume:</strong> If the sandbox is paused, the client proxy calls the API's gRPC 
+                <code>ResumeSandbox</code> endpoint (:5109), which tells the orchestrator to resume the snapshot. 
+                The request waits until the sandbox is running, then the proxy forwards the original request.
+            </p>
+
+            <div class="mermaid">
+sequenceDiagram
+    participant SDK
+    participant API
+    participant Redis
+    participant Orchestrator
+    participant Firecracker
+    participant Envd
+
+    SDK->>API: POST /sandboxes (create)
+    API->>Redis: Placement: find best node
+    Redis-->>API: Node ID
+    API->>Orchestrator: gRPC Create(template_id, config)
+    Orchestrator->>Firecracker: LoadSnapshot(memfile, rootfs)
+    Firecracker->>Envd: Boot (envd already running in snapshot)
+    Envd-->>Orchestrator: Ready
+    Orchestrator-->>API: Sandbox ID, node, URL
+    API->>Redis: Write sandbox:routing:{id} → node
+    API-->>SDK: 201 Created {id, url}
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> Create workflow. The API places the sandbox, the orchestrator restores 
+                the snapshot, and the routing record is written to Redis so the client proxy can route future traffic.
+            </p>
+        </section>
+
+        <section id="data-plane" class="content-section">
+            <h2>Data Plane: Orchestrator and envd</h2>
+
+            <h3>Orchestrator (<code>packages/orchestrator</code>)</h3>
+            <p>
+                A single Go binary running on every sandbox node (as root, since it manages Firecracker/KVM). 
+                Ports: gRPC :5008 (lifecycle), HTTP :5007 (proxy to envd). Source: <code>pkg/</code>, almost 
+                all Linux-only.
+            </p>
+            <p>
+                <strong>gRPC services:</strong>
+            </p>
+            <ul>
+                <li><strong>SandboxService:</strong> <code>Create</code>, <code>Update</code>, <code>List</code>, 
+                <code>Delete</code>, <code>Pause</code>, <code>Checkpoint</code>. <code>Update</code> callbacks 
+                are serialized per sandbox (for timeout/network updates).</li>
+                <li><strong>TemplateService:</strong> <code>TemplateCreate</code>, <code>TemplateBuildStatus</code>, 
+                <code>TemplateBuildDelete</code> (template-manager role only).</li>
+                <li><strong>InfoService:</strong> Node identity, roles, capacity, health (<code>/health</code> 
+                returns HTTP 200 with status <code>ready</code>, <code>draining</code>, or <code>shutting_down</code>).</li>
+            </ul>
+
+            <h3>How the Orchestrator Drives Firecracker</h3>
+            <p>
+                From ARCHITECTURE.md (<code>pkg/sandbox/</code>):
+            </p>
+            <ul>
+                <li><strong>Firecracker</strong> (<code>fc/</code>): Each sandbox is one Firecracker process in 
+                its own cgroup and network namespace. The FC HTTP API (Unix socket) configures machine, drives, 
+                network, and snapshots. Guest metadata (sandbox ID, envd access token hash) is passed via MMDS 
+                (Metadata Micro-Service, a virtio-MMDS device).</li>
+                <li><strong>userfaultfd lazy memory</strong> (<code>uffd/</code>): The orchestrator runs a 
+                userfaultfd handler thread. When the guest touches a memory page, the handler fetches it from 
+                object storage and calls <code>UFFDIO_COPY</code> to map it. <strong>Prefetching:</strong> 
+                During template builds, E2B records which pages are accessed during boot. On resume, it prefetches 
+                those pages before starting the VM, so the first faults are instant.</li>
+                <li><strong>Copy-on-write rootfs</strong> (<code>rootfs/</code>, <code>nbd/</code>, 
+                <code>block/</code>): The template rootfs stays read-only. Writes go to a per-sandbox CoW cache. 
+                The cache is exposed to Firecracker as an NBD (Network Block Device) block device, served by an 
+                in-process userspace NBD server. On pause, dirty blocks are exported as a diff.</li>
+                <li><strong>Networking</strong> (<code>network/</code>): Each sandbox gets its own network 
+                namespace with a TAP device. The orchestrator creates <code>veth</code> pairs and bridges them. 
+                nftables rules provide egress filtering (allow/deny domains). Ingress is blocked by default 
+                (no port forwarding unless explicitly configured).</li>
+                <li><strong>Snapshots</strong> (<code>snapshots/</code>): On <code>Pause</code>, the orchestrator 
+                calls Firecracker's <code>CreateSnapshot</code> API, which writes the memory file (guest RAM) 
+                and state file (device state JSON). These are uploaded to object storage as diffs against the 
+                template (only modified pages/blocks). On <code>Resume</code>, the orchestrator downloads the 
+                diff, applies it to the template snapshot, and restores via <code>LoadSnapshot</code>.</li>
+            </ul>
+
+            <h3>envd: The In-VM Agent (<code>packages/envd</code>)</h3>
+            <p>
+                <strong>envd</strong> is a daemon that runs inside every Firecracker VM (port 49983). It's the 
+                data-plane API that SDKs talk to for execution and file operations. From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "envd exposes processes, PTYs, filesystem operations, file watchers, and port forwarding over 
+                Connect RPC and REST. It is what the SDKs talk to when they 'run code'."
+            </blockquote>
+            <p>
+                <strong>Protocols:</strong>
+            </p>
+            <ul>
+                <li><strong>Connect RPC / HTTP/2:</strong> High-performance streaming for <code>Filesystem</code> 
+                and <code>Process</code> services. Defined in <code>spec/envd/*.proto</code>. SDKs use custom 
+                HTTP/2 clients with connection pooling to avoid concurrency bottlenecks.</li>
+                <li><strong>REST:</strong> Defined in <code>spec/envd/envd.yaml</code> (OpenAPI). Endpoints:
+                    <ul>
+                        <li><code>GET /health</code>: Probes service health (returns 204 when healthy)</li>
+                        <li><code>GET /metrics</code>: Resource usage metrics</li>
+                        <li><code>POST /init</code>: Internal endpoint (<code>x-internal: true</code>) for setting 
+                        environment variables, volume mounts, initial user, working directory, CA certs. Called by 
+                        the orchestrator after snapshot restore, before the sandbox is marked ready.</li>
+                        <li><code>POST /freeze</code>, <code>POST /unfreeze</code>: Internal endpoints 
+                        (<code>x-internal: true</code>) that freeze/unfreeze user/PTY cgroups before pausing. 
+                        This ensures processes don't write during snapshot capture.</li>
+                    </ul>
+                </li>
+            </ul>
+            <p>
+                <strong>Live upgrade:</strong> envd can be upgraded inside a running sandbox without dropping the 
+                workload. The orchestrator sends a new envd binary over vsock, envd execs the new binary, and the 
+                new process inherits the open sockets and running PTYs. (Implementation: <code>packages/envd/</code>, 
+                not detailed in public docs.)
+            </p>
+
+            <div class="info-box">
+                <h3>Why envd Is Inside the VM</h3>
+                <p>
+                    <strong>Isolation:</strong> Process and file APIs are served by envd, which runs inside the 
+                    guest kernel's address space. If the orchestrator served these APIs from the host, a malicious 
+                    guest could exploit the orchestrator and escape to the host. With envd inside the VM, the 
+                    blast radius is contained: a compromised envd can only affect its own sandbox, not other 
+                    sandboxes or the host.
+                </p>
+                <p>
+                    <strong>Live upgrade:</strong> Because envd is just a user-space daemon inside the guest, it 
+                    can be upgraded without rebooting the guest kernel or stopping Firecracker. The orchestrator 
+                    pushes a new binary, envd execs it, and the sandbox continues running. Compare this to upgrading 
+                    the Firecracker binary or the guest kernel, both of which require a full stop/start cycle.
+                </p>
+            </div>
+        </section>
+
+        <section id="template-building" class="content-section">
+            <h2>Template Building: Docker Image → Snapshot</h2>
+            <p>
+                From 
+                <a href="https://docs.e2b.dev/template/how-it-works" target="_blank">E2B docs: How it works</a> 
+                and ARCHITECTURE.md (<code>packages/orchestrator/pkg/template/build</code>):
+            </p>
+            <blockquote>
+                "Every time you are building a sandbox template, we create a container based on the definition. 
+                We extract the container's filesystem, do provisioning and configuration (e.g. installing required 
+                dependencies), run layers commands and start a sandbox. Then, these steps happen:
+                <ol>
+                    <li>We take the running sandbox.</li>
+                    <li>(Only if you specified the start command) Execute the start command.</li>
+                    <li>Wait for readiness (by default 20 seconds if start command is specified, otherwise 
+                    immediately ready). Readiness check can be configured using ready command.</li>
+                    <li>Snapshot the sandbox and make it ready for you to spawn it with the SDK.</li>
+                </ol>
+            </blockquote>
+
+            <h3>The Template Build Workflow (Detailed)</h3>
+            <p>
+                From <code>packages/orchestrator/pkg/template/build</code> godoc:
+            </p>
+            <ol>
+                <li><strong>Get Docker image</strong> from the remote repository (e.g., Docker Hub).</li>
+                <li><strong>Inject new file layers</strong> with the required setup for hostname, DNS, envd service 
+                configuration, basic provisioning script that runs before most VM services.</li>
+                <li><strong>Extract ext4 filesystem</strong> from the layered OCI image. The orchestrator converts 
+                the OCI image layers (tar.gz) into a single ext4 block device image that Firecracker can mount as 
+                a virtio-blk drive.</li>
+                <li><strong>Start FC VM with BusyBox init</strong> that runs just the provisioning script. This 
+                installs systemd (which is used for proper VM boot later). Wait for exit.</li>
+                <li><strong>Start the FC VM (using systemd)</strong> and wait for envd to signal ready.</li>
+                <li><strong>Build the template steps/layers</strong>: run user-defined commands 
+                (<code>.runCmd(["apt-get update", "pip install transformers"])</code>). Each command runs in a 
+                shell inside the VM via envd.</li>
+                <li><strong>Restart the sandbox</strong> and run two additional commands:
+                    <ul>
+                        <li>Configuration script (enable swap, create user, change folder permissions, etc.)</li>
+                        <li>Start command (if defined), together with the ready command (always with default value 
+                        if not defined)</li>
+                    </ul>
+                </li>
+                <li><strong>Snapshot</strong>: call Firecracker's <code>CreateSnapshot</code>. This captures guest 
+                memory (memory file) and device state (state file JSON).</li>
+                <li><strong>Upload template</strong> (and all not-yet-uploaded layers) to object storage 
+                (S3/GCS). The template snapshot is now ready for sandboxes to resume from.</li>
+            </ol>
+
+            <h3>Filesystem-Only vs Full Snapshots</h3>
+            <p>
+                From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "A template can also be filesystem-only (rootfs, no memfile), taken by a filesystem-only pause 
+                or checkpoint; sandboxes created from it cold-boot from disk instead of resuming."
+            </blockquote>
+            <ul>
+                <li><strong>Full snapshot (default):</strong> Captures memory + device state. Sandboxes resume 
+                from the snapshot (fast: ~1s vendor claim, ~28ms measured independently with 256MB working set).</li>
+                <li><strong>Filesystem-only snapshot:</strong> Captures only the rootfs (ext4 image), no memory. 
+                Sandboxes cold-boot from the rootfs (~125ms for minimal kernel + init, slower for full systemd boot). 
+                <strong>Use case:</strong> When you want a clean boot every time (e.g., testing init scripts), or 
+                when the memory footprint is too large for practical snapshot/restore.</li>
+            </ul>
+
+            <div class="mermaid">
+graph LR
+    Docker[Docker Image<br/>e.g. ubuntu:24.04]
+    Extract[Extract to ext4<br/>rootfs.ext4]
+    Provision[Boot VM + Provision<br/>systemd, envd]
+    UserCmds[Run user commands<br/>.runCmd(...)]
+    Snapshot[Snapshot memory + rootfs]
+    Upload[Upload to S3/GCS<br/>template artifacts]
+
+    Docker --> Extract
+    Extract --> Provision
+    Provision --> UserCmds
+    UserCmds --> Snapshot
+    Snapshot --> Upload
+
+    style Snapshot fill:#10b981,stroke:#f1f5f9
+    style Upload fill:#f59e0b,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> Template build pipeline. Docker image → ext4 rootfs → provision → user 
+                commands → snapshot → object storage.
+            </p>
+
+            <h3>Template Caching and Layers</h3>
+            <p>
+                From 
+                <a href="https://docs.e2b.dev/template/how-it-works#caching" target="_blank">E2B docs: Caching</a>:
+            </p>
+            <blockquote>
+                "Templates are built in layers (similar to Docker layers). Each <code>.runCmd()</code> is a layer. 
+                Layers are cached: if you rebuild a template and only the last layer changed, E2B reuses the 
+                earlier layers' snapshots and only rebuilds the changed layer and subsequent layers."
+            </blockquote>
+            <p>
+                <strong>How layer caching works:</strong> Each layer's snapshot is content-addressed by a hash of 
+                its inputs (base layer + commands). When you rebuild, E2B checks if a layer with the same hash 
+                already exists in object storage. If yes, it skips that layer. If no, it resumes the previous 
+                layer's snapshot, runs the new commands, and snapshots again.
+            </p>
+        </section>
+
+        <section id="snapshot-resume" class="content-section">
+            <h2>Pause, Resume, and Lazy Memory</h2>
+            <p>
+                From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "Fresh creates, resumes after a pause, and forks all take the same path."
+            </blockquote>
+            <p>
+                In E2B's architecture, <strong>create = resume</strong>. There is no "cold boot" for sandboxes in 
+                the normal runtime path. Every sandbox starts from a template snapshot, which was itself created 
+                by booting once and snapshotting.
+            </p>
+
+            <h3>The Resume Path (userfaultfd + NBD CoW)</h3>
+            <p>
+                From ARCHITECTURE.md (<code>pkg/sandbox/</code>):
+            </p>
+            <ol>
+                <li><strong>API receives create request:</strong> <code>POST /sandboxes</code> with 
+                <code>template_id</code>.</li>
+                <li><strong>Placement:</strong> API picks a node via best-of-K.</li>
+                <li><strong>Orchestrator resume:</strong> API sends gRPC <code>Create</code> to the orchestrator, 
+                which calls <code>ResumeSandbox</code>:
+                    <ul>
+                        <li><strong>Memory:</strong> Fetch template snapshot header from object storage (contains 
+                        memory file location and page list). Register guest memory range with userfaultfd. The 
+                        orchestrator's userfaultfd handler thread is now waiting for page faults. <strong>Optional 
+                        prefetch:</strong> If the template has a prefetch page list (recorded during template 
+                        build), fetch those pages from object storage and map them before starting the VM.</li>
+                        <li><strong>Rootfs:</strong> Start the in-process NBD server. The server exposes a 
+                        copy-on-write view of the template rootfs. Reads come from the template rootfs (read-only, 
+                        in object storage or cached locally). Writes go to a per-sandbox cache file 
+                        (<code>sandboxFiles.SandboxCacheRootfsPath</code>). Firecracker mounts this NBD device as 
+                        its virtio-blk drive.</li>
+                        <li><strong>Networking:</strong> Create a network namespace, TAP device, and veth pair. 
+                        Configure nftables egress rules (allow/deny domains based on team settings). The Firecracker 
+                        process joins this netns via the jailer (Lesson 04's <code>--netns</code>).</li>
+                        <li><strong>Firecracker:</strong> Call <code>LoadSnapshot</code> API with the memory file 
+                        and state file paths. Firecracker mmaps the memory file (which is backed by userfaultfd), 
+                        restores device state, and calls <code>KVM_RUN</code>. The guest kernel resumes execution 
+                        exactly where the snapshot was taken.</li>
+                        <li><strong>envd init:</strong> The orchestrator calls envd's <code>POST /init</code> 
+                        endpoint to set environment variables, volume mounts, and the initial user. envd responds 
+                        when ready.</li>
+                    </ul>
+                </li>
+                <li><strong>Routing record:</strong> The orchestrator writes <code>sandbox:routing:{id}</code> to 
+                Redis with the node ID and proxy URL.</li>
+                <li><strong>API response:</strong> Returns <code>201 Created</code> with the sandbox ID and URL 
+                to the SDK.</li>
+            </ol>
+
+            <h3>The Pause Path (Diff Export)</h3>
+            <p>
+                From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "Pause diffs memory and disk against the template and ships the diff to object storage."
+            </blockquote>
+            <ol>
+                <li><strong>API receives pause request:</strong> <code>POST /sandboxes/{id}/pause</code>.</li>
+                <li><strong>Orchestrator pause:</strong> API sends gRPC <code>Pause</code> to the orchestrator:
+                    <ul>
+                        <li><strong>Freeze cgroups:</strong> Call envd's <code>POST /freeze</code> to freeze 
+                        user/PTY cgroups. This ensures no processes are writing during snapshot capture.</li>
+                        <li><strong>Snapshot:</strong> Call Firecracker's <code>CreateSnapshot</code>. Firecracker 
+                        writes the memory file (full guest RAM) and state file (device state JSON) to local disk.</li>
+                        <li><strong>Diff memory:</strong> Compare the memory file to the template's memory file. 
+                        Only modified pages are uploaded to object storage. (Implementation: not detailed in public 
+                        docs; likely compares page hashes or uses <code>mincore(2)</code> to find dirty pages.)</li>
+                        <li><strong>Diff rootfs:</strong> The NBD server has tracked all writes to the CoW cache. 
+                        Export the dirty blocks as a diff file and upload to object storage.</li>
+                        <li><strong>Metadata:</strong> Write a snapshot header to object storage that references 
+                        the template ID and the diff files (memory + rootfs).</li>
+                    </ul>
+                </li>
+                <li><strong>Stop Firecracker:</strong> Kill the Firecracker process. The sandbox is now paused 
+                (no CPU/memory cost on the host).</li>
+                <li><strong>Orchestrator writes state:</strong> Update Redis to mark the sandbox as 
+                <code>paused</code>. Write the snapshot metadata to Postgres.</li>
+            </ol>
+
+            <h3>Resume from Paused Snapshot</h3>
+            <p>
+                When the SDK calls <code>POST /sandboxes/{id}/resume</code> (or the client proxy auto-resumes on 
+                incoming traffic), the orchestrator:
+            </p>
+            <ol>
+                <li><strong>Fetch diff:</strong> Download the memory diff and rootfs diff from object storage.</li>
+                <li><strong>Apply diff:</strong> Merge the memory diff with the template's memory file (in-memory 
+                or on-disk, depending on cache). The NBD server merges the rootfs diff with the template rootfs.</li>
+                <li><strong>Resume:</strong> Follow the same resume path as a fresh create, but with the merged 
+                snapshot instead of the template snapshot.</li>
+            </ol>
+
+            <div class="info-box">
+                <h3>Latency Breakdown (Vendor Claim)</h3>
+                <p>
+                    From 
+                    <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">E2B persistence docs</a>:
+                </p>
+                <ul>
+                    <li><strong>Pause:</strong> "approximately 4 seconds per GiB of RAM" (vendor claim, includes 
+                    memory snapshot capture + diff export + upload to object storage)</li>
+                    <li><strong>Resume:</strong> "approximately 1 second" (vendor claim, includes diff download + 
+                    apply + Firecracker LoadSnapshot + userfaultfd lazy page-in for hot pages)</li>
+                </ul>
+                <p>
+                    <strong>Independent measurement:</strong> A 
+                    <a href="https://doi.org/10.63721/26jsea0149" target="_blank">published benchmark</a> 
+                    reports ~28ms median restore latency for a 256MB working set on NVMe (Firecracker snapshot 
+                    restore, not E2B's full stack). E2B's 1s figure includes network round-trips to object storage, 
+                    so it's reasonable for a multi-GiB sandbox.
+                </p>
+            </div>
+        </section>
+
+        <section id="fork" class="content-section">
+            <h2>Fork: One Sandbox to N Children</h2>
+            <p>
+                From 
+                <a href="https://docs.e2b.dev/sandbox/fork" target="_blank">E2B fork docs</a>:
+            </p>
+            <blockquote>
+                "With the SDKs and the CLI you can request up to 20 forks at once."
+            </blockquote>
+            <p>
+                <strong>Fork</strong> is the feature you learned about in Lesson 05: run an agent to step <em>k</em>, 
+                snapshot, then spawn N clones from that snapshot. Each child resumes from the same state, but with 
+                different RNG seeds, sampling parameters, or policies.
+            </p>
+
+            <h3>How Fork Works in E2B</h3>
+            <p>
+                From ARCHITECTURE.md:
+            </p>
+            <blockquote>
+                "Fork checkpoints the original in place and spreads children across nodes."
+            </blockquote>
+            <p>
+                The workflow:
+            </p>
+            <ol>
+                <li><strong>Parent sandbox running:</strong> Your agent code has executed to step <em>k</em>. 
+                The sandbox is in state S.</li>
+                <li><strong>SDK calls fork:</strong> <code>POST /sandboxes/{id}/fork</code> with 
+                <code>count=N</code> (up to 20).</li>
+                <li><strong>Checkpoint parent:</strong> The orchestrator pauses the parent sandbox (same as 
+                <code>Pause</code>: freeze cgroups, snapshot memory + rootfs, export diff, upload to object 
+                storage). The parent can optionally resume after checkpoint (controlled by API request flag).</li>
+                <li><strong>Spread children:</strong> The API picks N nodes (can be the same node if capacity 
+                allows, or spread across nodes via placement). For each child:
+                    <ul>
+                        <li>Send gRPC <code>Create</code> to the target orchestrator with the checkpoint snapshot 
+                        ID (not the template ID).</li>
+                        <li>The orchestrator resumes the checkpoint snapshot (which is a diff against the template) 
+                        the same way it resumes a paused sandbox.</li>
+                        <li><strong>Reseed RNG:</strong> The orchestrator (or envd during init) writes unique 
+                        entropy to each child's <code>/dev/urandom</code> to fix the RNG clone hazard (Lesson 05). 
+                        (Implementation detail not specified in public docs; likely done via envd's 
+                        <code>POST /init</code> with unique environment variables or a seed file.)</li>
+                        <li><strong>Unique MAC:</strong> Each child gets a unique MAC address (configured in 
+                        Firecracker's network-interfaces config). The network namespace is also unique per child 
+                        (each has its own TAP device).</li>
+                    </ul>
+                </li>
+                <li><strong>Return child IDs:</strong> The API returns a list of N sandbox IDs to the SDK. Each 
+                child is now an independent sandbox that the SDK can control separately.</li>
+            </ol>
+
+            <div class="mermaid">
+graph TD
+    Parent[Parent Sandbox<br/>State S at step k]
+    Fork[SDK: fork count=3]
+    Checkpoint[Checkpoint Parent<br/>snapshot memory + rootfs]
+    Upload[Upload checkpoint<br/>to object storage]
+
+    Child1[Resume Child 1<br/>Node A, unique MAC/RNG]
+    Child2[Resume Child 2<br/>Node B, unique MAC/RNG]
+    Child3[Resume Child 3<br/>Node A, unique MAC/RNG]
+
+    Rollout1[Rollout 1<br/>sample A]
+    Rollout2[Rollout 2<br/>sample B]
+    Rollout3[Rollout 3<br/>sample C]
+
+    Parent --> Fork
+    Fork --> Checkpoint
+    Checkpoint --> Upload
+    Upload --> Child1
+    Upload --> Child2
+    Upload --> Child3
+
+    Child1 --> Rollout1
+    Child2 --> Rollout2
+    Child3 --> Rollout3
+
+    style Checkpoint fill:#10b981,stroke:#f1f5f9
+    style Upload fill:#f59e0b,stroke:#f1f5f9
+    style Child1 fill:#3b82f6,stroke:#f1f5f9
+    style Child2 fill:#3b82f6,stroke:#f1f5f9
+    style Child3 fill:#3b82f6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 4:</strong> E2B fork. Checkpoint parent sandbox, upload to object storage, resume N 
+                children across nodes with unique RNG/MAC.
+            </p>
+
+            <h3>Use Cases for Fork</h3>
+            <ul>
+                <li><strong>GRPO-style rollouts:</strong> Run agent to decision point, fork N children, sample 
+                with different temperatures/seeds, compare outcomes for policy gradient update.</li>
+                <li><strong>Tree search:</strong> At each branch point, fork N children to explore N different 
+                actions. Prune low-value branches, continue high-value ones.</li>
+                <li><strong>A/B testing:</strong> Run setup once (install dependencies, clone repo), fork N 
+                children, run different versions of the code in each child.</li>
+                <li><strong>Parallel eval:</strong> Run expensive setup (load model, warm cache), fork N children, 
+                run N eval instances in parallel.</li>
+            </ul>
+        </section>
+
+        <section id="comparison" class="content-section">
+            <h2>Comparison to Lessons 04-05: What You Built vs Production</h2>
+            <p>
+                In Lessons 04 and 05, you booted Firecracker by hand and simulated warm pools in Python. Here's 
+                how E2B's production system compares to what you built:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Lessons 04-05 (Your Build)</th>
+                        <th>E2B Runtime (Production)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Boot</strong></td>
+                        <td>Manual curl commands to Firecracker REST API</td>
+                        <td>Orchestrator wraps Firecracker API in gRPC service, handles cgroups/netns/jailer</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Snapshot</strong></td>
+                        <td>Manual <code>CreateSnapshot</code> API call, files on local disk</td>
+                        <td>Orchestrator exports memory/rootfs diffs, uploads to object storage (S3/GCS)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Resume</strong></td>
+                        <td>Manual <code>LoadSnapshot</code>, full memory file loaded from disk</td>
+                        <td>userfaultfd lazy page-in from object storage, NBD CoW rootfs, prefetch hot pages</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Networking</strong></td>
+                        <td>Manual <code>ip tuntap</code>, <code>ip addr</code>, nftables rules</td>
+                        <td>Orchestrator automates netns/TAP/veth/bridge setup, per-team egress filtering</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Placement</strong></td>
+                        <td>N/A (single node)</td>
+                        <td>Best-of-K placement across fleet, Redis routing catalog, client proxy for traffic routing</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Fork</strong></td>
+                        <td>Python simulator, no real VMs</td>
+                        <td>Checkpoint parent, spread N children across nodes, unique RNG/MAC per child</td>
+                    </tr>
+                    <tr>
+                        <td><strong>API</strong></td>
+                        <td>Direct Firecracker API (Unix socket, curl)</td>
+                        <td>Public REST API (lifecycle), envd Connect RPC/REST (exec/files), separate control/data planes</td>
+                    </tr>
+                    <tr>
+                        <td><strong>State</strong></td>
+                        <td>N/A (ephemeral, no persistence)</td>
+                        <td>Postgres (templates, teams, builds), Redis (running sandboxes, routing), ClickHouse (metrics)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Template building</strong></td>
+                        <td>N/A (used pre-built kernel/rootfs)</td>
+                        <td>Docker image → ext4 rootfs → provision → user commands → snapshot, layer caching</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Observability</strong></td>
+                        <td>Manual inspection (<code>ps aux</code>, logs)</td>
+                        <td>OpenTelemetry tracing, ClickHouse metrics/logs, LaunchDarkly feature flags</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Key Production Concerns You Didn't Build</h3>
+            <ul>
+                <li><strong>Multi-tenancy:</strong> Per-team auth, rate limiting, quotas, separate object storage 
+                prefixes</li>
+                <li><strong>Autoscaling:</strong> Nomad nodepool autoscaler (adds/removes nodes based on queue depth)</li>
+                <li><strong>Graceful degradation:</strong> Orchestrator health checks, drain/shutdown, placement 
+                retries with backoff</li>
+                <li><strong>Storage efficiency:</strong> Diff-based snapshots (only modified pages/blocks uploaded), 
+                layer caching for templates</li>
+                <li><strong>Security:</strong> Seccomp filters (Lesson 02), nftables egress rules, secrets 
+                management (markers resolved at egress, not stored in VM)</li>
+                <li><strong>Live upgrade:</strong> envd can be upgraded inside running sandboxes without reboot</li>
+            </ul>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Deploy E2B Embed Locally</h2>
+            <p>
+                In this exercise, you'll deploy E2B Embed (the single-node deployment bundle) locally, create a 
+                sandbox, execute commands, pause it, resume it, and measure the latency of each step. You'll also 
+                try forking a sandbox.
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Prerequisites</h3>
+                <ul>
+                    <li><strong>Linux with KVM:</strong> E2B uses Firecracker, which requires KVM 
+                    (<code>/dev/kvm</code>). Check <code>ls -l /dev/kvm</code>.</li>
+                    <li><strong>Docker and Docker Compose:</strong> E2B Embed runs all services in containers.</li>
+                    <li><strong>8GB+ RAM:</strong> The full stack (Postgres, Redis, ClickHouse, API, orchestrator, 
+                    Firecracker VM) needs ~4-6GB RAM. Your host needs more to run comfortably.</li>
+                    <li><strong>Root access:</strong> The orchestrator runs as root (for Firecracker/KVM/networking).</li>
+                    <li><strong>Go 1.21+, Node.js 18+, or Python 3.10+:</strong> For the SDK example 
+                    (pick one language).</li>
+                </ul>
+                <p>
+                    <strong>If you don't have KVM:</strong> You can read the exercise and understand the workflow, 
+                    but you won't be able to run Firecracker. The E2B team recommends an AWS EC2 <code>.metal</code> 
+                    instance or a GCP VM with nested virtualization enabled.
+                </p>
+            </div>
+
+            <h3>Step 1: Clone the Repository</h3>
+            <pre><code class="language-bash">git clone https://github.com/e2b-dev/runtime.git
+cd runtime</code></pre>
+
+            <h3>Step 2: Start E2B Embed (Docker Compose)</h3>
+            <p>
+                E2B Embed is in <code>embed/</code>. From 
+                <a href="https://github.com/e2b-dev/runtime/tree/main/embed" target="_blank">embed/README.md</a>:
+            </p>
+            <pre><code class="language-bash">cd embed
+docker compose up -d</code></pre>
+            <p>
+                This starts:
+            </p>
+            <ul>
+                <li>PostgreSQL (port 5432)</li>
+                <li>Redis (port 6379)</li>
+                <li>ClickHouse (HTTP port 8123, native port 9000)</li>
+                <li>API (port 3000)</li>
+                <li>Client Proxy (port 3002)</li>
+                <li>Orchestrator (gRPC port 5008, proxy port 5007)</li>
+            </ul>
+            <p>
+                <strong>Wait for services to be ready:</strong>
+            </p>
+            <pre><code class="language-bash"># Check API health
+curl http://localhost:3000/health
+# Should return: {"status":"ok"}
+
+# Check orchestrator health
+curl http://localhost:5008/health
+# Should return HTTP 200</code></pre>
+
+            <h3>Step 3: Install SDK (Pick One Language)</h3>
+            <p>
+                <strong>Python:</strong>
+            </p>
+            <pre><code class="language-bash">pip install e2b</code></pre>
+            <p>
+                <strong>JavaScript/TypeScript:</strong>
+            </p>
+            <pre><code class="language-bash">npm install e2b</code></pre>
+            <p>
+                <strong>Go:</strong>
+            </p>
+            <pre><code class="language-bash">go get github.com/e2b-dev/e2b-go</code></pre>
+
+            <h3>Step 4: Build a Template</h3>
+            <p>
+                Create a minimal template (Python example):
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Build a minimal E2B template (Ubuntu 24.04 + Python).
+"""
+from e2b import Template, default_build_logger
+
+template = (
+    Template()
+    .from_ubuntu_image("24.04")
+    .run_cmd([
+        "apt-get update",
+        "apt-get install -y python3 python3-pip"
+    ])
+)
+
+# Build the template locally
+Template.build(
+    template,
+    "python-sandbox",
+    on_build_logs=default_build_logger(),
+    api_url="http://localhost:3000"  # Point to local Embed API
+)</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">python3 build_template.py</code></pre>
+            <p>
+                <strong>Expected output:</strong> The template builder boots a Firecracker VM, runs the commands, 
+                snapshots the VM, and uploads the snapshot to local storage. This takes ~30-60 seconds (first boot 
+                is slow because layers must be built).
+            </p>
+            <p>
+                <strong>Note:</strong> If you get an error about missing API key, Embed in local mode may not 
+                require auth. Check <code>embed/.env</code> for <code>E2B_API_KEY</code> or run with 
+                <code>E2B_API_KEY=local</code>.
+            </p>
+
+            <h3>Step 5: Create, Exec, Pause, Resume, Measure Latency</h3>
+            <p>
+                Create <code>sandbox_lifecycle.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+E2B sandbox lifecycle: create, exec, pause, resume, measure latency.
+"""
+import time
+from e2b import Sandbox
+
+def measure(label, fn):
+    start = time.time()
+    result = fn()
+    elapsed = (time.time() - start) * 1000  # milliseconds
+    print(f"{label}: {elapsed:.1f}ms")
+    return result
+
+# Configure for local Embed
+api_url = "http://localhost:3000"
+
+print("=== Create Sandbox ===")
+sandbox = measure(
+    "Create from template",
+    lambda: Sandbox(
+        template="python-sandbox",
+        api_url=api_url
+    )
+)
+print(f"Sandbox ID: {sandbox.id}")
+
+print("\n=== Execute Commands ===")
+def exec_hello():
+    result = sandbox.commands.run("echo 'Hello from E2B'")
+    return result.stdout
+
+output = measure("Exec echo", exec_hello)
+print(f"Output: {output}")
+
+def exec_python():
+    result = sandbox.commands.run("python3 -c 'print(sum(range(100)))'")
+    return result.stdout
+
+output = measure("Exec python", exec_python)
+print(f"Output: {output}")
+
+print("\n=== Pause Sandbox ===")
+measure("Pause", lambda: sandbox.pause())
+
+print("\n=== Resume Sandbox ===")
+measure("Resume", lambda: sandbox.resume())
+
+print("\n=== Post-Resume Exec ===")
+output = measure("Exec after resume", exec_hello)
+print(f"Output: {output}")
+
+print("\n=== Kill Sandbox ===")
+measure("Kill", lambda: sandbox.kill())
+
+print("\nDone!")</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">python3 sandbox_lifecycle.py</code></pre>
+            <p>
+                <strong>Expected output (approximate timings, local Embed):</strong>
+            </p>
+            <ul>
+                <li><strong>Create from template:</strong> ~1000-2000ms (first create: fetch snapshot from storage, 
+                userfaultfd page-in; subsequent creates on the same node are faster due to page cache)</li>
+                <li><strong>Exec echo:</strong> ~50-100ms (includes Connect RPC round-trip + shell spawn)</li>
+                <li><strong>Exec python:</strong> ~200-300ms (Python interpreter startup + compute)</li>
+                <li><strong>Pause:</strong> ~1000-3000ms (snapshot memory + rootfs, export diff, upload to local 
+                storage; time scales with sandbox RAM and dirty pages)</li>
+                <li><strong>Resume:</strong> ~500-1500ms (fetch diff, apply, LoadSnapshot)</li>
+                <li><strong>Exec after resume:</strong> ~50-100ms (same as before pause)</li>
+            </ul>
+            <p>
+                <strong>Note:</strong> These are ballpark figures for a local Embed deployment on a laptop/VM. 
+                E2B Cloud (with distributed object storage and optimized networking) reports ~1s resume (vendor 
+                claim). Independent benchmarks report ~28ms for Firecracker snapshot restore alone (256MB working 
+                set, NVMe).
+            </p>
+
+            <h3>Step 6 (Optional): Fork a Sandbox</h3>
+            <p>
+                Create <code>fork_test.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+E2B fork test: create sandbox, run prefix, fork N children, sample differently.
+"""
+import time
+from e2b import Sandbox
+
+api_url = "http://localhost:3000"
+
+print("=== Create Parent Sandbox ===")
+parent = Sandbox(template="python-sandbox", api_url=api_url)
+print(f"Parent ID: {parent.id}")
+
+print("\n=== Run Prefix (Setup) ===")
+parent.commands.run("echo 'Setup complete' > /tmp/prefix_done")
+result = parent.commands.run("cat /tmp/prefix_done")
+print(f"Prefix output: {result.stdout}")
+
+print("\n=== Fork 3 Children ===")
+start = time.time()
+children = parent.fork(count=3)  # Fork up to 20 at once
+elapsed = (time.time() - start) * 1000
+print(f"Fork 3 children took: {elapsed:.1f}ms")
+
+print(f"Child IDs: {[c.id for c in children]}")
+
+print("\n=== Sample Differently in Each Child ===")
+for i, child in enumerate(children):
+    # Each child sees the prefix output
+    result = child.commands.run("cat /tmp/prefix_done")
+    print(f"Child {i}: prefix output: {result.stdout}")
+    
+    # Run different sampling (simulate GRPO-style rollout)
+    seed = 42 + i  # Unique seed per child
+    result = child.commands.run(f"python3 -c 'import random; random.seed({seed}); print(random.randint(0, 100))'")
+    print(f"Child {i}: sampled value: {result.stdout}")
+
+print("\n=== Kill All ===")
+parent.kill()
+for child in children:
+    child.kill()
+
+print("Done!")</code></pre>
+            <p>
+                Run it:
+            </p>
+            <pre><code class="language-bash">python3 fork_test.py</code></pre>
+            <p>
+                <strong>Expected output:</strong> Each child resumes from the parent's state (sees 
+                <code>/tmp/prefix_done</code>) and samples a different random value (unique seed per child). Fork 
+                latency depends on whether the children are placed on the same node (fast: local snapshot copy) or 
+                spread across nodes (slower: network transfer of checkpoint diff).
+            </p>
+
+            <h3>What You Learned</h3>
+            <ul>
+                <li>How to deploy E2B Embed locally (Docker Compose)</li>
+                <li>How to build a template from a Docker image</li>
+                <li>How to create, exec, pause, resume, and kill sandboxes via the SDK</li>
+                <li>Latency characteristics of each operation (create ~1s, exec ~50-100ms, pause ~1-3s, resume ~0.5-1.5s)</li>
+                <li>How fork works: checkpoint parent, resume N children with unique state</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Going Further: Production Deployment</h3>
+                <p>
+                    E2B Embed is for single-node development and testing. For production, you'll want:
+                </p>
+                <ul>
+                    <li><strong>Multi-node orchestrator:</strong> Deploy orchestrators on multiple nodes (Nomad, 
+                    Kubernetes, or Terraform). The API's placement algorithm distributes sandboxes across nodes.</li>
+                    <li><strong>Distributed object storage:</strong> Use S3, GCS, or Azure Blob instead of local 
+                    storage. This lets any orchestrator node fetch any template/snapshot.</li>
+                    <li><strong>Monitoring:</strong> OpenTelemetry tracing, ClickHouse metrics, Grafana dashboards.</li>
+                    <li><strong>Autoscaling:</strong> Nomad nodepool autoscaler or Kubernetes HPA to add/remove 
+                    nodes based on queue depth.</li>
+                </ul>
+                <p>
+                    See 
+                    <a href="https://github.com/e2b-dev/runtime/blob/main/self-host.md" target="_blank">runtime/self-host.md</a> 
+                    for Terraform deployment guides (GCP, AWS, Azure).
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from E2B's official docs, source code, or labeled as vendor 
+                claims. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>E2B Runtime (Open Source)</h3>
+                <ul>
+                    <li><a href="https://github.com/e2b-dev/runtime" target="_blank">github.com/e2b-dev/runtime</a> — 
+                    Main repository (Apache-2.0 license)</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/blob/main/docs/ARCHITECTURE.md" target="_blank">docs/ARCHITECTURE.md</a> — 
+                    The canonical architecture document. Describes control plane, data plane, orchestrator, envd, 
+                    pause/resume/fork, userfaultfd, NBD CoW rootfs, placement, and data stores. <strong>Read this 
+                    first.</strong></li>
+                    <li><a href="https://github.com/e2b-dev/runtime/blob/main/README.md" target="_blank">README.md</a> — 
+                    Overview of the runtime: components, design principles, package structure</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/blob/main/DEV-LOCAL.md" target="_blank">DEV-LOCAL.md</a> — 
+                    Local development guide: Docker Compose stack, environment setup, troubleshooting</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/embed" target="_blank">embed/</a> — 
+                    E2B Embed: single-node deployment bundle (Docker Compose, Terraform, Kubernetes)</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/blob/main/self-host.md" target="_blank">self-host.md</a> — 
+                    Self-hosting guide: Terraform deployment on GCP, AWS, Azure</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>E2B Source Code (Key Packages)</h3>
+                <ul>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/api" target="_blank">packages/api</a> — 
+                    Control plane REST API (Go, Gin): lifecycle, placement, auth, quotas</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/orchestrator" target="_blank">packages/orchestrator</a> — 
+                    Data plane orchestrator (Go): Firecracker management, userfaultfd, NBD, networking, snapshots</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/envd" target="_blank">packages/envd</a> — 
+                    In-VM agent (Go): Connect RPC + REST (port 49983), process/filesystem/port APIs</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/client-proxy" target="_blank">packages/client-proxy</a> — 
+                    Edge router (Go): sandbox URL → node proxy, auto-resume on traffic</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/orchestrator/pkg/sandbox" target="_blank">packages/orchestrator/pkg/sandbox</a> — 
+                    Sandbox lifecycle: Firecracker API wrappers, userfaultfd handler, NBD server, snapshot export</li>
+                    <li><a href="https://github.com/e2b-dev/runtime/tree/main/packages/orchestrator/pkg/template/build" target="_blank">packages/orchestrator/pkg/template/build</a> — 
+                    Template builder: Docker image → ext4 rootfs → Firecracker boot → snapshot</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>E2B Official Documentation</h3>
+                <ul>
+                    <li><a href="https://docs.e2b.dev/" target="_blank">docs.e2b.dev</a> — 
+                    Main documentation site</li>
+                    <li><a href="https://docs.e2b.dev/template/how-it-works" target="_blank">Template: How it works</a> — 
+                    Template building process: Docker image → snapshot, layer caching, readiness checks</li>
+                    <li><a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">Sandbox persistence</a> — 
+                    Pause/resume: "Pause takes approximately 4 seconds per GiB of RAM. Resume takes approximately 
+                    1 second." (vendor claims)</li>
+                    <li><a href="https://docs.e2b.dev/sandbox/fork" target="_blank">Sandbox fork</a> — 
+                    Fork API: "With the SDKs and the CLI you can request up to 20 forks at once."</li>
+                    <li><a href="https://e2b.dev/open-source.md" target="_blank">E2B Open Source</a> — 
+                    Overview of E2B's open-source stack, repositories, self-hosting options</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Firecracker Snapshotting (Review from Lesson 05)</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">Firecracker snapshot-support.md</a> — 
+                    Full vs diff snapshots, create/restore API, compatibility</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/handling-page-faults-on-snapshot-resume.md" target="_blank">Firecracker handling-page-faults-on-snapshot-resume.md</a> — 
+                    userfaultfd lazy memory: how Firecracker loads pages on demand</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/random-for-clones.md" target="_blank">Firecracker random-for-clones.md</a> — 
+                    RNG clone hazard, VMGenID, reseeding mitigations</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/network-for-clones.md" target="_blank">Firecracker network-for-clones.md</a> — 
+                    MAC/IP clone hazard, network namespace per clone</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Independent Benchmarks and Papers</h3>
+                <ul>
+                    <li><strong>"Cold Start Latency in Serverless Computing: Snapshotting, Fork-Based Models, and the 
+                    Firecracker MicroVM Approach"</strong> (DOI: 
+                    <a href="https://doi.org/10.63721/26jsea0149" target="_blank">10.63721/26jsea0149</a>): 
+                    Independent measurements of Firecracker snapshot restore latency. Reports ~28ms median restore 
+                    latency for a 256MB working set on NVMe (measured end-to-end, not just the LoadSnapshot API call). 
+                    Compares Firecracker to fork-based models (REAP).</li>
+                    <li><a href="https://dev.to/adwitiya/how-i-built-sandboxes-that-boot-in-28ms-using-firecracker-snapshots-i0k" target="_blank">"How I built sandboxes that boot in 28ms using Firecracker snapshots"</a> — 
+                    Developer blog post with measured latencies: cold boot ~1.1s, snapshot restore ~28ms, exec ~3ms 
+                    (Firecracker + vsock, not E2B's full stack)</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Vendor Claims Summary</h3>
+                <p>
+                    Numbers marked as vendor claims (self-reported by E2B, not independently verified):
+                </p>
+                <ul>
+                    <li><strong>Pause:</strong> "approximately 4 seconds per GiB of RAM" (
+                    <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
+                    <li><strong>Resume:</strong> "approximately 1 second" (
+                    <a href="https://e2b.dev/docs/sandbox/persistence" target="_blank">source</a>)</li>
+                    <li><strong>Snapshot restore:</strong> "~80ms" (
+                    <a href="https://docs.e2b.dev/template/how-it-works" target="_blank">source</a>) — 
+                    this is for the <em>template</em> snapshot restore (create sandbox from template), which includes 
+                    userfaultfd lazy page-in and NBD CoW setup</li>
+                </ul>
+                <p>
+                    These are self-reported by E2B. Your results will vary based on sandbox RAM size, working set, 
+                    object storage latency, and host performance. Independent benchmarks (not E2B-specific) report 
+                    ~28ms for Firecracker snapshot restore alone (256MB working set, NVMe).
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Other Production Sandbox Systems (Comparison)</h3>
+                <ul>
+                    <li><strong>Morph Cloud (Infinibranch):</strong> 
+                    <a href="https://cloud.morph.so/docs/developers" target="_blank">Morph developers page</a> — 
+                    "snapshot, branch, and restore entire computational environments in under 250ms" (vendor claim); 
+                    <code>branch(count=n)</code> API</li>
+                    <li><strong>Daytona:</strong> 
+                    <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona isolation docs</a> — 
+                    Container vs VM classes, pause/resume/fork/hot snapshots (repo frozen June 2026)</li>
+                    <li><strong>Modal:</strong> 
+                    <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal sandbox snapshots</a> — 
+                    Filesystem snapshots (images), directory snapshots, memory snapshots (experimental, 7-day TTL)</li>
+                    <li><strong>Fly Machines:</strong> 
+                    <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a> — 
+                    Firecracker microVMs, fast stop/start, clone</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lesson</h3>
+                <p>
+                    In <strong>Lesson 07</strong>, you'll explore Daytona's architecture: how it offers two isolation 
+                    tiers (Container class with shared kernel, VM class with pause/resume/fork), when to use each, 
+                    and how it handles GPU allocation via exclusive node scheduling. Note: Daytona's OSS repo is frozen 
+                    (June 2026), so the lesson focuses on architecture study rather than live deployment.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../">← Back to Curriculum</a> | 
+                <a href="../../">← Back to All Lessons</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>

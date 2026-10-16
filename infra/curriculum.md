@@ -46,8 +46,8 @@ Dive into AWS's minimal VMM. Boot Firecracker by hand via its API, set up tap ne
 **05. Snapshot/Restore and Forking Agent State** ✅ *Complete*  
 Build fast warm pools with Firecracker snapshots and `userfaultfd` lazy memory. Implement GRPO-style forking: run an agent to step *k*, fork N children, sample differently. Handle clone hazards (RNG seeds, MAC addresses, VMGenID).
 
-**06. E2B's Open-Source Runtime Architecture** 📝 *Planned*  
-Study a production snapshot/fork system. Understand E2B's control plane (API + placement), data plane (orchestrator + envd), and how pause/resume/fork work end-to-end. Deploy E2B Embed locally.
+**06. E2B's Open-Source Runtime Architecture** ✅ *Complete*  
+Study a production snapshot/fork system. Understand E2B's control plane (API + placement), data plane (orchestrator + envd), and how pause/resume/fork work end-to-end. Deploy E2B Embed locally. Repo: [e2b-dev/runtime](https://github.com/e2b-dev/runtime).
 
 ### Phase 3: Hosted Sandbox Platforms (Lessons 07–09)
 
@@ -136,7 +136,7 @@ Every lesson cites primary sources. Key references for the overall curriculum:
 - **Firecracker**: [https://github.com/firecracker-microvm/firecracker](https://github.com/firecracker-microvm/firecracker)
 - **gVisor**: [https://gvisor.dev](https://gvisor.dev)
 - **Ray**: [https://docs.ray.io](https://docs.ray.io)
-- **E2B Runtime**: [https://github.com/e2b-dev/runtime](https://github.com/e2b-dev/runtime)
+- **E2B Runtime**: [https://github.com/e2b-dev/runtime](https://github.com/e2b-dev/runtime) (Apache-2.0, open-source backend)
 - **SWE-bench**: [https://github.com/SWE-bench/SWE-bench](https://github.com/SWE-bench/SWE-bench)
 - **Inspect AI**: [https://inspect.aisi.org.uk/sandboxing.html](https://inspect.aisi.org.uk/sandboxing.html)
 
