@@ -189,8 +189,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         pointHoverBorderColor: '#8b5cf6'
                     },
                     {
-                        label: 'GPT-4o (Approximate)',
-                        data: [74, 88, 85, 78, 82, 88],
+                        label: 'GPT-4o-0513',
+                        data: [9.3, 74.6, 23.6, 84.3, 51.1, 87.2],
                         borderColor: '#10b981',
                         backgroundColor: 'rgba(16, 185, 129, 0.1)',
                         pointBackgroundColor: '#10b981',
@@ -207,7 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 plugins: {
                     title: {
                         display: true,
-                        text: 'R1 vs R1-Zero vs GPT-4o (Approximate Comparison)',
+                        text: 'R1 vs R1-Zero vs GPT-4o-0513',
                         color: '#f1f5f9',
                         font: { size: 16 }
                     },

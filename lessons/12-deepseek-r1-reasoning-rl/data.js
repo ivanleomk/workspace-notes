@@ -49,7 +49,7 @@ const benchmarkCategories = [
             {
                 name: "Codeforces",
                 fullName: "Codeforces Competitive Programming",
-                r1Zero: "80.4 percentile, 1444 rating (approximate)",
+                r1Zero: "80.4 percentile, 1444 rating",
                 r1Final: "96.3 percentile, 2029 rating",
                 humanBaseline: "R1 outperforms 96.3% of all human competitors",
                 description: "International competitive programming platform. R1's 2029 rating places it in the top ~4% of all Codeforces users (Figure 10).",
