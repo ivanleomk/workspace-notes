@@ -24,6 +24,7 @@ Lessons alternate tracks to interleave theory with practice.
 | 09 | A | ✅ Complete | Holistic Evaluation (HELM) | Liang et al. (2022) |
 | 10 | B | ✅ Complete | Tülu 3: Open Post-Training | Lambert et al. (Allen AI, 2024) |
 | 11 | A | ✅ Complete | IFEval: Verifiable Instruction-Following | Zhou et al. (Google Research, 2023) |
+| 12 | B | ✅ Complete | DeepSeek-R1: Reasoning via RL | DeepSeek-AI (2025) |
 
 ## Learning Objectives by Track
 
@@ -65,9 +66,10 @@ Each lesson includes:
 - ✅ Lesson 09 (Track A): HELM - Holistic Evaluation of Language Models (Liang et al., 2022)
 - ✅ Lesson 10 (Track B): Tülu 3 - Open Post-Training (Lambert et al., Allen AI, 2024)
 - ✅ Lesson 11 (Track A): IFEval - Verifiable Instruction-Following Evaluation (Zhou et al., Google Research, 2023)
+- ✅ Lesson 12 (Track B): DeepSeek-R1 - Reasoning via Reinforcement Learning (DeepSeek-AI, 2025)
 
 **Next Up:**
-Lesson 12 (Track B): The next post-training technique could explore iterative preference learning, multi-turn RLHF, safety-specific RL, or domain adaptation for specialized models.
+Lesson 13 (Track A): A foundational classic not yet covered could explore benchmark contamination and evaluation integrity (e.g., "Documenting Large Webtext Corpora" or contamination detection methods), cross-lingual evaluation frameworks, or adversarial robustness benchmarks.
 
 ## How to Request a Lesson
 

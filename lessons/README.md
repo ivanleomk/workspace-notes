@@ -270,6 +270,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 09: HELM - Holistic Evaluation](https://ivanleomk.github.io/workspace-notes/09-helm-holistic-evaluation/)
 - [Lesson 10: Tülu 3 - Open Post-Training](https://ivanleomk.github.io/workspace-notes/10-tulu3-open-post-training/)
 - [Lesson 11: IFEval - Instruction-Following Evaluation](https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/)
+- [Lesson 12: DeepSeek-R1 - Reasoning via RL](https://ivanleomk.github.io/workspace-notes/12-deepseek-r1-reasoning-rl/)
 
 ### 💻 Local Serving (for development)
 ```bash
