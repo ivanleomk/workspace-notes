@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 12: DeepSeek-R1 - Reasoning via Reinforcement Learning</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 12: DeepSeek-R1 - Reasoning via RL</h1>
+            <p class="subtitle">Track B: SOTA Post-Training | Paper: DeepSeek-AI (2025)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#r1-zero">R1-Zero: Pure RL</a>
+            <a href="#emergent">Emergent Behaviors</a>
+            <a href="#r1-pipeline">R1 Multi-Stage Pipeline</a>
+            <a href="#rewards">Reward Design</a>
+            <a href="#results">Results & Benchmarks</a>
+            <a href="#distillation">Distillation</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#explorer">Results Explorer</a>
+            <a href="#charts">Charts & Data</a>
+            <a href="#bridge">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Introduction: Reasoning Without Human Demonstrations</h2>
+            
+            <p>
+                In Lesson 06 (DeepSeekMath / GRPO), you learned how reinforcement learning with verifiable rewards can 
+                train models to solve math problems. But that approach still started with supervised fine-tuning (SFT) 
+                on human-written solutions before applying RL. What if you could skip SFT entirely and let the model 
+                discover its own reasoning strategies through pure RL?
+            </p>
+
+            <div class="info-box">
+                <h3>The DeepSeek-R1 Vision</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2501.12948" target="_blank">DeepSeek-AI (2025)</a> demonstrated 
+                    that <strong>pure reinforcement learning on a base model</strong>, with only correctness rewards 
+                    and no human reasoning demonstrations, can incentivize sophisticated reasoning capabilities. 
+                    The resulting model, <strong>DeepSeek-R1-Zero</strong>, naturally developed self-verification, 
+                    reflection, and multi-path exploration—behaviors that were never explicitly programmed.
+                </p>
+                <p><strong>Key insight:</strong> Human-annotated reasoning traces aren't necessary to teach models 
+                how to reason. With a base model that has seen reasoning-heavy pretraining data (math, code), 
+                a reliable verifier (ground-truth answers), and sufficient RL compute, models can discover 
+                reasoning strategies that rival or exceed human-designed approaches.</p>
+            </div>
+
+            <h3>From R1-Zero to R1: Practical Refinement</h3>
+            <p>
+                While R1-Zero achieved breakthrough reasoning performance, it had issues: poor readability, 
+                language mixing (English/Chinese), and narrow focus (reasoning tasks only). 
+                <strong>DeepSeek-R1</strong> addresses these through a multi-stage pipeline:
+            </p>
+
+            <ul>
+                <li><strong>Cold-start SFT:</strong> Small amount of clean, human-aligned reasoning data to 
+                establish readable output patterns</li>
+                <li><strong>Reasoning-oriented RL:</strong> Large-scale RL on math, code, and logic tasks 
+                (similar to R1-Zero but starting from SFT checkpoint)</li>
+                <li><strong>Rejection sampling + SFT:</strong> Mix reasoning and general instruction data 
+                to broaden capabilities</li>
+                <li><strong>Final RL:</strong> Polish with both reasoning (rule-based) and general (reward model) 
+                signals</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>What You'll Learn</h4>
+                <ul>
+                    <li>Why R1-Zero skips SFT and how pure RL discovers reasoning patterns</li>
+                    <li>Emergent behaviors: self-verification, reflection, "aha moments"</li>
+                    <li>Problems with R1-Zero: readability, language mixing, domain coverage</li>
+                    <li>R1's four-stage pipeline: cold-start SFT → RL → rejection sampling + SFT → final RL</li>
+                    <li>Rule-based vs neural reward models: why R1 avoids learned RMs for reasoning</li>
+                    <li>Distillation: transferring R1's reasoning to smaller dense models (Qwen, Llama)</li>
+                    <li>Benchmark results: AIME 2024 (79.8%), MATH-500 (97.3%), Codeforces (96.3 percentile)</li>
+                    <li>Connection to Lesson 06 (GRPO), Lesson 11 (IFEval), and evals across the curriculum</li>
+                </ul>
+            </div>
+
+            <h3>Why This Lesson Matters</h3>
+            <p>
+                DeepSeek-R1 demonstrates that the boundary between "what humans can teach" and "what models 
+                can learn" is shifting. Rather than constraining models to mimic human reasoning traces 
+                (which may be suboptimal), pure RL allows models to explore and discover superior strategies. 
+                This has profound implications for domains where human expertise is limited or expensive—models 
+                trained via RL can potentially surpass human performance on any task with a reliable verifier.
+            </p>
+        </section>
+
+        <section id="r1-zero" class="content-section">
+            <h2>DeepSeek-R1-Zero: Pure RL on a Base Model</h2>
+
+            <h3>Starting Point: DeepSeek-V3-Base</h3>
+            <p>
+                R1-Zero begins with <strong>DeepSeek-V3-Base</strong>, a 671B-parameter MoE base model 
+                (37B active per token) pretrained on 14.8 trillion tokens. Critically, the pretraining data 
+                included substantial math and code content—not synthetic reasoning chains, but naturally 
+                occurring web pages, e-books, GitHub repositories, and Stack Overflow threads. This exposure 
+                gave the base model latent reasoning capabilities that RL could then unlock.
+            </p>
+
+            <div class="info-box">
+                <h4>Why No SFT?</h4>
+                <p>
+                    Traditional post-training (Lesson 02: InstructGPT) starts with SFT on human demonstrations, 
+                    then applies RL. But human reasoning traces have limitations:
+                </p>
+                <ul>
+                    <li><strong>Cognitive biases:</strong> Humans may skip steps, follow suboptimal paths, 
+                    or fail to explore alternatives</li>
+                    <li><strong>Limited coverage:</strong> Human annotations are expensive, so SFT datasets 
+                    are relatively small</li>
+                    <li><strong>Ceiling effect:</strong> Models learn to replicate human performance, not 
+                    exceed it</li>
+                </ul>
+                <p>
+                    R1-Zero bypasses SFT entirely, allowing the model to explore reasoning strategies freely 
+                    without being anchored to human priors. The hypothesis: unrestricted RL training can 
+                    better incentivize emergent reasoning capabilities.
+                </p>
+            </div>
+
+            <h3>Training Setup: GRPO with Verifiable Rewards</h3>
+            <p>
+                R1-Zero uses <strong>Group Relative Policy Optimization (GRPO)</strong> (from Lesson 06), 
+                a simplified RL algorithm that eliminates the value network used in PPO. For each question, 
+                GRPO samples a group of outputs (16 per question in R1-Zero's setup) and assigns rewards 
+                based on correctness.
+            </p>
+
+            <h4>Key Training Details:</h4>
+            <ul>
+                <li><strong>Algorithm:</strong> GRPO with learning rate 3e-6, KL coefficient 0.001, 
+                temperature 1.0</li>
+                <li><strong>Sampling:</strong> 16 outputs per question, max length 32,768 tokens 
+                (increased to 65,536 after step 8,200)</li>
+                <li><strong>Training duration:</strong> 10,400 steps (1.6 epochs) over reasoning datasets 
+                (math, code, logic)</li>
+                <li><strong>Batch size:</strong> 32 unique questions per step, 512 total samples 
+                (32 × 16)</li>
+                <li><strong>Reference model update:</strong> Every 400 steps, replace reference with 
+                latest policy</li>
+            </ul>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>AIME 2024 Performance Trajectory</h4>
+                    <p>
+                        R1-Zero's pass@1 accuracy on AIME 2024 (American Invitational Mathematics Examination) 
+                        jumped from <strong>15.6%</strong> (initial) to <strong>77.9%</strong> (final), as 
+                        reported in Figure 1(a) of the paper. With self-consistency decoding (sampling 16 
+                        solutions and taking the majority answer), this improved further to 
+                        <strong>86.7%</strong>, surpassing the average human competitor.
+                    </p>
+                    <p><em>Source: Paper Section 2.3, Figure 1(a)</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Response Length Growth</h4>
+                    <p>
+                        As training progressed, R1-Zero's average response length increased dramatically—from 
+                        hundreds of tokens to thousands. This wasn't explicitly incentivized; the model 
+                        autonomously discovered that generating longer, more detailed reasoning chains 
+                        (with exploration, verification, and reflection) improved its success rate.
+                    </p>
+                    <p><em>Source: Paper Section 2.3, Figure 1(b)</em></p>
+                </div>
+            </div>
+
+            <h3>The Template: Minimal Constraints</h3>
+            <p>
+                R1-Zero used a simple prompt template (Table 1 in the paper) that only specified the 
+                structural format: produce a reasoning process inside special tags, then provide the 
+                final answer. No content-specific guidance was given—no "verify your work," no "consider 
+                alternatives," no reasoning strategies at all.
+            </p>
+
+            <blockquote>
+                "A conversation between User and Assistant. The user asks a question, and the Assistant 
+                solves it. The assistant first thinks about the reasoning process in the mind and then 
+                provides the user with the answer. The reasoning process and answer are enclosed within 
+                [special tags]."
+                <footer>— R1-Zero template (Table 1, verbatim summary)</footer>
+            </blockquote>
+        </section>
+
+        <section id="emergent" class="content-section">
+            <h2>Emergent Behaviors: What R1-Zero Discovered</h2>
+
+            <p>
+                During RL training, R1-Zero autonomously developed sophisticated reasoning behaviors that 
+                were never explicitly programmed. These emergent patterns reveal what models learn when 
+                given the freedom to explore reasoning strategies through pure reinforcement.
+            </p>
+
+            <h3>Self-Verification and Reflection</h3>
+            <p>
+                R1-Zero learned to check its own work: after deriving a solution, it would re-examine 
+                assumptions, test edge cases, and sometimes catch and correct errors. This behavior emerged 
+                naturally because self-verification increases the probability of reaching the correct answer 
+                (which the reward function values).
+            </p>
+
+            <h3>The "Aha Moment"</h3>
+            <p>
+                Table 2 of the paper showcases a remarkable example: an intermediate R1-Zero checkpoint 
+                solving a math problem. Midway through, the model suddenly writes:
+            </p>
+
+            <blockquote>
+                "Wait, wait. Wait. That's an aha moment I can flag here. Let's reevaluate this step-by-step 
+                to identify if the correct sum can be…"
+                <footer>— R1-Zero intermediate checkpoint (Table 2, verbatim excerpt)</footer>
+            </blockquote>
+
+            <p>
+                The model spontaneously adopted an anthropomorphic reflective tone—using phrases like 
+                "wait" and "aha moment"—without any human examples teaching this behavior. Analysis showed 
+                a sudden spike in the word "wait" during training (Figure 9(b) in Supplementary C.2), 
+                marking a phase transition in reasoning strategy.
+            </p>
+
+            <div class="info-box">
+                <h4>Why This Matters</h4>
+                <p>
+                    The "aha moment" demonstrates that RL can discover meta-cognitive strategies (thinking 
+                    about thinking) purely from optimization pressure. The model learned that pausing to 
+                    reflect and reconsider increases accuracy, so it integrated this pattern into its 
+                    problem-solving approach—mimicking a human insight loop without being explicitly taught.
+                </p>
+            </div>
+
+            <h3>Multi-Path Exploration</h3>
+            <p>
+                R1-Zero often explored multiple solution approaches within a single response: trying one 
+                method, recognizing potential issues, backing up, and attempting an alternative. This 
+                parallel exploration increased the chances of finding a correct path, especially on hard 
+                problems with non-obvious solutions.
+            </p>
+
+            <h3>Problems with R1-Zero</h3>
+            <p>
+                Despite its impressive reasoning capabilities, R1-Zero had significant practical issues:
+            </p>
+
+            <div class="limitation-card">
+                <h3>⚠️ Poor Readability</h3>
+                <p>
+                    R1-Zero's reasoning chains were long, meandering, and difficult for humans to follow. 
+                    The model optimized for correctness, not clarity—its outputs resembled raw exploration 
+                    logs rather than polished explanations.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>⚠️ Language Mixing</h3>
+                <p>
+                    Because DeepSeek-V3-Base was pretrained primarily on Chinese and English, R1-Zero 
+                    often mixed languages within a single response—switching between English reasoning 
+                    and Chinese annotations, or vice versa. Without a language consistency reward, the 
+                    model had no incentive to stay in one language.
+                </p>
+            </div>
+
+            <div class="limitation-card">
+                <h3>⚠️ Narrow Domain Coverage</h3>
+                <p>
+                    R1-Zero was trained exclusively on reasoning tasks (math, code, logic). It had no 
+                    exposure to general instruction-following, creative writing, or open-domain Q&A. 
+                    As a result, it performed poorly outside its training distribution.
+                </p>
+            </div>
+        </section>
+
+        <section id="r1-pipeline" class="content-section">
+            <h2>DeepSeek-R1: Multi-Stage Pipeline for Production Use</h2>
+
+            <p>
+                To address R1-Zero's limitations while preserving its reasoning breakthroughs, DeepSeek-AI 
+                developed <strong>DeepSeek-R1</strong> through a four-stage training pipeline (Figure 2 
+                of the paper). Each stage targets specific issues:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Stage 1: Cold-Start SFT (→ R1-Dev1)</h4>
+                    <p>
+                        <strong>Data:</strong> Thousands of examples with clean, human-aligned reasoning 
+                        processes—conversational tone, single-language consistency, readable structure.
+                    </p>
+                    <p>
+                        <strong>Purpose:</strong> Establish a baseline for output quality and readability. 
+                        Unlike R1-Zero, this SFT stage uses curated data to anchor the model's style before 
+                        applying RL.
+                    </p>
+                    <p>
+                        <strong>Result:</strong> R1-Dev1 has much better instruction-following (IFEval: 
+                        46.6% → 71.7%, ArenaHard: 53.6% → 77.0% from Table 3) but weaker reasoning than 
+                        R1-Zero (AIME: 77.9% → 59.0%).
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 2: Reasoning-Oriented RL (→ R1-Dev2)</h4>
+                    <p>
+                        <strong>Data:</strong> Math, code, and logic reasoning tasks (same as R1-Zero).
+                    </p>
+                    <p>
+                        <strong>Reward:</strong> Rule-based accuracy + format rewards + language consistency 
+                        reward (proportion of target-language words in reasoning chain).
+                    </p>
+                    <p>
+                        <strong>Purpose:</strong> Recover R1-Zero's reasoning power while maintaining 
+                        readability from Dev1. Language consistency reward reduces mixing.
+                    </p>
+                    <p>
+                        <strong>Result:</strong> R1-Dev2 reclaims strong reasoning (AIME: 59.0% → 74.0%, 
+                        MATH-500: 94.2% → 95.9%, Codeforces: 84.5% → 90.5% from Table 3).
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 3: Rejection Sampling + SFT (→ R1-Dev3)</h4>
+                    <p>
+                        <strong>Data:</strong> Mix of reasoning datasets and non-reasoning general instruction 
+                        data (writing, Q&A, multi-turn dialogue, code engineering).
+                    </p>
+                    <p>
+                        <strong>Method:</strong> Sample multiple completions from Dev2, select high-quality 
+                        ones (rejection sampling), then SFT on the filtered dataset.
+                    </p>
+                    <p>
+                        <strong>Purpose:</strong> Broaden capabilities beyond reasoning; enable strong 
+                        performance on chat, writing, and general tasks.
+                    </p>
+                    <p>
+                        <strong>Result:</strong> R1-Dev3 improves on general benchmarks (AlpacaEval: 55.8% → 
+                        62.1%, Aider-Polyglot: 25.6% → 44.8% from Table 3) while maintaining reasoning gains.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Stage 4: Final RL (→ R1)</h4>
+                    <p>
+                        <strong>Data:</strong> Mixed batch of reasoning tasks (rule-based rewards) and 
+                        general tasks (reward model signals).
+                    </p>
+                    <p>
+                        <strong>Rewards:</strong> 
+                        <br>• Reasoning: accuracy + format + language consistency (same as Stage 2)
+                        <br>• General: helpful reward model (preference comparisons) + safety reward model 
+                        (safe vs unsafe)
+                    </p>
+                    <p>
+                        <strong>Purpose:</strong> Polish the model with both reasoning precision and user 
+                        preference alignment.
+                    </p>
+                    <p>
+                        <strong>Result:</strong> Final R1 achieves state-of-the-art results on reasoning 
+                        (AIME: 78.1% → 79.8%, MATH-500: 95.4% → 97.3%) and massive gains on chat 
+                        (AlpacaEval: 62.1% → 87.6%, ArenaHard: 75.6% → 92.3% from Table 3).
+                    </p>
+                </div>
+            </div>
+
+            <h3>Key Observations from the Pipeline</h3>
+
+            <div class="info-box">
+                <h4>Cold-Start Data Size Matters</h4>
+                <p>
+                    Dev1 used only thousands of examples (exact count not specified in paper), 
+                    much smaller than typical SFT datasets. This limited data caused reasoning performance 
+                    to initially drop from R1-Zero (AIME 77.9% → 59.0%). But it established the output 
+                    format needed for subsequent RL to succeed.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>Reasoning RL Needs Large Scale</h4>
+                <p>
+                    Stage 2 (reasoning-oriented RL) ran for the majority of training. The paper notes this 
+                    stage had the most training steps focused on reasoning tasks, recovering and surpassing 
+                    R1-Zero's capabilities while maintaining readability.
+                </p>
+            </div>
+
+            <div class="info-box warning">
+                <h4>⚠️ Reward Model Instability</h4>
+                <p>
+                    Stage 4 (final RL) used a learned reward model for general tasks. The paper mentions 
+                    (Supplementary B.5) that training too long with the preference-based reward model 
+                    leads to <strong>reward hacking</strong>—the policy exploits the reward model's 
+                    weaknesses. Final RL ran for only 1,700 steps total, with general reward model 
+                    applied in just the last 400 steps.
+                </p>
+            </div>
+        </section>
+
+        <section id="rewards" class="content-section">
+            <h2>Reward Design: Rule-Based vs Neural Models</h2>
+
+            <h3>Why Avoid Neural Reward Models for Reasoning?</h3>
+            <p>
+                A central design choice in R1 is using <strong>rule-based rewards</strong> for reasoning 
+                tasks instead of training a neural reward model (as in traditional RLHF from Lesson 02). 
+                The paper explicitly states (Section 2.2):
+            </p>
+
+            <blockquote>
+                "Notably, we abstain from applying neural reward models—whether outcome-based or 
+                process-based—to reasoning tasks. This decision is predicated on our observation that 
+                neural reward models are susceptible to reward hacking during large-scale reinforcement 
+                learning."
+                <footer>— Paper Section 2.2, verbatim</footer>
+            </blockquote>
+
+            <h3>Rule-Based Rewards for Reasoning</h3>
+            <p>
+                R1 uses two types of rule-based rewards, combined with equal weight:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Accuracy Reward</h4>
+                    <p>
+                        <strong>Math:</strong> Extract the final answer (using regex or LLM-based parsing 
+                        from response text), compare to ground truth. Reward = 1.0 if correct, 0.0 otherwise.
+                    </p>
+                    <p>
+                        <strong>Code:</strong> Run the generated code against test cases. Reward = 1.0 if 
+                        all tests pass, 0.0 if any fail.
+                    </p>
+                    <p>
+                        <strong>Logic/IF:</strong> Check constraint satisfaction (e.g., IFEval from Lesson 11). 
+                        Reward = 1.0 if all constraints met, 0.0 otherwise.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Format Reward</h4>
+                    <p>
+                        The model must encapsulate its reasoning inside designated tags (special markers 
+                        for reasoning process and final answer). This ensures the output is parseable and 
+                        structured.
+                    </p>
+                    <p>
+                        <strong>Why it matters:</strong> Without format enforcement, the model might output 
+                        unstructured text that's difficult to extract answers from, making automated 
+                        verification impossible.
+                    </p>
+                </div>
+            </div>
+
+            <p style="text-align: center; margin: 20px 0; font-family: monospace; font-size: 1.1em;">
+                Reward<sub>rule</sub> = Reward<sub>accuracy</sub> + Reward<sub>format</sub>
+            </p>
+            <p style="text-align: center; color: var(--text-secondary);"><em>Equation 4 from the paper</em></p>
+
+            <h3>Language Consistency Reward</h3>
+            <p>
+                To address R1-Zero's language mixing, R1 adds a language consistency reward during RL 
+                (Stages 2 and 4):
+            </p>
+
+            <p style="text-align: center; margin: 20px 0; font-family: monospace; font-size: 1.1em;">
+                Reward<sub>language</sub> = Num(Words<sub>target</sub>) / Num(Words)
+            </p>
+            <p style="text-align: center; color: var(--text-secondary);"><em>Equation 7 from the paper</em></p>
+
+            <p>
+                This reward is the proportion of target-language words in the reasoning chain. For an 
+                English query, the model gets higher reward for using more English tokens and fewer 
+                Chinese tokens (and vice versa). The paper notes (Supplementary B.6) that this causes 
+                a <em>slight performance degradation</em> on reasoning benchmarks but substantially 
+                improves human readability.
+            </p>
+
+            <h3>Model-Based Rewards for General Tasks</h3>
+            <p>
+                For non-reasoning data in Stage 4, R1 uses two trained reward models:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Helpful Reward Model</h4>
+                    <p>
+                        Trained on 66,000 preference pairs where DeepSeek-V3 judged which response was 
+                        more helpful (using arena-hard prompt format, Supplementary B.2). Only pairs with 
+                        score difference Δ > 1 were retained.
+                    </p>
+                    <p>
+                        <strong>Scope:</strong> Evaluates only the final summary (not the reasoning process), 
+                        ensuring the model's utility to the user.
+                    </p>
+                    <p>
+                        <strong>Bias mitigation:</strong> Responses were length-balanced and positionally 
+                        randomized (Response A vs B) across 4 judgments per pair.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Safety Reward Model</h4>
+                    <p>
+                        Trained on 106,000 examples labeled as "safe" or "unsafe" according to safety 
+                        guidelines. Uses point-wise loss (not pairwise comparison).
+                    </p>
+                    <p>
+                        <strong>Scope:</strong> Evaluates the entire response (reasoning + summary) to 
+                        identify harmful content, biases, or risks.
+                    </p>
+                    <p>
+                        <strong>Purpose:</strong> Prevent the model from generating dangerous or 
+                        unethical content, even when pursuing correctness in reasoning.
+                    </p>
+                </div>
+            </div>
+
+            <p style="text-align: center; margin: 20px 0; font-family: monospace; font-size: 1.1em;">
+                Reward = Reward<sub>reasoning</sub> + Reward<sub>general</sub> + Reward<sub>language</sub>
+            </p>
+            <p style="text-align: center; color: var(--text-secondary);"><em>Equation 8 from the paper (Stage 4)</em></p>
+
+            <div class="info-box warning">
+                <h4>⚠️ Why Not Use Reward Models for Reasoning?</h4>
+                <p>
+                    The paper observed that neural reward models, even process reward models (PRMs) that 
+                    score intermediate steps, get exploited during large-scale RL. The policy model finds 
+                    shortcuts that maximize the reward model's score without actually improving reasoning 
+                    quality. Rule-based rewards are immune to this because they verify ground truth directly.
+                </p>
+                <p>
+                    Supplementary Section on unsuccessful attempts mentions that <strong>PRM and MCTS</strong> 
+                    (Monte Carlo Tree Search) were tried but did not yield better results than the chosen 
+                    rule-based RL approach.
+                </p>
+            </div>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: State-of-the-Art Reasoning Performance</h2>
+
+            <h3>Key Benchmarks: Math, Code, and General</h3>
+            <p>
+                DeepSeek-R1 achieves frontier performance across reasoning benchmarks. Table 3 of the paper 
+                shows results across all training stages. Here we report final R1 scores with sources:
+            </p>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">79.8%</div>
+                    <div class="stat-label">AIME 2024 Pass@1</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">97.3%</div>
+                    <div class="stat-label">MATH-500 Pass@1</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">96.3%</div>
+                    <div class="stat-label">Codeforces Percentile</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">87.6%</div>
+                    <div class="stat-label">AlpacaEval 2.0 LC Win Rate</div>
+                </div>
+            </div>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>All values from Table 3, final R1 column</em>
+            </p>
+
+            <h3>Detailed Benchmark Breakdown</h3>
+
+            <h4>Mathematics</h4>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>AIME 2024 (American Invitational Math Exam)</h4>
+                    <p><strong>R1-Zero:</strong> 77.9% pass@1, 86.7% with self-consistency (Cons@16)</p>
+                    <p><strong>R1 (final):</strong> 79.8% pass@1</p>
+                    <p>Surpasses average human competitor performance.</p>
+                    <p><em>Source: Table 3, Figure 1(a), Section 2.3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>MATH-500 (Competition Math)</h4>
+                    <p><strong>R1-Zero:</strong> 95.9%</p>
+                    <p><strong>R1 (final):</strong> 97.3%</p>
+                    <p>Highest reported score on this benchmark.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>CNMO 2024 (Chinese National Math Olympiad)</h4>
+                    <p><strong>R1-Zero:</strong> 88.1%</p>
+                    <p><strong>R1 (final):</strong> 78.8%</p>
+                    <p>Note: Slight regression from R1-Zero, likely due to language consistency reward 
+                    affecting Chinese math performance.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>GPQA Diamond (Graduate-Level STEM)</h4>
+                    <p><strong>R1-Zero:</strong> 75.8%</p>
+                    <p><strong>R1 (final):</strong> 71.5%</p>
+                    <p>Human Ph.D. experts with web access still outperform R1 on this benchmark 
+                    (Figure 10).</p>
+                    <p><em>Source: Table 3, Figure 10</em></p>
+                </div>
+            </div>
+
+            <h4>Coding</h4>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Codeforces (Competitive Programming)</h4>
+                    <p><strong>R1 Percentile:</strong> 96.3%</p>
+                    <p><strong>R1 Rating:</strong> 2029 (approximately)</p>
+                    <p>R1 outperforms 96.3% of all human Codeforces competitors (Figure 10).</p>
+                    <p><em>Source: Table 3, Figure 10</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>LiveCodeBench (Recent Code Tasks)</h4>
+                    <p><strong>R1-Zero:</strong> 50.0% pass@1</p>
+                    <p><strong>R1 (final):</strong> 65.9% pass@1</p>
+                    <p>Tests code generation on problems from 2024-08 to 2025-01, reducing 
+                    contamination risk.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>SWE-Bench Verified (Software Engineering)</h4>
+                    <p><strong>R1-Zero:</strong> 43.2%</p>
+                    <p><strong>R1 (final):</strong> 49.2%</p>
+                    <p>Real-world GitHub issues. Paper notes (Section 6) that large-scale RL wasn't 
+                    applied extensively to SWE tasks due to long evaluation times.</p>
+                    <p><em>Source: Table 3, Section 6</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Aider-Polyglot (Code Editing)</h4>
+                    <p><strong>R1 (final):</strong> 53.3%</p>
+                    <p>Multi-file code editing across languages. Major improvement from Dev2 
+                    (25.6%) after Stage 3 incorporated code engineering data.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+            </div>
+
+            <h4>General / Instruction-Following</h4>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>IFEval (Instruction Following)</h4>
+                    <p><strong>R1-Zero:</strong> 46.6% (Prompt Strict)</p>
+                    <p><strong>R1 (final):</strong> 83.3%</p>
+                    <p>Dramatic improvement through cold-start SFT and final RL. Connects to 
+                    Lesson 11 (IFEval benchmark).</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>AlpacaEval 2.0 (Chat Quality)</h4>
+                    <p><strong>R1-Zero:</strong> 24.7% LC win rate</p>
+                    <p><strong>R1 (final):</strong> 87.6%</p>
+                    <p>Massive gain (62.9 percentage points) from integrating general instruction 
+                    data and helpful reward model.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>ArenaHard (GPT-4 Judge)</h4>
+                    <p><strong>R1-Zero:</strong> 53.6%</p>
+                    <p><strong>R1 (final):</strong> 92.3%</p>
+                    <p>Challenging open-ended questions judged by GPT-4. Final RL stage added 
+                    17 percentage points (Dev3: 75.6% → R1: 92.3%).</p>
+                    <p><em>Source: Table 3, Section 3.2.2</em></p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>MMLU / MMLU-Pro (Knowledge)</h4>
+                    <p><strong>MMLU:</strong> 90.8% (exact match)</p>
+                    <p><strong>MMLU-Redux:</strong> 92.9%</p>
+                    <p><strong>MMLU-Pro:</strong> 84.0%</p>
+                    <p>Strong performance on knowledge benchmarks, comparable to GPT-4 class models.</p>
+                    <p><em>Source: Table 3</em></p>
+                </div>
+            </div>
+
+            <h3>Stage-by-Stage Evolution (Table 3 Summary)</h3>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Benchmark</th>
+                        <th>R1-Zero</th>
+                        <th>Dev1 (Cold SFT)</th>
+                        <th>Dev2 (Reasoning RL)</th>
+                        <th>Dev3 (Rejection + SFT)</th>
+                        <th>R1 (Final RL)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>AIME 2024</td>
+                        <td>77.9%</td>
+                        <td>59.0%</td>
+                        <td>74.0%</td>
+                        <td>78.1%</td>
+                        <td>79.8%</td>
+                    </tr>
+                    <tr>
+                        <td>MATH-500</td>
+                        <td>95.9%</td>
+                        <td>94.2%</td>
+                        <td>95.9%</td>
+                        <td>95.4%</td>
+                        <td>97.3%</td>
+                    </tr>
+                    <tr>
+                        <td>Codeforces %ile</td>
+                        <td>80.4%</td>
+                        <td>84.5%</td>
+                        <td>90.5%</td>
+                        <td>92.1%</td>
+                        <td>96.3%</td>
+                    </tr>
+                    <tr>
+                        <td>IFEval</td>
+                        <td>46.6%</td>
+                        <td>71.7%</td>
+                        <td>72.0%</td>
+                        <td>78.1%</td>
+                        <td>83.3%</td>
+                    </tr>
+                    <tr>
+                        <td>AlpacaEval 2.0</td>
+                        <td>24.7%</td>
+                        <td>50.1%</td>
+                        <td>55.8%</td>
+                        <td>62.1%</td>
+                        <td>87.6%</td>
+                    </tr>
+                    <tr>
+                        <td>ArenaHard</td>
+                        <td>53.6%</td>
+                        <td>77.0%</td>
+                        <td>73.2%</td>
+                        <td>75.6%</td>
+                        <td>92.3%</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>All values from Table 3 of the paper</em>
+            </p>
+
+            <div class="info-box">
+                <h4>Key Takeaways</h4>
+                <ul>
+                    <li><strong>Dev1 tradeoff:</strong> Cold-start SFT improved instruction-following 
+                    but temporarily degraded reasoning (AIME dropped 18.9 points)</li>
+                    <li><strong>Dev2 recovery:</strong> Reasoning-oriented RL brought back R1-Zero's 
+                    reasoning power while maintaining readability</li>
+                    <li><strong>Dev3 broadening:</strong> Non-reasoning data massively improved chat 
+                    quality (AlpacaEval +6.3 points) and code engineering (Aider +19.2 points)</li>
+                    <li><strong>Final RL polish:</strong> Last 400 steps with helpful/safety RMs added 
+                    25.5 points on AlpacaEval and 16.7 on ArenaHard</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="distillation" class="content-section">
+            <h2>Distillation: Transferring Reasoning to Smaller Models</h2>
+
+            <h3>Why Distillation?</h3>
+            <p>
+                DeepSeek-R1 is a 671B-parameter MoE model (37B active). Running it at scale is 
+                expensive and energy-intensive. To enable broader access, DeepSeek-AI distilled R1's 
+                reasoning capabilities into much smaller dense models:
+            </p>
+
+            <ul>
+                <li><strong>Qwen 1.5B, 7B, 14B, 32B</strong> (dense)</li>
+                <li><strong>Llama 8B, 70B</strong> (dense)</li>
+            </ul>
+
+            <div class="info-box">
+                <h4>Distillation Process</h4>
+                <p>
+                    The paper (Supplementary F) describes distillation as using R1's long reasoning 
+                    chains as training data for smaller models via supervised fine-tuning. The smaller 
+                    models learn to mimic R1's step-by-step reasoning patterns without needing to 
+                    rediscover them through RL.
+                </p>
+                <p>
+                    <strong>Key finding:</strong> Distilled models significantly outperform their 
+                    original instruction-tuned counterparts (e.g., Qwen2.5-Math-7B-Instruct), 
+                    demonstrating that R1's reasoning strategies are transferable and not purely 
+                    emergent from scale.
+                </p>
+            </div>
+
+            <h3>Distilled Model Performance (Approximate from Paper)</h3>
+            <p>
+                The paper reports that distilled models "exhibit strong reasoning capabilities, 
+                surpassing the performance of their original instruction-tuned counterparts" 
+                (Section 1, final paragraph). Specific numbers for distilled models are in 
+                Supplementary F and comparisons throughout Section 4, but the paper emphasizes 
+                the qualitative success of transferring long-CoT reasoning to small models.
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>RL on Small Models vs Distillation</h4>
+                    <p>
+                        The paper contrasts two approaches: (1) directly applying RL to a small model 
+                        (expensive, may not discover advanced reasoning), (2) distilling from a large 
+                        RL-trained model (cheaper, proven to work).
+                    </p>
+                    <p>
+                        <strong>Conclusion:</strong> Distillation is more practical. Small models 
+                        trained via RL from scratch may not have the capacity to discover complex 
+                        reasoning behaviors that emerge in larger models.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Open Release</h4>
+                    <p>
+                        All distilled models are released on HuggingFace under the DeepSeek-AI 
+                        organization. The paper notes (Section 1) that these models "significantly 
+                        contribute to the research community by providing a valuable resource for 
+                        understanding the mechanisms underlying long chain-of-thought (CoT) reasoning."
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of DeepSeek-R1's RL-based reasoning approach:</p>
+            <div id="quiz-container" class="quiz-container"></div>
+            <div class="quiz-summary" id="quiz-summary" style="display: none;">
+                <h3>Quiz Complete!</h3>
+                <div class="quiz-score" id="quiz-score"></div>
+                <button class="btn" onclick="location.reload()">Retake Quiz</button>
+            </div>
+        </section>
+
+        <section id="explorer" class="content-section">
+            <h2>Results Explorer</h2>
+            <p>Explore R1's performance across different benchmark categories:</p>
+            
+            <div class="explorer-controls">
+                <label for="benchmarkSelect">Select Category:</label>
+                <select id="benchmarkSelect" onchange="updateBenchmark()">
+                    <option value="0">Mathematics</option>
+                    <option value="1">Coding</option>
+                    <option value="2">Instruction Following & Chat</option>
+                    <option value="3">Knowledge & General</option>
+                </select>
+            </div>
+
+            <div id="benchmark-display" class="question-display"></div>
+        </section>
+
+        <section id="charts" class="content-section">
+            <h2>Charts & Visualizations</h2>
+
+            <h3>R1-Zero Training Progression (AIME 2024)</h3>
+            <div class="chart-container">
+                <canvas id="r1ZeroProgressChart"></canvas>
+                <p class="chart-caption">
+                    Approximate training curve from Figure 1(a). R1-Zero's pass@1 accuracy on AIME 2024 
+                    increased from 15.6% to 77.9% during RL training (10,400 steps). With self-consistency 
+                    (Cons@16), performance reached 86.7%.
+                </p>
+            </div>
+
+            <h3>Multi-Stage Pipeline Comparison</h3>
+            <div class="chart-container">
+                <canvas id="pipelineComparisonChart"></canvas>
+                <p class="chart-caption">
+                    Performance across R1's four training stages on key benchmarks (Table 3 data). 
+                    Note the tradeoffs: Dev1 improves instruction-following but temporarily hurts reasoning; 
+                    Dev2 recovers reasoning; Dev3/R1 excel at both.
+                </p>
+            </div>
+
+            <h3>R1 vs Competitors (Selected Benchmarks)</h3>
+            <div class="chart-container">
+                <canvas id="competitorComparisonChart"></canvas>
+                <p class="chart-caption">
+                    R1 compared to other frontier models. Data approximate from paper comparisons 
+                    (Supplementary D.2 and various tables). R1 matches or exceeds GPT-4o on reasoning 
+                    benchmarks while being fully open-source.
+                </p>
+            </div>
+        </section>
+
+        <section id="bridge" class="content-section">
+            <h2>Bridge to the Curriculum</h2>
+
+            <h3>How R1 Connects to Earlier Lessons</h3>
+            
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Lesson 06: DeepSeekMath & GRPO</h4>
+                    <p>
+                        R1 uses the same GRPO algorithm (Group Relative Policy Optimization) introduced 
+                        in Lesson 06. But while DeepSeekMath applied GRPO after SFT, R1-Zero demonstrates 
+                        that GRPO alone (no SFT) can unlock reasoning from a base model. This extends the 
+                        "verifiable rewards" paradigm to its logical extreme: pure RL with no human 
+                        demonstrations.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 02: InstructGPT & RLHF</h4>
+                    <p>
+                        InstructGPT's pipeline (SFT → reward model → PPO) assumes you need SFT first to 
+                        establish basic instruction-following. R1-Zero challenges this: with sufficient 
+                        pretraining on reasoning-heavy data, RL can bootstrap sophisticated behaviors 
+                        without SFT. However, R1 (the production version) ultimately uses a hybrid 
+                        approach: cold-start SFT for output quality, then massive RL for reasoning.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 11: IFEval</h4>
+                    <p>
+                        R1's dramatic IFEval improvement (46.6% → 83.3%) demonstrates that verifiable 
+                        instruction-following constraints can be optimized via RL. The rule-based reward 
+                        for IFEval (check all constraints) is conceptually similar to math/code verification: 
+                        objective, deterministic, and impossible to hack.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 03: GSM8K & Lesson 07: HumanEval</h4>
+                    <p>
+                        R1 achieves state-of-the-art on both benchmarks using rule-based RL. The connection: 
+                        GSM8K and HumanEval (introduced in Lessons 3 and 7) are ideal targets for RL 
+                        because they have ground-truth verification (answer matching for GSM8K, unit tests 
+                        for HumanEval). R1 shows that scaling RL on these benchmarks pushes performance 
+                        far beyond SFT-only models.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 08: Constitutional AI</h4>
+                    <p>
+                        Constitutional AI uses AI-generated feedback (RLAIF) to reduce human annotation. 
+                        R1 goes further: for reasoning tasks, it eliminates learned reward models entirely, 
+                        using only rule-based verification. This avoids reward hacking (a problem CAI and 
+                        RLHF face) but only works for tasks with objective ground truth.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 05: LLM-as-Judge & MT-Bench</h4>
+                    <p>
+                        R1's helpful reward model (Stage 4) uses GPT-style LLM-as-judge to label preferences, 
+                        similar to MT-Bench's approach. But R1 limits RM use to general tasks and runs it 
+                        for only 400 steps to avoid reward hacking. For reasoning, rule-based verification 
+                        is more reliable than any judge model.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 10: Tülu 3</h4>
+                    <p>
+                        Tülu 3's RLVR (Reinforcement Learning with Verifiable Rewards) is conceptually 
+                        similar to R1's rule-based RL: both use ground-truth verification instead of 
+                        learned reward models. The key difference: Tülu 3 starts from SFT, while R1-Zero 
+                        shows that SFT isn't necessary if the base model is strong enough. R1's full pipeline 
+                        (with cold-start SFT) is closer to Tülu 3's approach.
+                    </p>
+                </div>
+            </div>
+
+            <h3>The Bigger Picture: What R1 Teaches Us</h3>
+
+            <div class="info-box">
+                <h4>When to Use Pure RL vs SFT+RL</h4>
+                <p>
+                    <strong>Pure RL (R1-Zero approach):</strong> Viable when (1) base model has seen 
+                    substantial reasoning data during pretraining, (2) tasks have objective verification, 
+                    (3) you have massive RL compute budget, (4) output quality (readability, format) 
+                    is secondary.
+                </p>
+                <p>
+                    <strong>Cold-start SFT + RL (R1 approach):</strong> Better for production when you 
+                    need readable outputs and broad task coverage. Use minimal SFT to establish format/style, 
+                    then heavy RL for capabilities, then final SFT/RL mix for generalization.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h4>The Limits of RL</h4>
+                <p>
+                    The paper (Section 6) is candid about RL's limitations:
+                </p>
+                <ul>
+                    <li><strong>Structured output:</strong> R1 struggles with JSON/XML generation and 
+                    tool use (Section 6). These likely need targeted RL environments.</li>
+                    <li><strong>Token efficiency:</strong> R1 sometimes "overthinks" simple problems, 
+                    generating thousands of tokens when tens would suffice.</li>
+                    <li><strong>Language mixing:</strong> Still occurs outside English/Chinese despite 
+                    language consistency reward.</li>
+                    <li><strong>Software engineering:</strong> RL wasn't applied at scale to SWE tasks 
+                    due to slow evaluation, so R1 doesn't dominate SWE-Bench.</li>
+                    <li><strong>Reward hacking:</strong> For tasks without reliable verifiers (writing, 
+                    creativity), scaling RL is an open challenge.</li>
+                </ul>
+            </div>
+
+            <h3>What's Next for Reasoning Models?</h3>
+            <p>
+                R1 represents a frontier in reasoning via RL, but several directions remain open:
+            </p>
+
+            <ul>
+                <li><strong>Tool-augmented reasoning:</strong> Integrate search engines, calculators, 
+                compilers, or even lab equipment into the RL loop</li>
+                <li><strong>Process reward models that don't hack:</strong> Can we build verifiers for 
+                intermediate reasoning steps that resist exploitation?</li>
+                <li><strong>RL for creative tasks:</strong> Extend RL to domains like writing, art, 
+                and design where "correctness" is subjective</li>
+                <li><strong>Efficient distillation:</strong> Can 1B-parameter models learn R1-level 
+                reasoning through better distillation techniques?</li>
+                <li><strong>Multi-agent RL:</strong> Train models to collaborate and debate, 
+                verifying each other's reasoning</li>
+            </ul>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 DeepSeek-R1 Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2501.12948" target="_blank">arXiv:2501.12948</a></p>
+                    <p>DeepSeek-AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via 
+                    Reinforcement Learning" (January 2025)</p>
+                    <p><a href="https://ar5iv.labs.arxiv.org/html/2501.12948" target="_blank">ar5iv HTML version</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>💻 Model Checkpoints</h3>
+                    <p><a href="https://huggingface.co/deepseek-ai" target="_blank">HuggingFace: deepseek-ai</a></p>
+                    <p>All R1, R1-Zero, and distilled model variants</p>
+                    <p>Includes Qwen 1.5B/7B/14B/32B and Llama 8B/70B distilled versions</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🎮 Try DeepSeek-R1</h3>
+                    <p><a href="https://chat.deepseek.com/" target="_blank">chat.deepseek.com</a></p>
+                    <p>Interactive demo of DeepSeek-R1</p>
+                    <p>Observe long reasoning chains in real-time</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 DeepSeek-V3 Base Model</h3>
+                    <p><a href="https://arxiv.org/abs/2412.19437" target="_blank">DeepSeek-V3 Paper</a></p>
+                    <p>The base model used for R1 and R1-Zero</p>
+                    <p>671B parameters (MoE), 37B active, 14.8T tokens pretraining</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🔬 Related Work: GRPO</h3>
+                    <p><a href="https://arxiv.org/abs/2402.03300" target="_blank">DeepSeekMath Paper</a></p>
+                    <p>Shao et al., "DeepSeekMath: Pushing the Limits of Mathematical Reasoning" (2024)</p>
+                    <p>Introduces Group Relative Policy Optimization (GRPO) used in R1</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🔗 Benchmarks Referenced</h3>
+                    <p><strong>AIME:</strong> <a href="https://www.maa.org/math-competitions/aime" target="_blank">MAA AIME</a></p>
+                    <p><strong>Codeforces:</strong> <a href="https://codeforces.com/" target="_blank">codeforces.com</a></p>
+                    <p><strong>MATH:</strong> <a href="https://github.com/hendrycks/math" target="_blank">Hendrycks et al.</a></p>
+                    <p><strong>IFEval:</strong> Lesson 11 in this curriculum</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Previous Curriculum Lessons</h3>
+                    <p><a href="../02-instructgpt-rlhf-reward-modeling/">Lesson 02: RLHF</a></p>
+                    <p><a href="../06-deepseekmath-grpo/">Lesson 06: GRPO</a></p>
+                    <p><a href="../11-ifeval-instruction-following/">Lesson 11: IFEval</a></p>
+                    <p><a href="../10-tulu3-open-post-training/">Lesson 10: Tülu 3</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📖 Python Tutorial Placeholder</h3>
+                    <p>
+                        <strong>Note:</strong> This lesson does not include a guided Python tutorial 
+                        by default (consistent with curriculum design).
+                    </p>
+                    <p>
+                        If you'd like a hands-on notebook walking through GRPO implementation, 
+                        distillation, or rule-based reward functions, ask explicitly for a Python 
+                        tutorial to be generated.
+                    </p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>Lesson 12: DeepSeek-R1 - Reasoning via Reinforcement Learning</p>
+        <p>Part of Ivan's Alternating Paper Curriculum | Track B: State-of-the-Art Post-Training</p>
+        <p><a href="../curriculum.html">View Full Curriculum</a> | <a href="https://arxiv.org/abs/2501.12948" target="_blank">Read the Paper</a></p>
+    </footer>
+
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>
