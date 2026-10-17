@@ -39,10 +39,11 @@
                 fits your workload:
             </p>
             <ul>
-                <li><strong>Container sandboxes:</strong> Shared kernel, fast startup (&lt;90ms), no pause/resume/fork. 
-                Built on Docker + Sysbox (user namespaces).</li>
-                <li><strong>VM sandboxes:</strong> Dedicated kernel (Firecracker microVM), hardware virtualization, 
-                pause/resume/fork/memory snapshots. Slower startup (~100ms from cached snapshot, seconds from cold boot).</li>
+                <li><strong>Container sandboxes:</strong> Shared kernel, fast startup (&lt;90ms vendor claim from cached 
+                OCI image), no pause/resume/fork. Built on Docker with Linux namespaces and cgroups.</li>
+                <li><strong>VM sandboxes:</strong> Dedicated kernel (Firecracker microVM when nested virtualization 
+                is available, or sysbox otherwise), hardware virtualization, pause/resume/fork/memory snapshots. 
+                Resume time: "in under a second" (vendor claim from VMs announcement).</li>
                 <li><strong>GPU sandboxes:</strong> Exclusive GPU allocation (NVIDIA/AMD), container-based (shared 
                 kernel), no pause/resume/fork, one GPU device per sandbox.</li>
             </ul>
@@ -68,10 +69,10 @@
                 <p>
                     <strong>Open-source repository frozen:</strong> Daytona's public GitHub repository 
                     <a href="https://github.com/daytonaio/daytona" target="_blank">daytonaio/daytona</a> was 
-                    archived in June 2026 (last release: v0.190.0, June 23, 2026). Core development moved to a 
-                    private codebase for security reasons 
-                    (<a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">announcement</a>). 
-                    The archived repo remains public under AGPL-3.0 but receives no further updates, fixes, or releases.
+                    archived in June 2026. Core development moved to a private codebase for security reasons 
+                    (<a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">announcement published June 11, 2026</a>). 
+                    Last open-source release: v0.190.0 (June 23, 2026). The archived repo remains public and was 
+                    licensed under AGPL-3.0, but receives no further updates, fixes, or releases.
                 </p>
                 <p>
                     <strong>Community fork:</strong> 
@@ -257,8 +258,10 @@ graph TB
                     <tr>
                         <td><strong>Startup time</strong></td>
                         <td>&lt;90ms (vendor claim, from cached OCI image)</td>
-                        <td>~100ms (vendor claim, from pre-built memory snapshot); seconds from cold boot</td>
-                        <td>~100ms (vendor claim, container + GPU device allocation)</td>
+                        <td>Customer case studies report "&lt;100ms" to "under 200ms" for VM sandboxes; no official 
+                        creation latency published. Resume: "in under a second" (vendor claim from VMs announcement)</td>
+                        <td>No specific GPU startup time published; customer stories mention "&lt;100ms" to "under 200ms" 
+                        for general sandboxes</td>
                     </tr>
                     <tr>
                         <td><strong>Pause / resume</strong></td>
@@ -307,8 +310,8 @@ graph TB
 
             <h3>Container Sandboxes: Shared Kernel, Fast Startup</h3>
             <p>
-                <strong>Default runtime.</strong> Container sandboxes use Docker + Sysbox (user namespaces) to 
-                provide isolation without hardware virtualization. Each sandbox has:
+                <strong>Default runtime.</strong> Container sandboxes use Docker with Linux namespaces and cgroups 
+                to provide isolation without hardware virtualization. Each sandbox has:
             </p>
             <ul>
                 <li>Dedicated Linux namespaces (PID, mount, network, UTS, IPC, user, cgroup)</li>
@@ -330,7 +333,7 @@ graph TB
 
             <h3>VM Sandboxes: Dedicated Kernel, Pause/Resume/Fork</h3>
             <p>
-                <strong>Hardware-virtualized Firecracker microVMs.</strong> From 
+                <strong>Hardware-virtualized microVMs.</strong> From 
                 <a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">Daytona VMs announcement</a>:
             </p>
             <blockquote>
@@ -339,9 +342,12 @@ graph TB
                 of identical copies from a single point in time."
             </blockquote>
             <p>
-                Each VM sandbox boots its own Linux kernel (or Windows kernel for Windows VMs) inside a Firecracker 
-                microVM. Isolation is enforced by KVM (hardware virtualization), not Linux namespaces. Guest kernel 
-                vulnerabilities cannot escape to the host or observe other VMs.
+                Each VM sandbox boots its own Linux kernel (or Windows kernel for Windows VMs) inside a microVM. 
+                According to Daytona's 2024 ELC presentation, "In scenarios with nested virtualization, Firecracker 
+                is used for enhanced isolation. In environments like Amazon, where nested virtualization isn't 
+                available, it falls back to sysbox." Isolation is enforced by hardware virtualization (KVM) or 
+                enhanced container isolation, not basic Linux namespaces. Guest kernel vulnerabilities cannot escape 
+                to the host or observe other VMs.
             </p>
             <p>
                 <strong>When to use:</strong> You need hardware-level isolation (untrusted or AI-generated code), 
@@ -349,9 +355,9 @@ graph TB
                 GRPO-style RL, tree search), or nested virtualization (run Docker/KVM inside the sandbox).
             </p>
             <p>
-                <strong>Trade-offs:</strong> Slower startup (~100ms from pre-built memory snapshot, seconds from 
-                cold boot). Cannot create VM sandboxes from arbitrary Dockerfiles (must create from existing VM 
-                snapshots). Higher memory overhead (guest kernel + user space).
+                <strong>Trade-offs:</strong> Customer case studies report sandbox creation times of "&lt;100ms" to 
+                "under 200ms" depending on configuration. Cannot create VM sandboxes from arbitrary Dockerfiles 
+                (must create from existing VM snapshots). Higher memory overhead (guest kernel + user space).
             </p>
 
             <h3>GPU Sandboxes: Exclusive GPU Allocation</h3>
@@ -401,9 +407,9 @@ graph LR
         GN --> GD --> GU
     end
     
-    Container -->|&lt;90ms| FAST[Fast startup]
-    VM -->|~100ms snapshot<br/>seconds cold| MED[Medium startup]
-    GPU -->|~100ms| MED2[Medium startup]
+    Container -->|&lt;90ms vendor claim| FAST[Fast startup]
+    VM -->|Resume: under 1s<br/>vendor claim| MED[Medium startup]
+    GPU -->|No official timing| MED2[Medium startup]
     
     VM -->|Pause/resume/fork| STATE[Stateful]
     Container -->|No checkpoint| STATELESS[Stateless]
@@ -468,9 +474,11 @@ graph LR
                 <li><strong>Report event:</strong> Runner reports <code>sandbox=running</code> to API.</li>
             </ol>
             <p>
-                <strong>Latency:</strong> From the VMs announcement: "Resume restores the exact state in under a 
-                second" (vendor claim). Independent Firecracker benchmarks (Lesson 06) report ~28ms median restore 
-                for a 256MB working set on NVMe (LoadSnapshot only, not including S3 download).
+                <strong>Latency:</strong> From the 
+                <a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs announcement</a>: 
+                "Resume restores the exact state in under a second" (vendor claim). This includes S3 download and 
+                Firecracker LoadSnapshot. Independent Firecracker benchmarks (Lesson 06, E2B) report ~28ms median 
+                restore for a 256MB working set on NVMe (LoadSnapshot API only, not including S3 download).
             </p>
 
             <h3>How Fork Works: Checkpoint Parent, Resume N Children</h3>
@@ -635,7 +643,7 @@ graph TD
                     <tr>
                         <td><strong>Default isolation</strong></td>
                         <td>Firecracker microVM (always)</td>
-                        <td>Container (default), VM (opt-in), GPU (opt-in)</td>
+                        <td>Container (default), VM with Firecracker or sysbox (opt-in), GPU (opt-in)</td>
                     </tr>
                     <tr>
                         <td><strong>Pause / resume</strong></td>
@@ -655,7 +663,7 @@ graph TD
                     <tr>
                         <td><strong>Startup latency</strong></td>
                         <td>~1s (vendor claim, snapshot restore from S3)</td>
-                        <td>&lt;90ms container (vendor claim, from cached image), ~100ms VM (vendor claim, from cached snapshot)</td>
+                        <td>&lt;90ms container (vendor claim, from cached image); VM resume "in under a second" (vendor claim)</td>
                     </tr>
                     <tr>
                         <td><strong>Control → data plane protocol</strong></td>
@@ -859,15 +867,18 @@ vm.process.exec("echo 'state before pause' > /tmp/state.txt")
 measure("Pause VM", lambda: vm.pause())
 
 # Resume
-measure("Resume VM", lambda: vm.connect())
+measure("Resume VM", lambda: vm.start())
 
 # Verify state persisted
 result = vm.process.exec("cat /tmp/state.txt")
 print(f"State after resume: {result.result}")
 
-# Fork
+# Fork (call fork() individually for each child)
 print("\n=== Fork VM ===")
-children = measure("Fork 3 children", lambda: vm.fork(count=3))
+children = []
+for i in range(3):
+    child = measure(f"Fork child {i}", lambda i=i: vm.fork(name=f"child-{i}"))
+    children.append(child)
 print(f"Child IDs: {[c.id for c in children]}")
 
 # Sample differently in each child
@@ -922,15 +933,19 @@ await vm.process.exec('echo "state before pause" > /tmp/state.txt');
 await measure('Pause VM', async () => await vm.pause());
 
 // Resume
-await measure('Resume VM', async () => await vm.connect());
+await measure('Resume VM', async () => await vm.start());
 
 // Verify state persisted
 result = await vm.process.exec('cat /tmp/state.txt');
 console.log(`State after resume: ${result.result}`);
 
-// Fork
+// Fork (call fork() individually for each child)
 console.log('\n=== Fork VM ===');
-const children = await measure('Fork 3 children', async () => await vm.fork(3));
+const children = [];
+for (let i = 0; i < 3; i++) {
+  const child = await measure(`Fork child ${i}`, async () => await vm.fork({ name: `child-${i}` }));
+  children.push(child);
+}
 console.log(`Child IDs: ${children.map(c => c.id)}`);
 
 // Sample differently in each child
@@ -1004,8 +1019,8 @@ except Exception as e:
             <h3>What You Learned</h3>
             <ul>
                 <li>How to create container, VM, and GPU sandboxes via the Daytona SDK</li>
-                <li>How to measure startup latency: container (&lt;90ms vendor claim), VM (~100ms vendor claim), 
-                GPU (~100ms vendor claim)</li>
+                <li>How to measure your own startup latency and compare against vendor claims (container: &lt;90ms 
+                vendor claim; VM resume: "in under a second" vendor claim)</li>
                 <li>How to pause/resume VM sandboxes and verify state persistence</li>
                 <li>How to fork a VM sandbox into N children with unique sampling</li>
                 <li>Why pause/resume/fork don't work on container or GPU sandboxes</li>
@@ -1053,14 +1068,20 @@ except Exception as e:
                     <li><a href="https://www.daytona.io/docs" target="_blank">Daytona Documentation</a> — 
                     Main documentation site (current, post-June 2026)</li>
                     <li><a href="https://www.daytona.io/docs/en/architecture/" target="_blank">Architecture</a> — 
-                    Control plane, compute plane, runners, sandbox daemon, job-based orchestration</li>
+                    Control plane, compute plane, runners, sandbox daemon, job-based orchestration. 
+                    Verbatim quote: "Each runner polls the control plane API for jobs and executes sandbox operations: 
+                    creating, starting, stopping, destroying, resizing, and backing up sandboxes."</li>
                     <li><a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Isolation</a> — 
-                    Three isolation classes (container, VM, GPU), runtime/network/organization boundaries</li>
+                    Three isolation classes (container, VM, GPU), runtime/network/organization boundaries. 
+                    Verbatim quote on VM sandboxes: "Full virtual machine with its own kernel. The hardware virtualization 
+                    boundary enables VM-only capabilities: pause / resume, fork, and hot snapshots."</li>
                     <li><a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">Sandboxes</a> — 
                     Sandbox lifecycle, classes, pause/resume/fork, nested virtualization</li>
-                    <li><a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs: Pause & Fork</a> — 
-                    Announcement post: "Every Daytona sandbox can now run as a true microVM with full OS-level 
-                    isolation. Pause freezes the entire machine state and resumes it in under a second."</li>
+                    <li><a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs: Pause & Fork</a> 
+                    (July 10, 2026) — 
+                    Verbatim quote: "Every Daytona sandbox can now run as a true microVM with full OS-level 
+                    isolation. Pause freezes the entire machine state and resumes it in under a second. Fork clones 
+                    a running VM into any number of identical copies from a single point in time."</li>
                 </ul>
             </div>
 
@@ -1071,8 +1092,9 @@ except Exception as e:
                     Main repository (AGPL-3.0, archived June 2026, v0.190.0 last release)</li>
                     <li><a href="https://github.com/daytonaio/daytona/releases/tag/v0.190.0" target="_blank">v0.190.0 Release Notes</a> — 
                     Last open-source release (June 23, 2026): pause action, sandbox domain allow list, Pi extension</li>
-                    <li><a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">Going Closed Source Announcement</a> — 
-                    "We are moving Daytona's production codebase to closed source. There is one reason behind this, 
+                    <li><a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">Going Closed Source Announcement</a> 
+                    (June 11, 2026) — 
+                    Verbatim quote: "We are moving Daytona's production codebase to closed source. There is one reason behind this, 
                     and it is the only reason that matters to us: security."</li>
                 </ul>
             </div>
@@ -1105,19 +1127,20 @@ except Exception as e:
             <div class="info-box">
                 <h3>Vendor Claims Summary</h3>
                 <p>
-                    Numbers marked as vendor claims (self-reported by Daytona, not independently verified):
+                    Performance numbers self-reported by Daytona or from customer case studies (not independently verified):
                 </p>
                 <ul>
                     <li><strong>Container startup:</strong> "&lt;90ms" from cached OCI image 
-                    (<a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">source</a>)</li>
-                    <li><strong>VM startup:</strong> "~100ms" from pre-built memory snapshot 
-                    (<a href="https://docs.rl.trydaytona.com/docs/documentation/" target="_blank">source</a>)</li>
+                    (<a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">Sandboxes docs</a>)</li>
+                    <li><strong>Sandbox creation (general):</strong> Customer case studies report 71ms (Daytona Cloud 
+                    announcement), "&lt;100ms" (SambaNova case study), "less than 100ms" (Stanford case study), 
+                    "under 200ms" (Asteroid case study)</li>
                     <li><strong>VM resume:</strong> "in under a second" 
-                    (<a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">source</a>)</li>
-                    <li><strong>GPU startup:</strong> "~100ms" (inferred from sandbox docs, not explicitly stated)</li>
+                    (<a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs announcement</a>)</li>
+                    <li><strong>GPU startup:</strong> No specific GPU startup time published in official docs</li>
                 </ul>
                 <p>
-                    These are self-reported by Daytona. Your results will vary based on image/snapshot size, 
+                    These are self-reported metrics. Your results will vary based on image/snapshot size, 
                     runner performance, object storage latency, and network conditions.
                 </p>
             </div>

@@ -48,12 +48,12 @@ const quizQuestions = [
         question: "What happened to Daytona's open-source repository in June 2026?",
         options: [
             "It was deleted and all code was taken offline",
-            "It was archived/frozen at v0.190.0 and development moved to a private codebase for security reasons; the repo remains public under AGPL-3.0 but receives no further updates",
+            "It was archived/frozen at v0.190.0 and development moved to a private codebase for security reasons; the repo remains public and was licensed under AGPL-3.0 but receives no further updates",
             "It was relicensed from AGPL-3.0 to a proprietary license and closed to new contributors",
             "It was merged into Nightona and is now maintained by the community only"
         ],
         correctAnswer: 1,
-        explanation: "In June 2026, Daytona archived its public GitHub repository (daytonaio/daytona) and moved core development to a private codebase. The announcement cited security as the reason: to prevent AI-based vulnerability discovery before patches could be deployed. The last open-source release was v0.190.0 (June 23, 2026). The archived repo remains public and free to use, fork, and build on under AGPL-3.0, but receives no further updates, fixes, or releases. Nightona (nightona-co/nightona) is a community fork that continues development from v0.190.0 under AGPL-3.0."
+        explanation: "In June 2026, Daytona archived its public GitHub repository (daytonaio/daytona) and moved core development to a private codebase. The announcement (published June 11, 2026) cited security as the reason: to prevent AI-based vulnerability discovery before patches could be deployed. The last open-source release was v0.190.0 (June 23, 2026). The archived repo remains public and free to use, fork, and build on. It was licensed under AGPL-3.0, but receives no further updates, fixes, or releases. Nightona (nightona-co/nightona) is a community fork that continues development from v0.190.0 under AGPL-3.0."
     }
 ];
 
