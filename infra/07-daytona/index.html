@@ -56,8 +56,8 @@
                     vs GPU (exclusive hardware)</li>
                     <li>How Daytona's architecture differs from E2B: job-based runner polling (no synchronous gRPC 
                     from API), Rust daemon (not Go), container default (not VM-only)</li>
-                    <li>How VM sandboxes implement pause/resume/fork on Firecracker, and why fork creates 
-                    deterministic branches</li>
+                    <li>How VM sandboxes implement pause/resume/fork (VMM implementation inferred, not documented), 
+                    and why fork creates deterministic branches</li>
                     <li>How GPU sandboxes schedule onto GPU runners with exclusive allocation</li>
                     <li>Hands-on: create container, VM, and GPU sandboxes via SDK, measure startup latency, test 
                     pause/resume/fork</li>
@@ -275,7 +275,7 @@ graph TB
                     <tr>
                         <td><strong>Pause / resume</strong></td>
                         <td>❌ No</td>
-                        <td>✅ Yes (Firecracker CreateSnapshot / LoadSnapshot)</td>
+                        <td>✅ Yes (VMM snapshot mechanisms inferred, not documented)</td>
                         <td>❌ No</td>
                     </tr>
                     <tr>
@@ -316,6 +316,17 @@ graph TB
                     </tr>
                 </tbody>
             </table>
+
+            <div class="info-box">
+                <h3>Note on Mixed Vendor Messaging</h3>
+                <p>
+                    Daytona's VMs announcement (<a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">July 10, 2026</a>) 
+                    states: "Sandboxes now run as microVMs rather than shared-kernel containers." However, the current 
+                    documentation (<a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">Sandboxes docs</a>) 
+                    indicates containers are the default runtime, with VMs as an opt-in class. Readers should be aware 
+                    that the vendor messaging on default isolation has evolved.
+                </p>
+            </div>
 
             <h3>Container Sandboxes: Shared Kernel, Fast Startup</h3>
             <p>
@@ -403,7 +414,7 @@ graph LR
     end
     
     subgraph VM
-        VMH[KVM / Firecracker]
+        VMH[KVM / VMM<br/>undocumented]
         VMK[Guest Kernel]
         VMU[User code]
         VMH --> VMK --> VMU
@@ -502,7 +513,7 @@ graph LR
                 <li><strong>SDK calls fork:</strong> <code>parent._experimental_fork()</code> (Python; note: 
                 this method is experimental and not yet documented in the stable API reference).</li>
                 <li><strong>Checkpoint parent:</strong> API writes <code>checkpoint</code> job. Runner pauses the 
-                parent (same as pause: CreateSnapshot, upload to S3). The parent can optionally continue running 
+                parent (inferred: VMM snapshot creation, upload to S3). The parent can optionally continue running 
                 after checkpoint (controlled by API request flag).</li>
                 <li><strong>Spread children:</strong> Sandbox manager (in API) schedules N new sandboxes with the 
                 checkpoint snapshot ID. For each child:
@@ -510,7 +521,7 @@ graph LR
                         <li>API picks a runner (may be the same runner or different runners, depending on capacity).</li>
                         <li>API writes <code>create from checkpoint</code> job for that runner.</li>
                         <li>Runner downloads the checkpoint snapshot from S3.</li>
-                        <li>Runner calls LoadSnapshot to resume the child from the checkpoint.</li>
+                        <li>Runner restores the child from the checkpoint snapshot (inferred: VMM snapshot load).</li>
                         <li><strong>Fix clone hazards (inferred from Firecracker mechanics, not documented by Daytona):</strong> 
                         Runner (or sandbox daemon) must reseed RNG (<code>/dev/urandom</code>, <code>/dev/random</code>) 
                         to ensure each child generates different random values. The runner assigns each child a unique 
@@ -618,7 +629,7 @@ graph TD
             </ul>
             <p>
                 <strong>Trade-off:</strong> No pause/resume/fork for GPU sandboxes. GPU state (CUDA contexts, 
-                kernel memory, model weights) cannot be checkpointed by Firecracker. CUDA checkpoint/restore 
+                kernel memory, model weights) cannot be checkpointed by typical VMM implementations. CUDA checkpoint/restore 
                 (CRIU + cuda-checkpoint, gVisor's experimental feature) is not supported in Daytona's container 
                 runtime.
             </p>
@@ -1114,10 +1125,11 @@ except Exception as e:
             </div>
 
             <div class="info-box">
-                <h3>Firecracker (VM Runtime)</h3>
+                <h3>Firecracker (Reference VMM from Lessons 04-06)</h3>
                 <ul>
                     <li><a href="https://github.com/firecracker-microvm/firecracker" target="_blank">firecracker-microvm/firecracker</a> — 
-                    The microVM runtime that powers Daytona VM sandboxes</li>
+                    The reference microVM runtime covered in Lessons 04-06. Daytona's actual VMM implementation is not 
+                    documented; Firecracker is inferred as a likely candidate when hardware virtualization is available.</li>
                     <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">Snapshot support</a> — 
                     CreateSnapshot / LoadSnapshot APIs, full vs diff snapshots</li>
                     <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/handling-page-faults-on-snapshot-resume.md" target="_blank">Page faults on resume</a> — 
