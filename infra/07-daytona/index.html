@@ -252,16 +252,25 @@ graph TB
                     <tr>
                         <td><strong>Isolation level</strong></td>
                         <td>Shared kernel, dedicated namespaces (PID, net, mount, UTS, IPC, user)</td>
-                        <td>Dedicated kernel (hardware virtualization, Firecracker microVM)</td>
+                        <td>Dedicated kernel (hardware virtualization; VMM not documented, Firecracker inferred)</td>
                         <td>Shared kernel + exclusive GPU device</td>
                     </tr>
                     <tr>
                         <td><strong>Startup time</strong></td>
                         <td>&lt;90ms (vendor claim, from cached OCI image)</td>
-                        <td>Customer case studies report "&lt;100ms" to "under 200ms" for VM sandboxes; no official 
-                        creation latency published. Resume: "in under a second" (vendor claim from VMs announcement)</td>
-                        <td>No specific GPU startup time published; customer stories mention "&lt;100ms" to "under 200ms" 
-                        for general sandboxes</td>
+                        <td>No official VM creation latency published. Resume: "in under a second" (vendor claim from VMs announcement)</td>
+                        <td>No specific GPU startup time published</td>
+                    </tr>
+                    <tr>
+                        <td colspan="4"><em>Customer case studies report general sandbox creation times (class-agnostic): 
+                        <a href="https://www.daytona.io/dotfiles/announcing-daytona-cloud" target="_blank">71ms</a> 
+                        (Daytona Cloud announcement), 
+                        <a href="https://www.daytona.io/case-studies/sambanova" target="_blank">&lt;100ms</a> 
+                        (SambaNova case study), 
+                        <a href="https://www.daytona.io/case-studies/stanford" target="_blank">less than 100ms</a> 
+                        (Stanford case study), 
+                        <a href="https://www.daytona.io/case-studies/asteroid" target="_blank">under 200ms</a> 
+                        (Asteroid case study)</em></td>
                     </tr>
                     <tr>
                         <td><strong>Pause / resume</strong></td>
@@ -343,11 +352,11 @@ graph TB
             </blockquote>
             <p>
                 Each VM sandbox boots its own Linux kernel (or Windows kernel for Windows VMs) inside a microVM. 
-                According to Daytona's 2024 ELC presentation, "In scenarios with nested virtualization, Firecracker 
-                is used for enhanced isolation. In environments like Amazon, where nested virtualization isn't 
-                available, it falls back to sysbox." Isolation is enforced by hardware virtualization (KVM) or 
-                enhanced container isolation, not basic Linux namespaces. Guest kernel vulnerabilities cannot escape 
-                to the host or observe other VMs.
+                The specific VMM implementation is not documented in current Daytona materials. Based on Lesson 04 
+                (Firecracker architecture) and Lesson 06 (E2B's Firecracker-based VMs with pause/resume/fork), 
+                we infer Daytona VM sandboxes likely use Firecracker when hardware virtualization is available. 
+                Isolation is enforced by hardware virtualization, not basic Linux namespaces. Guest kernel 
+                vulnerabilities cannot escape to the host or observe other VMs.
             </p>
             <p>
                 <strong>When to use:</strong> You need hardware-level isolation (untrusted or AI-generated code), 
@@ -426,17 +435,17 @@ graph LR
         </section>
 
         <section id="vm-features" class="content-section">
-            <h2>VM Sandboxes: Pause, Resume, and Fork on Firecracker</h2>
+            <h2>VM Sandboxes: Pause, Resume, and Fork</h2>
 
             <h3>How Pause Works</h3>
             <p>
-                When you call <code>sandbox.pause()</code> on a VM sandbox:
+                When you call <code>sandbox.pause()</code> on a VM sandbox (Firecracker mechanics inferred, 
+                not documented by Daytona):
             </p>
             <ol>
                 <li><strong>Runner receives pause job:</strong> API writes <code>pause</code> job to queue, runner 
                 polls and picks it up.</li>
-                <li><strong>Firecracker CreateSnapshot:</strong> Runner calls Firecracker's <code>CreateSnapshot</code> 
-                API. Firecracker writes:
+                <li><strong>Snapshot creation:</strong> The VMM creates a snapshot with:
                     <ul>
                         <li><strong>Memory file:</strong> Full guest RAM (mmap-backed file)</li>
                         <li><strong>State file:</strong> Device state JSON (vCPU registers, virtio device state, 
@@ -446,29 +455,25 @@ graph LR
                 </li>
                 <li><strong>Upload to S3:</strong> Runner uploads memory file and state file to object storage 
                 (S3/GCS). Optionally uploads only the diff (changed pages) if configured.</li>
-                <li><strong>Stop Firecracker:</strong> Kill the Firecracker process. The sandbox is now paused 
+                <li><strong>Stop VMM:</strong> The VMM process is stopped. The sandbox is now paused 
                 (no CPU/memory cost on the runner).</li>
                 <li><strong>Report event:</strong> Runner reports <code>sandbox=paused</code> to API.</li>
             </ol>
             <p>
-                <strong>Latency:</strong> Daytona does not publish official pause latency numbers. Firecracker 
-                snapshot creation is typically &lt;1 second for small VMs (256MB–1GB RAM), but upload to S3 depends 
-                on object storage latency and snapshot size.
+                <strong>Latency:</strong> Daytona does not publish official pause latency numbers. Upload to S3 
+                depends on object storage latency and snapshot size.
             </p>
 
             <h3>How Resume Works</h3>
             <p>
-                When you call <code>sandbox.connect()</code> (Python SDK) or <code>sandbox.resume()</code> on a 
-                paused VM sandbox:
+                When you call <code>sandbox.start()</code> on a paused VM sandbox (VMM mechanics inferred):
             </p>
             <ol>
                 <li><strong>Runner receives resume job:</strong> API writes <code>resume</code> job to queue, runner 
                 polls.</li>
-                <li><strong>Download snapshot:</strong> Runner downloads memory file and state file from S3. May 
-                use userfaultfd lazy memory (load pages on-demand) or full download, depending on runner config.</li>
-                <li><strong>Firecracker LoadSnapshot:</strong> Runner calls Firecracker's <code>LoadSnapshot</code> 
-                API with the memory file and state file paths. Firecracker mmaps the memory file, restores device 
-                state, and calls <code>KVM_RUN</code>. The guest resumes execution exactly where it was paused.</li>
+                <li><strong>Download snapshot:</strong> Runner downloads memory file and state file from S3.</li>
+                <li><strong>Snapshot restore:</strong> The VMM loads the snapshot and restores the guest state. 
+                The guest resumes execution exactly where it was paused.</li>
                 <li><strong>Sandbox daemon reconnects:</strong> The sandbox daemon (Rust init) was frozen when the 
                 snapshot was taken. It resumes and re-exposes the Toolbox API on port 49983.</li>
                 <li><strong>Report event:</strong> Runner reports <code>sandbox=running</code> to API.</li>
@@ -477,8 +482,7 @@ graph LR
                 <strong>Latency:</strong> From the 
                 <a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs announcement</a>: 
                 "Resume restores the exact state in under a second" (vendor claim). This includes S3 download and 
-                Firecracker LoadSnapshot. Independent Firecracker benchmarks (Lesson 06, E2B) report ~28ms median 
-                restore for a 256MB working set on NVMe (LoadSnapshot API only, not including S3 download).
+                snapshot restore.
             </p>
 
             <h3>How Fork Works: Checkpoint Parent, Resume N Children</h3>
@@ -495,7 +499,8 @@ graph LR
             <ol>
                 <li><strong>Parent sandbox running:</strong> Your agent code has executed to step <em>k</em>. The 
                 sandbox is in state S (memory, processes, open files).</li>
-                <li><strong>SDK calls fork:</strong> <code>parent.fork(count=N)</code> (Python) or equivalent.</li>
+                <li><strong>SDK calls fork:</strong> <code>parent._experimental_fork()</code> (Python; note: 
+                this method is experimental and not yet documented in the stable API reference).</li>
                 <li><strong>Checkpoint parent:</strong> API writes <code>checkpoint</code> job. Runner pauses the 
                 parent (same as pause: CreateSnapshot, upload to S3). The parent can optionally continue running 
                 after checkpoint (controlled by API request flag).</li>
@@ -506,11 +511,11 @@ graph LR
                         <li>API writes <code>create from checkpoint</code> job for that runner.</li>
                         <li>Runner downloads the checkpoint snapshot from S3.</li>
                         <li>Runner calls LoadSnapshot to resume the child from the checkpoint.</li>
-                        <li><strong>Fix clone hazards:</strong> Runner (or sandbox daemon) must reseed RNG 
-                        (<code>/dev/urandom</code>, <code>/dev/random</code>) to ensure each child generates 
-                        different random values. The runner assigns each child a unique MAC address (configured 
-                        in Firecracker network-interfaces JSON). Time synchronization: Firecracker does not 
-                        provide VMGenID, so child VMs may see clock drift; applications should resync time if needed.</li>
+                        <li><strong>Fix clone hazards (inferred from Firecracker mechanics, not documented by Daytona):</strong> 
+                        Runner (or sandbox daemon) must reseed RNG (<code>/dev/urandom</code>, <code>/dev/random</code>) 
+                        to ensure each child generates different random values. The runner assigns each child a unique 
+                        MAC address. Time synchronization: child VMs may see clock drift; applications should resync 
+                        time if needed.</li>
                     </ul>
                 </li>
                 <li><strong>Return child IDs:</strong> API returns a list of N sandbox IDs to the SDK.</li>
@@ -519,8 +524,8 @@ graph LR
             <div class="mermaid">
 graph TD
     Parent[Parent VM<br/>State S at step k]
-    Fork[SDK: fork count=3]
-    Checkpoint[Checkpoint Parent<br/>CreateSnapshot]
+    Fork[SDK: _experimental_fork]
+    Checkpoint[Checkpoint Parent<br/>Snapshot creation]
     Upload[Upload to S3]
 
     Child1[Resume Child 1<br/>Runner A, unique MAC]
@@ -589,10 +594,10 @@ graph TD
                 <code>class=gpu</code>, <code>gpu_count=1</code> (or more).</li>
                 <li><strong>Sandbox manager schedules onto GPU runner:</strong> The manager queries available 
                 runners, filters for GPU runners with sufficient free GPU devices, and picks one (placement 
-                algorithm not documented; likely round-robin or load-based).</li>
-                <li><strong>Runner allocates GPU devices:</strong> The runner (Go agent) calls Docker create with 
-                <code>--gpus device=0</code> (or equivalent for multiple GPUs). This passes the GPU device(s) 
-                into the container. The runner marks those GPU devices as in-use, so no other sandbox can claim them.</li>
+                algorithm not documented).</li>
+                <li><strong>Runner allocates GPU devices (Docker mechanics inferred):</strong> The runner passes 
+                GPU device(s) into the container. The runner marks those GPU devices as in-use, so no other 
+                sandbox can claim them.</li>
                 <li><strong>Container starts:</strong> Docker starts the container with the allocated GPU device(s). 
                 The sandbox can now use CUDA, ROCm, or other GPU frameworks.</li>
                 <li><strong>Exclusive allocation:</strong> While the sandbox is running, those GPU devices are 
@@ -601,13 +606,12 @@ graph TD
 
             <h3>Why Container, Not VM?</h3>
             <p>
-                GPU sandboxes are containers, not Firecracker microVMs, for two reasons:
+                GPU sandboxes are containers, not microVMs, for two reasons:
             </p>
             <ul>
-                <li><strong>Firecracker + GPU = unsupported in most setups:</strong> Firecracker does not natively 
-                support GPU passthrough (PCIe device passthrough requires VFIO, which Firecracker doesn't expose). 
-                Cloud Hypervisor (an alternative VMM) supports GPU passthrough, but Daytona uses Firecracker for 
-                VMs.</li>
+                <li><strong>MicroVM + GPU = unsupported in most setups:</strong> Most microVMs do not natively 
+                support GPU passthrough (PCIe device passthrough requires VFIO). Firecracker, for example, doesn't 
+                expose GPU passthrough.</li>
                 <li><strong>Container GPU passthrough is mature:</strong> Docker + <code>nvidia-container-runtime</code> 
                 or <code>--gpus</code> is the standard way to run GPU workloads. It works reliably, has good 
                 tooling (NVIDIA Docker, nvidia-smi), and avoids the complexity of VFIO PCIe passthrough.</li>
@@ -623,8 +627,7 @@ graph TD
             <p>
                 GPU runners report their GPU device list and availability to the API. The API's sandbox manager 
                 tracks which devices are in-use. When capacity is exhausted (all GPU devices allocated), new GPU 
-                sandbox requests queue or fail (behavior depends on API configuration). GPU runners typically have 
-                1–8 GPUs per node (NVIDIA A100, H100, or AMD MI250X in production).
+                sandbox requests queue or fail (behavior depends on API configuration).
             </p>
         </section>
 
@@ -643,7 +646,7 @@ graph TD
                     <tr>
                         <td><strong>Default isolation</strong></td>
                         <td>Firecracker microVM (always)</td>
-                        <td>Container (default), VM with Firecracker or sysbox (opt-in), GPU (opt-in)</td>
+                        <td>Container (default), VM (opt-in, VMM not documented), GPU (opt-in)</td>
                     </tr>
                     <tr>
                         <td><strong>Pause / resume</strong></td>
@@ -653,7 +656,7 @@ graph TD
                     <tr>
                         <td><strong>Fork</strong></td>
                         <td>Yes (up to 20 children at once)</td>
-                        <td>Yes (VM sandboxes only; count not documented, likely similar)</td>
+                        <td>Yes (VM sandboxes only; maximum count not documented)</td>
                     </tr>
                     <tr>
                         <td><strong>GPU support</strong></td>
@@ -662,7 +665,7 @@ graph TD
                     </tr>
                     <tr>
                         <td><strong>Startup latency</strong></td>
-                        <td>~1s (vendor claim, snapshot restore from S3)</td>
+                        <td>~80ms template restore (vendor claim from E2B docs); "approximately 1 second" resume from snapshot (vendor claim from E2B docs)</td>
                         <td>&lt;90ms container (vendor claim, from cached image); VM resume "in under a second" (vendor claim)</td>
                     </tr>
                     <tr>
@@ -677,7 +680,7 @@ graph TD
                     </tr>
                     <tr>
                         <td><strong>API framework</strong></td>
-                        <td>Go + Gin</td>
+                        <td>Go (framework not documented in public sources)</td>
                         <td>NestJS (TypeScript)</td>
                     </tr>
                     <tr>
@@ -718,7 +721,7 @@ graph TD
                     <a href="https://app.daytona.io/dashboard/keys" target="_blank">app.daytona.io/dashboard/keys</a>.</li>
                     <li><strong>SDK:</strong> Python 3.10+ (<code>pip install daytona</code>) or TypeScript 18+ 
                     (<code>npm install @daytona/sdk</code>).</li>
-                    <li><strong>GPU access (optional):</strong> GPU sandboxes require Daytona Tier 3+ and GPU quota. 
+                    <li><strong>GPU access (optional):</strong> GPU sandboxes require GPU quota. 
                     If you don't have GPU access, skip the GPU section (the container and VM sections work on all tiers).</li>
                 </ul>
                 <p>
@@ -783,8 +786,8 @@ except Exception as e:
     print(f"Pause failed (expected): {e}")
 
 # Clean up
-container.kill()
-print("Container killed")
+container.delete()
+print("Container deleted")
 </code></pre>
 
             <p>
@@ -810,7 +813,7 @@ const container = await measure(
 console.log(`Container ID: ${container.id}`);
 
 // Execute a command
-const result = await container.process.exec('echo "Hello from container"');
+const result = await container.process.executeCommand('echo "Hello from container"');
 console.log(`Output: ${result.result}`);
 
 // Try to pause (should fail)
@@ -822,8 +825,8 @@ try {
 }
 
 // Clean up
-await container.kill();
-console.log('Container killed');
+await container.delete();
+console.log('Container deleted');
 </code></pre>
 
             <h4>Step 3: Create and Test VM Sandbox with Pause/Resume/Fork</h4>
@@ -851,7 +854,7 @@ print("\n=== VM Sandbox ===")
 vm = measure(
     "Create VM",
     lambda: daytona.create(CreateSandboxFromSnapshotParams(
-        snapshot_id="daytona-vm-small"  # Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
+        snapshot="daytona-vm-small"  # Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
     ))
 )
 print(f"VM ID: {vm.id}")
@@ -873,11 +876,11 @@ measure("Resume VM", lambda: vm.start())
 result = vm.process.exec("cat /tmp/state.txt")
 print(f"State after resume: {result.result}")
 
-# Fork (call fork() individually for each child)
+# Fork (call _experimental_fork() for each child; note: experimental API)
 print("\n=== Fork VM ===")
 children = []
 for i in range(3):
-    child = measure(f"Fork child {i}", lambda i=i: vm.fork(name=f"child-{i}"))
+    child = measure(f"Fork child {i}", lambda: vm._experimental_fork())
     children.append(child)
 print(f"Child IDs: {[c.id for c in children]}")
 
@@ -892,10 +895,10 @@ for i, child in enumerate(children):
     print(f"Child {i}: sampled value: {result.result}")
 
 # Clean up
-vm.kill()
+vm.delete()
 for child in children:
-    child.kill()
-print("All VMs killed")
+    child.delete()
+print("All VMs deleted")
 </code></pre>
 
             <p>
@@ -917,17 +920,17 @@ console.log('\n=== VM Sandbox ===');
 const vm = await measure(
   'Create VM',
   async () => await daytona.create({
-    snapshotId: 'daytona-vm-small'  // Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
+    snapshot: 'daytona-vm-small'  // Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
   })
 );
 console.log(`VM ID: ${vm.id}`);
 
 // Execute a command
-let result = await vm.process.exec('echo "Hello from VM"');
+let result = await vm.process.executeCommand('echo "Hello from VM"');
 console.log(`Output: ${result.result}`);
 
 // Write state
-await vm.process.exec('echo "state before pause" > /tmp/state.txt');
+await vm.process.executeCommand('echo "state before pause" > /tmp/state.txt');
 
 // Pause
 await measure('Pause VM', async () => await vm.pause());
@@ -936,35 +939,35 @@ await measure('Pause VM', async () => await vm.pause());
 await measure('Resume VM', async () => await vm.start());
 
 // Verify state persisted
-result = await vm.process.exec('cat /tmp/state.txt');
+result = await vm.process.executeCommand('cat /tmp/state.txt');
 console.log(`State after resume: ${result.result}`);
 
-// Fork (call fork() individually for each child)
+// Fork (call _experimentalFork() for each child; note: experimental API)
 console.log('\n=== Fork VM ===');
 const children = [];
 for (let i = 0; i < 3; i++) {
-  const child = await measure(`Fork child ${i}`, async () => await vm.fork({ name: `child-${i}` }));
+  const child = await measure(`Fork child ${i}`, async () => await vm._experimentalFork());
   children.push(child);
 }
 console.log(`Child IDs: ${children.map(c => c.id)}`);
 
 // Sample differently in each child
 for (const [i, child] of children.entries()) {
-  result = await child.process.exec('cat /tmp/state.txt');
+  result = await child.process.executeCommand('cat /tmp/state.txt');
   console.log(`Child ${i}: state: ${result.result}`);
   
   // Sample with unique seed
   const seed = 42 + i;
-  result = await child.process.exec(`python3 -c 'import random; random.seed(${seed}); print(random.randint(0, 100))'`);
+  result = await child.process.executeCommand(`python3 -c 'import random; random.seed(${seed}); print(random.randint(0, 100))'`);
   console.log(`Child ${i}: sampled value: ${result.result}`);
 }
 
 // Clean up
-await vm.kill();
+await vm.delete();
 for (const child of children) {
-  await child.kill();
+  await child.delete();
 }
-console.log('All VMs killed');
+console.log('All VMs deleted');
 </code></pre>
 
             <h4>Step 4 (Optional): Create GPU Sandbox</h4>
@@ -973,7 +976,7 @@ console.log('All VMs killed');
             </p>
             <pre><code class="language-python">#!/usr/bin/env python3
 """
-Daytona GPU sandbox: exclusive GPU allocation (requires Tier 3+).
+Daytona GPU sandbox: exclusive GPU allocation (requires GPU quota).
 """
 import time
 from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
@@ -1010,8 +1013,8 @@ try:
     except Exception as e:
         print(f"Pause failed (expected for GPU): {e}")
 
-    gpu.kill()
-    print("GPU killed")
+    gpu.delete()
+    print("GPU deleted")
 except Exception as e:
     print(f"GPU sandbox creation failed (expected if no GPU quota): {e}")
 </code></pre>
