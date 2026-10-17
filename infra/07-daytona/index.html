@@ -41,8 +41,8 @@
             <ul>
                 <li><strong>Container sandboxes:</strong> Shared kernel, fast startup (&lt;90ms vendor claim from cached 
                 OCI image), no pause/resume/fork. Built on Docker with Linux namespaces and cgroups.</li>
-                <li><strong>VM sandboxes:</strong> Dedicated kernel (Firecracker microVM when nested virtualization 
-                is available, or sysbox otherwise), hardware virtualization, pause/resume/fork/memory snapshots. 
+                <li><strong>VM sandboxes:</strong> Dedicated kernel (VMM not documented; likely Firecracker when 
+                hardware virtualization is available), pause/resume/fork/memory snapshots. 
                 Resume time: "in under a second" (vendor claim from VMs announcement).</li>
                 <li><strong>GPU sandboxes:</strong> Exclusive GPU allocation (NVIDIA/AMD), container-based (shared 
                 kernel), no pause/resume/fork, one GPU device per sandbox.</li>
