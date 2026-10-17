@@ -31,18 +31,18 @@ const quizQuestions = [
             "Fork clones the Firecracker process N times, then reseeds the guest kernel's RNG"
         ],
         correctAnswer: 1,
-        explanation: "Daytona's VM fork: (1) Checkpoint parent: Call Firecracker CreateSnapshot (memory + device state), upload to S3. (2) Spread children: Sandbox manager schedules N new sandboxes with the checkpoint snapshot ID. (3) Resume children: Each runner downloads the checkpoint from S3 and calls Firecracker LoadSnapshot. (4) Fix clone hazards: Reseed RNG (/dev/urandom) and assign unique MAC addresses per child. Branches are deterministic because each child starts from the exact same memory and device state (bitwise-identical modulo RNG/MAC), so differences in outcomes are purely from sampling variance. Ideal for GRPO-style RL and tree search."
+        explanation: "Daytona's VM fork: (1) Checkpoint parent: Create VM snapshot (memory + device state), upload to S3. (2) Spread children: Sandbox manager schedules N new sandboxes with the checkpoint snapshot ID. (3) Resume children: Each runner downloads the checkpoint from S3 and restores the snapshot. (4) Fix clone hazards (inferred from VM mechanics): Reseed RNG (/dev/urandom) and assign unique MAC addresses per child. Branches are deterministic because each child starts from the exact same memory and device state (bitwise-identical modulo RNG/MAC), so differences in outcomes are purely from sampling variance. Ideal for GRPO-style RL and tree search."
     },
     {
         question: "Why are GPU sandboxes container-based instead of VM-based in Daytona?",
         options: [
-            "Because Firecracker doesn't support GPU passthrough, and Docker + nvidia-container-runtime is the standard for GPU workloads",
+            "Because most microVMs don't support GPU passthrough, and Docker GPU passthrough is the standard for GPU workloads",
             "Because GPU sandboxes need pause/resume, which only works on containers",
             "Because VMs have too much overhead for GPU workloads",
             "Because Daytona's Rust daemon doesn't support GPU APIs in VMs"
         ],
         correctAnswer: 0,
-        explanation: "GPU sandboxes are container-based because: (1) Firecracker + GPU = unsupported: Firecracker doesn't expose PCIe device passthrough (would require VFIO), so GPUs can't be passed to Firecracker microVMs in most setups. (2) Docker GPU passthrough is mature: Docker + nvidia-container-runtime or --gpus is the standard way to run GPU workloads (CUDA, ROCm), with good tooling (nvidia-smi) and reliability. Trade-off: No pause/resume/fork for GPU sandboxes (GPU state can't be checkpointed by Firecracker; CUDA checkpoint/restore is experimental and not supported in Daytona's container runtime)."
+        explanation: "GPU sandboxes are container-based because: (1) MicroVM + GPU = unsupported in most setups: Most microVMs (e.g., Firecracker) don't expose PCIe device passthrough (would require VFIO), so GPUs can't be passed to microVMs in most setups. (2) Docker GPU passthrough is mature: Docker + nvidia-container-runtime or --gpus is the standard way to run GPU workloads (CUDA, ROCm), with good tooling (nvidia-smi) and reliability. Trade-off: No pause/resume/fork for GPU sandboxes (GPU state can't be checkpointed; CUDA checkpoint/restore is experimental and not supported in Daytona's container runtime)."
     },
     {
         question: "What happened to Daytona's open-source repository in June 2026?",
