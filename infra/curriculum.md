@@ -51,8 +51,8 @@ Study a production snapshot/fork system. Understand E2B's control plane (API + p
 
 ### Phase 3: Hosted Sandbox Platforms (Lessons 07–09)
 
-**07. Daytona Architecture and Container vs VM Classes** 📝 *Planned*  
-Explore Daytona's two isolation tiers. Understand when to use containers (shared kernel, GPU via exclusive allocation) vs VMs (own kernel, pause/resume, fork, hot snapshots). Note: OSS repo frozen June 2026.
+**07. Daytona Architecture and Container vs VM Classes** ✅ *Complete*  
+Explore Daytona's three isolation classes (container, VM, GPU). Learn job-based runner architecture, when to choose each class, and how VM sandboxes implement pause/resume/fork on Firecracker. OSS repo frozen June 2026 (v0.190.0).
 
 **08. Modal Sandboxes: gVisor, Memory Snapshots, and Elasticity** 📝 *Planned*  
 Learn Modal's dual runtime (gVisor default, VM for Docker-in-sandbox). Use filesystem snapshots for setup sharing, memory snapshots for debugging, and named images to avoid rebuild waits. Run SWE-bench's Modal backend.
