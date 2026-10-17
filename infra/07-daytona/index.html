@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 07: Daytona Architecture and Container vs VM Classes</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 07: Daytona Architecture and Container vs VM Classes</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | Multi-Tier Isolation for AI Sandboxes</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#architecture">Architecture</a>
+            <a href="#isolation-classes">Container vs VM Classes</a>
+            <a href="#vm-features">VM: Pause, Resume, Fork</a>
+            <a href="#gpu-sandboxes">GPU Sandboxes</a>
+            <a href="#comparison">Comparison to E2B</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From E2B's Single Path to Daytona's Multi-Tier Approach</h2>
+            <p>
+                In Lesson 06, you saw E2B's architecture: every sandbox is a Firecracker microVM that resumes from 
+                a snapshot. One isolation model, one runtime, one code path.
+            </p>
+            <p>
+                <strong>Daytona</strong> (
+                <a href="https://www.daytona.io" target="_blank">daytona.io</a>) takes a different approach: it 
+                offers <strong>three isolation classes</strong> within one platform. You choose the boundary that 
+                fits your workload:
+            </p>
+            <ul>
+                <li><strong>Container sandboxes:</strong> Shared kernel, fast startup (&lt;90ms), no pause/resume/fork. 
+                Built on Docker + Sysbox (user namespaces).</li>
+                <li><strong>VM sandboxes:</strong> Dedicated kernel (Firecracker microVM), hardware virtualization, 
+                pause/resume/fork/memory snapshots. Slower startup (~100ms from cached snapshot, seconds from cold boot).</li>
+                <li><strong>GPU sandboxes:</strong> Exclusive GPU allocation (NVIDIA/AMD), container-based (shared 
+                kernel), no pause/resume/fork, one GPU device per sandbox.</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>Why Daytona separates control plane (API, job queue) from compute plane (runners, sandbox daemon)</li>
+                    <li>When to choose containers (speed, Docker compatibility) vs VMs (isolation, pause/resume/fork) 
+                    vs GPU (exclusive hardware)</li>
+                    <li>How Daytona's architecture differs from E2B: job-based runner polling (no synchronous gRPC 
+                    from API), Rust daemon (not Go), container default (not VM-only)</li>
+                    <li>How VM sandboxes implement pause/resume/fork on Firecracker, and why fork creates 
+                    deterministic branches</li>
+                    <li>How GPU sandboxes schedule onto GPU runners with exclusive allocation</li>
+                    <li>Hands-on: create container, VM, and GPU sandboxes via SDK, measure startup latency, test 
+                    pause/resume/fork</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ Repository Status (June 2026)</h3>
+                <p>
+                    <strong>Open-source repository frozen:</strong> Daytona's public GitHub repository 
+                    <a href="https://github.com/daytonaio/daytona" target="_blank">daytonaio/daytona</a> was 
+                    archived in June 2026 (last release: v0.190.0, June 23, 2026). Core development moved to a 
+                    private codebase for security reasons 
+                    (<a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">announcement</a>). 
+                    The archived repo remains public under AGPL-3.0 but receives no further updates, fixes, or releases.
+                </p>
+                <p>
+                    <strong>Community fork:</strong> 
+                    <a href="https://github.com/nightona-co/nightona" target="_blank">Nightona</a> is an independent 
+                    open-source continuation from v0.190.0, maintaining the AGPL-3.0 license.
+                </p>
+                <p>
+                    <strong>Lesson scope:</strong> This lesson uses Daytona's official documentation 
+                    (<a href="https://www.daytona.io/docs" target="_blank">daytona.io/docs</a>) and the frozen 
+                    v0.190.0 codebase as primary sources. All architecture claims are cited or labeled as vendor claims.
+                </p>
+            </div>
+        </section>
+
+        <section id="architecture" class="content-section">
+            <h2>Daytona Architecture: Control Plane vs Compute Plane</h2>
+            <p>
+                From 
+                <a href="https://www.daytona.io/docs/en/architecture/" target="_blank">Daytona Architecture docs</a>:
+            </p>
+            <blockquote>
+                "The control plane receives all client requests, authenticates them, records the desired state, and 
+                publishes jobs that runners pick up. Runners report progress back as events, so no sandbox operation 
+                requires a synchronous round trip between the API and a runner."
+            </blockquote>
+
+            <h3>Why Job-Based Architecture?</h3>
+            <p>
+                <strong>Async by default:</strong> The API doesn't make synchronous gRPC calls to runners (contrast 
+                E2B, where the API calls orchestrator gRPC endpoints directly). Instead, the API writes a job to a 
+                queue (backed by Postgres + Redis), the runner polls the queue, executes the job, and reports events 
+                back. This decouples API availability from runner availability: if the API restarts, runners keep 
+                running and reconnect to the queue.
+            </p>
+            <p>
+                <strong>Runner pull, not push:</strong> Runners poll the control plane for jobs. No inbound 
+                connections from the API to runners. This simplifies networking (runners can sit behind NAT or 
+                firewalls) and reduces blast radius: a compromised API can write malicious jobs, but it can't 
+                directly exec commands on runner nodes.
+            </p>
+
+            <div class="mermaid">
+graph TB
+    subgraph clients["Client (SDK / CLI / Dashboard)"]
+        SDK[SDK/CLI]
+    end
+    
+    LB[Load Balancer]
+    
+    subgraph controlplane["Control Plane (API nodes)"]
+        API[API Service<br/>NestJS REST :443]
+        PROXY[HTTP Proxy<br/>:443 port-{sandboxId}]
+        SNAPB[Snapshot Builder<br/>in-process]
+        SANDMAN[Sandbox Manager<br/>in-process]
+    end
+    
+    subgraph datastores["State Stores"]
+        PG[(PostgreSQL<br/>metadata, jobs)]
+        RD[(Redis<br/>cache, locks, queue)]
+        CH[(ClickHouse<br/>metrics, logs)]
+        S3[(Object Storage<br/>S3/GCS snapshots)]
+    end
+    
+    subgraph computeplane["Compute Plane (Runners)"]
+        RUNNER[Runner<br/>Go agent, polls jobs]
+        subgraph sandbox["Sandbox (Container or VM)"]
+            DAEMON[Sandbox Daemon<br/>Rust init :49983]
+            USERPROC[User processes]
+        end
+    end
+    
+    SDK -->|1. Create sandbox<br/>POST /api/sandbox| LB
+    LB --> API
+    API -->|2. Write job| PG
+    API -->|3. Publish| RD
+    RUNNER -.->|4. Poll jobs| RD
+    RUNNER -->|5. Execute: create| DAEMON
+    DAEMON --> USERPROC
+    RUNNER -->|6. Report event<br/>sandbox=running| API
+    API -->|7. Return ID, status| SDK
+    
+    SDK -.->|8. Exec/files<br/>(direct to Toolbox API)| PROXY
+    PROXY -.->|forward to runner| RUNNER
+    RUNNER -.-> DAEMON
+    
+    API --> PG
+    API --> S3
+    RUNNER --> S3
+    RUNNER --> CH
+    SNAPB --> S3
+    
+    style API fill:#3b82f6,stroke:#f1f5f9
+    style RUNNER fill:#8b5cf6,stroke:#f1f5f9
+    style DAEMON fill:#10b981,stroke:#f1f5f9
+    style S3 fill:#f59e0b,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> Daytona's job-based architecture. API writes jobs to the queue, runners 
+                poll and execute, and report events back. Execution traffic (exec, files) bypasses the API via the 
+                HTTP proxy → runner → sandbox daemon path.
+            </p>
+
+            <h3>The Components</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Runs On</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>API</strong></td>
+                        <td>Control plane</td>
+                        <td>NestJS REST service (port 443); auth, lifecycle, job creation, snapshot management</td>
+                    </tr>
+                    <tr>
+                        <td><strong>HTTP Proxy</strong></td>
+                        <td>Control plane</td>
+                        <td>Routes <code>{port}-{sandboxId}.domain</code> URLs to the correct runner and sandbox</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Snapshot builder</strong></td>
+                        <td>Control plane (in-process)</td>
+                        <td>Builds snapshots from Dockerfiles or OCI images; pushes to internal snapshot registry (OCI Distribution spec)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sandbox manager</strong></td>
+                        <td>Control plane (in-process)</td>
+                        <td>Schedules sandboxes onto runners, reconciles states, enforces lifecycle policies</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Runner</strong></td>
+                        <td>Every compute node</td>
+                        <td>Go agent; polls job queue, executes sandbox operations (create/start/stop/pause/resume/fork/destroy), reports events</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Sandbox daemon</strong></td>
+                        <td>Inside every sandbox</td>
+                        <td>Rust agent (init process); exposes Toolbox API (REST + gRPC :49983) for files, Git, process exec, PTY, computer use</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Data Stores</h3>
+            <ul>
+                <li><strong>PostgreSQL:</strong> Primary persistent store for metadata (teams, API keys, sandboxes, 
+                snapshots, volumes, jobs, events)</li>
+                <li><strong>Redis:</strong> Caching, distributed locks, job queue publish/subscribe</li>
+                <li><strong>ClickHouse:</strong> Metrics and logs (usage data, billing, analytics)</li>
+                <li><strong>S3/GCS:</strong> Snapshot images (OCI layers), volume data, memory snapshots</li>
+            </ul>
+        </section>
+
+        <section id="isolation-classes" class="content-section">
+            <h2>Three Isolation Classes: When to Use Each</h2>
+            <p>
+                From 
+                <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona Isolation docs</a>:
+            </p>
+            <blockquote>
+                "Sandbox classes differ in the kind of boundary they provide."
+            </blockquote>
+
+            <h3>Class Comparison Table</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Container</th>
+                        <th>VM (Linux/Windows)</th>
+                        <th>GPU</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Isolation level</strong></td>
+                        <td>Shared kernel, dedicated namespaces (PID, net, mount, UTS, IPC, user)</td>
+                        <td>Dedicated kernel (hardware virtualization, Firecracker microVM)</td>
+                        <td>Shared kernel + exclusive GPU device</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Startup time</strong></td>
+                        <td>&lt;90ms (vendor claim, from cached OCI image)</td>
+                        <td>~100ms (vendor claim, from pre-built memory snapshot); seconds from cold boot</td>
+                        <td>~100ms (vendor claim, container + GPU device allocation)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pause / resume</strong></td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (Firecracker CreateSnapshot / LoadSnapshot)</td>
+                        <td>❌ No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Fork</strong></td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (checkpoint parent, resume N children with unique state)</td>
+                        <td>❌ No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Memory snapshots</strong></td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (full VM memory + device state)</td>
+                        <td>❌ No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Nested virtualization</strong></td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (Linux VM only: KVM <code>/dev/kvm</code> inside guest)</td>
+                        <td>❌ No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU access</strong></td>
+                        <td>❌ No</td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (exclusive allocation, NVIDIA/AMD)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Dynamic builds</strong></td>
+                        <td>✅ Yes (Dockerfile or OCI image)</td>
+                        <td>❌ No (must create from existing VM snapshot)</td>
+                        <td>✅ Yes (Dockerfile or OCI image + GPU layers)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Use case</strong></td>
+                        <td>Fast agent loops, high concurrency, Docker-compatible workloads</td>
+                        <td>Untrusted code, long-running state, fork-based RL/search, nested VMs</td>
+                        <td>Model inference, fine-tuning, GPU-accelerated compute</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Container Sandboxes: Shared Kernel, Fast Startup</h3>
+            <p>
+                <strong>Default runtime.</strong> Container sandboxes use Docker + Sysbox (user namespaces) to 
+                provide isolation without hardware virtualization. Each sandbox has:
+            </p>
+            <ul>
+                <li>Dedicated Linux namespaces (PID, mount, network, UTS, IPC, user, cgroup)</li>
+                <li>Hard resource limits (vCPU, RAM, disk) enforced via cgroups v2</li>
+                <li>Root inside the sandbox, unprivileged on the host (user namespace mapping)</li>
+                <li>No shared network with other sandboxes (each gets its own network namespace)</li>
+            </ul>
+            <p>
+                <strong>When to use:</strong> You need fast startup (&lt;90ms vendor claim), Docker compatibility 
+                (mount Docker images, run <code>apt-get</code>, <code>pip install</code>), and high concurrency. 
+                You don't need pause/resume/fork or hardware-level isolation.
+            </p>
+            <p>
+                <strong>Trade-offs:</strong> Kernel is shared. If a guest kernel vulnerability exists, container 
+                sandboxes could potentially exploit it to escape to the host or observe other sandboxes (mitigated 
+                by seccomp-bpf filters, user namespaces, and AppArmor/SELinux). No pause/resume/fork: you can't 
+                checkpoint agent state and resume later, or branch into N copies.
+            </p>
+
+            <h3>VM Sandboxes: Dedicated Kernel, Pause/Resume/Fork</h3>
+            <p>
+                <strong>Hardware-virtualized Firecracker microVMs.</strong> From 
+                <a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">Daytona VMs announcement</a>:
+            </p>
+            <blockquote>
+                "Every Daytona sandbox can now run as a true microVM with full OS-level isolation. Pause freezes 
+                the entire machine state and resumes it in under a second. Fork clones a running VM into any number 
+                of identical copies from a single point in time."
+            </blockquote>
+            <p>
+                Each VM sandbox boots its own Linux kernel (or Windows kernel for Windows VMs) inside a Firecracker 
+                microVM. Isolation is enforced by KVM (hardware virtualization), not Linux namespaces. Guest kernel 
+                vulnerabilities cannot escape to the host or observe other VMs.
+            </p>
+            <p>
+                <strong>When to use:</strong> You need hardware-level isolation (untrusted or AI-generated code), 
+                pause/resume (long-running agents that sit idle between steps), fork (branch-and-select workflows, 
+                GRPO-style RL, tree search), or nested virtualization (run Docker/KVM inside the sandbox).
+            </p>
+            <p>
+                <strong>Trade-offs:</strong> Slower startup (~100ms from pre-built memory snapshot, seconds from 
+                cold boot). Cannot create VM sandboxes from arbitrary Dockerfiles (must create from existing VM 
+                snapshots). Higher memory overhead (guest kernel + user space).
+            </p>
+
+            <h3>GPU Sandboxes: Exclusive GPU Allocation</h3>
+            <p>
+                <strong>Container-based with exclusive GPU devices.</strong> From 
+                <a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Daytona Isolation docs</a>:
+            </p>
+            <blockquote>
+                "Isolated container with exclusive GPU allocation: assigned GPU devices belong to one sandbox at a 
+                time and are never shared."
+            </blockquote>
+            <p>
+                GPU sandboxes are containers (shared kernel) that run on GPU runners. Each sandbox is allocated one 
+                or more GPU devices (NVIDIA or AMD), and those devices are never shared with other sandboxes. The 
+                runner schedules sandboxes with <code>--gpus</code> (Docker runtime) or equivalent device passthrough.
+            </p>
+            <p>
+                <strong>When to use:</strong> Model inference, fine-tuning, GPU-accelerated compute (CUDA, ROCm). 
+                You need dedicated GPU hardware and can tolerate container-level isolation (no pause/resume/fork).
+            </p>
+            <p>
+                <strong>Trade-offs:</strong> No pause/resume/fork (GPU state cannot be checkpointed; Firecracker 
+                + GPU is unsupported in most setups). Must schedule onto GPU runners (limited availability, higher 
+                cost). Container-based (shared kernel), not VM isolation.
+            </p>
+
+            <div class="mermaid">
+graph LR
+    subgraph Container
+        CN[Shared Kernel]
+        CNS[Namespaces<br/>cgroups]
+        CNU[User code]
+        CN --> CNS --> CNU
+    end
+    
+    subgraph VM
+        VMH[KVM / Firecracker]
+        VMK[Guest Kernel]
+        VMU[User code]
+        VMH --> VMK --> VMU
+    end
+    
+    subgraph GPU
+        GN[Shared Kernel]
+        GD[Exclusive GPU<br/>device]
+        GU[User code + CUDA]
+        GN --> GD --> GU
+    end
+    
+    Container -->|&lt;90ms| FAST[Fast startup]
+    VM -->|~100ms snapshot<br/>seconds cold| MED[Medium startup]
+    GPU -->|~100ms| MED2[Medium startup]
+    
+    VM -->|Pause/resume/fork| STATE[Stateful]
+    Container -->|No checkpoint| STATELESS[Stateless]
+    GPU -->|No checkpoint| STATELESS2[Stateless]
+    
+    style Container fill:#3b82f6,stroke:#f1f5f9
+    style VM fill:#8b5cf6,stroke:#f1f5f9
+    style GPU fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> Three isolation classes. Container: shared kernel, fast, no fork. VM: 
+                dedicated kernel, pause/resume/fork. GPU: exclusive GPU, no fork.
+            </p>
+        </section>
+
+        <section id="vm-features" class="content-section">
+            <h2>VM Sandboxes: Pause, Resume, and Fork on Firecracker</h2>
+
+            <h3>How Pause Works</h3>
+            <p>
+                When you call <code>sandbox.pause()</code> on a VM sandbox:
+            </p>
+            <ol>
+                <li><strong>Runner receives pause job:</strong> API writes <code>pause</code> job to queue, runner 
+                polls and picks it up.</li>
+                <li><strong>Firecracker CreateSnapshot:</strong> Runner calls Firecracker's <code>CreateSnapshot</code> 
+                API. Firecracker writes:
+                    <ul>
+                        <li><strong>Memory file:</strong> Full guest RAM (mmap-backed file)</li>
+                        <li><strong>State file:</strong> Device state JSON (vCPU registers, virtio device state, 
+                        timers, interrupt state)</li>
+                        <li><strong>Rootfs diff (optional):</strong> Modified disk blocks (if using diff snapshots)</li>
+                    </ul>
+                </li>
+                <li><strong>Upload to S3:</strong> Runner uploads memory file and state file to object storage 
+                (S3/GCS). Optionally uploads only the diff (changed pages) if configured.</li>
+                <li><strong>Stop Firecracker:</strong> Kill the Firecracker process. The sandbox is now paused 
+                (no CPU/memory cost on the runner).</li>
+                <li><strong>Report event:</strong> Runner reports <code>sandbox=paused</code> to API.</li>
+            </ol>
+            <p>
+                <strong>Latency:</strong> Daytona does not publish official pause latency numbers. Firecracker 
+                snapshot creation is typically &lt;1 second for small VMs (256MB–1GB RAM), but upload to S3 depends 
+                on object storage latency and snapshot size.
+            </p>
+
+            <h3>How Resume Works</h3>
+            <p>
+                When you call <code>sandbox.connect()</code> (Python SDK) or <code>sandbox.resume()</code> on a 
+                paused VM sandbox:
+            </p>
+            <ol>
+                <li><strong>Runner receives resume job:</strong> API writes <code>resume</code> job to queue, runner 
+                polls.</li>
+                <li><strong>Download snapshot:</strong> Runner downloads memory file and state file from S3. May 
+                use userfaultfd lazy memory (load pages on-demand) or full download, depending on runner config.</li>
+                <li><strong>Firecracker LoadSnapshot:</strong> Runner calls Firecracker's <code>LoadSnapshot</code> 
+                API with the memory file and state file paths. Firecracker mmaps the memory file, restores device 
+                state, and calls <code>KVM_RUN</code>. The guest resumes execution exactly where it was paused.</li>
+                <li><strong>Sandbox daemon reconnects:</strong> The sandbox daemon (Rust init) was frozen when the 
+                snapshot was taken. It resumes and re-exposes the Toolbox API on port 49983.</li>
+                <li><strong>Report event:</strong> Runner reports <code>sandbox=running</code> to API.</li>
+            </ol>
+            <p>
+                <strong>Latency:</strong> From the VMs announcement: "Resume restores the exact state in under a 
+                second" (vendor claim). Independent Firecracker benchmarks (Lesson 06) report ~28ms median restore 
+                for a 256MB working set on NVMe (LoadSnapshot only, not including S3 download).
+            </p>
+
+            <h3>How Fork Works: Checkpoint Parent, Resume N Children</h3>
+            <p>
+                From the VMs announcement:
+            </p>
+            <blockquote>
+                "Fork clones a running VM into N identical copies. Each fork starts from the same machine state, 
+                including memory and running processes, and then diverges independently."
+            </blockquote>
+            <p>
+                The workflow:
+            </p>
+            <ol>
+                <li><strong>Parent sandbox running:</strong> Your agent code has executed to step <em>k</em>. The 
+                sandbox is in state S (memory, processes, open files).</li>
+                <li><strong>SDK calls fork:</strong> <code>parent.fork(count=N)</code> (Python) or equivalent.</li>
+                <li><strong>Checkpoint parent:</strong> API writes <code>checkpoint</code> job. Runner pauses the 
+                parent (same as pause: CreateSnapshot, upload to S3). The parent can optionally continue running 
+                after checkpoint (controlled by API request flag).</li>
+                <li><strong>Spread children:</strong> Sandbox manager (in API) schedules N new sandboxes with the 
+                checkpoint snapshot ID. For each child:
+                    <ul>
+                        <li>API picks a runner (may be the same runner or different runners, depending on capacity).</li>
+                        <li>API writes <code>create from checkpoint</code> job for that runner.</li>
+                        <li>Runner downloads the checkpoint snapshot from S3.</li>
+                        <li>Runner calls LoadSnapshot to resume the child from the checkpoint.</li>
+                        <li><strong>Fix clone hazards:</strong> Runner (or sandbox daemon) must reseed RNG 
+                        (<code>/dev/urandom</code>, <code>/dev/random</code>) to ensure each child generates 
+                        different random values. The runner assigns each child a unique MAC address (configured 
+                        in Firecracker network-interfaces JSON). Time synchronization: Firecracker does not 
+                        provide VMGenID, so child VMs may see clock drift; applications should resync time if needed.</li>
+                    </ul>
+                </li>
+                <li><strong>Return child IDs:</strong> API returns a list of N sandbox IDs to the SDK.</li>
+            </ol>
+
+            <div class="mermaid">
+graph TD
+    Parent[Parent VM<br/>State S at step k]
+    Fork[SDK: fork count=3]
+    Checkpoint[Checkpoint Parent<br/>CreateSnapshot]
+    Upload[Upload to S3]
+
+    Child1[Resume Child 1<br/>Runner A, unique MAC]
+    Child2[Resume Child 2<br/>Runner B, unique MAC]
+    Child3[Resume Child 3<br/>Runner A, unique MAC]
+
+    Sample1[Sample with<br/>temperature=0.7]
+    Sample2[Sample with<br/>temperature=1.0]
+    Sample3[Sample with<br/>temperature=0.5]
+
+    Parent --> Fork
+    Fork --> Checkpoint
+    Checkpoint --> Upload
+    Upload --> Child1
+    Upload --> Child2
+    Upload --> Child3
+
+    Child1 --> Sample1
+    Child2 --> Sample2
+    Child3 --> Sample3
+
+    style Checkpoint fill:#10b981,stroke:#f1f5f9
+    style Upload fill:#f59e0b,stroke:#f1f5f9
+    style Child1 fill:#3b82f6,stroke:#f1f5f9
+    style Child2 fill:#3b82f6,stroke:#f1f5f9
+    style Child3 fill:#3b82f6,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> Fork workflow. Checkpoint parent VM, upload to S3, resume N children 
+                across runners with unique MAC/RNG, sample differently in each child.
+            </p>
+
+            <h3>Why Fork Creates Deterministic Branches</h3>
+            <p>
+                Because each child resumes from the <em>exact same memory and device state</em> as the parent, the 
+                initial state is bitwise-identical (modulo RNG reseed and MAC change). This makes fork ideal for:
+            </p>
+            <ul>
+                <li><strong>GRPO-style RL:</strong> Run agent to decision point, fork N children, sample with 
+                different temperatures/seeds, compare outcomes for policy gradient update. The setup is identical, 
+                so differences in outcomes are purely from sampling variance.</li>
+                <li><strong>Tree search:</strong> Fork at each branch point to explore N actions. Prune low-value 
+                branches, continue high-value ones. Each branch starts from the same known state.</li>
+                <li><strong>A/B testing:</strong> Run expensive setup (install dependencies, load model), fork N 
+                children, run different code versions in each child. Setup cost is paid once.</li>
+            </ul>
+        </section>
+
+        <section id="gpu-sandboxes" class="content-section">
+            <h2>GPU Sandboxes: Exclusive Allocation and Scheduling</h2>
+
+            <h3>How GPU Sandboxes Work</h3>
+            <p>
+                GPU sandboxes are container-based (shared kernel, Linux namespaces + cgroups), but with exclusive 
+                GPU device allocation. From the Isolation docs:
+            </p>
+            <blockquote>
+                "Isolated container with exclusive GPU allocation: assigned GPU devices belong to one sandbox at a 
+                time and are never shared."
+            </blockquote>
+            <p>
+                When you create a GPU sandbox:
+            </p>
+            <ol>
+                <li><strong>API receives create request:</strong> <code>POST /api/sandbox</code> with 
+                <code>class=gpu</code>, <code>gpu_count=1</code> (or more).</li>
+                <li><strong>Sandbox manager schedules onto GPU runner:</strong> The manager queries available 
+                runners, filters for GPU runners with sufficient free GPU devices, and picks one (placement 
+                algorithm not documented; likely round-robin or load-based).</li>
+                <li><strong>Runner allocates GPU devices:</strong> The runner (Go agent) calls Docker create with 
+                <code>--gpus device=0</code> (or equivalent for multiple GPUs). This passes the GPU device(s) 
+                into the container. The runner marks those GPU devices as in-use, so no other sandbox can claim them.</li>
+                <li><strong>Container starts:</strong> Docker starts the container with the allocated GPU device(s). 
+                The sandbox can now use CUDA, ROCm, or other GPU frameworks.</li>
+                <li><strong>Exclusive allocation:</strong> While the sandbox is running, those GPU devices are 
+                unavailable to other sandboxes. When the sandbox is deleted, the runner marks the devices as free.</li>
+            </ol>
+
+            <h3>Why Container, Not VM?</h3>
+            <p>
+                GPU sandboxes are containers, not Firecracker microVMs, for two reasons:
+            </p>
+            <ul>
+                <li><strong>Firecracker + GPU = unsupported in most setups:</strong> Firecracker does not natively 
+                support GPU passthrough (PCIe device passthrough requires VFIO, which Firecracker doesn't expose). 
+                Cloud Hypervisor (an alternative VMM) supports GPU passthrough, but Daytona uses Firecracker for 
+                VMs.</li>
+                <li><strong>Container GPU passthrough is mature:</strong> Docker + <code>nvidia-container-runtime</code> 
+                or <code>--gpus</code> is the standard way to run GPU workloads. It works reliably, has good 
+                tooling (NVIDIA Docker, nvidia-smi), and avoids the complexity of VFIO PCIe passthrough.</li>
+            </ul>
+            <p>
+                <strong>Trade-off:</strong> No pause/resume/fork for GPU sandboxes. GPU state (CUDA contexts, 
+                kernel memory, model weights) cannot be checkpointed by Firecracker. CUDA checkpoint/restore 
+                (CRIU + cuda-checkpoint, gVisor's experimental feature) is not supported in Daytona's container 
+                runtime.
+            </p>
+
+            <h3>GPU Runner Scheduling and Capacity</h3>
+            <p>
+                GPU runners report their GPU device list and availability to the API. The API's sandbox manager 
+                tracks which devices are in-use. When capacity is exhausted (all GPU devices allocated), new GPU 
+                sandbox requests queue or fail (behavior depends on API configuration). GPU runners typically have 
+                1–8 GPUs per node (NVIDIA A100, H100, or AMD MI250X in production).
+            </p>
+        </section>
+
+        <section id="comparison" class="content-section">
+            <h2>Comparison to E2B: Multi-Class vs Single-Path</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>E2B (Lesson 06)</th>
+                        <th>Daytona</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Default isolation</strong></td>
+                        <td>Firecracker microVM (always)</td>
+                        <td>Container (default), VM (opt-in), GPU (opt-in)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pause / resume</strong></td>
+                        <td>Yes (all sandboxes are VMs)</td>
+                        <td>Yes (VM sandboxes only)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Fork</strong></td>
+                        <td>Yes (up to 20 children at once)</td>
+                        <td>Yes (VM sandboxes only; count not documented, likely similar)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU support</strong></td>
+                        <td>No (Firecracker + GPU unsupported)</td>
+                        <td>Yes (exclusive GPU allocation, container-based)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Startup latency</strong></td>
+                        <td>~1s (vendor claim, snapshot restore from S3)</td>
+                        <td>&lt;90ms container (vendor claim, from cached image), ~100ms VM (vendor claim, from cached snapshot)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Control → data plane protocol</strong></td>
+                        <td>Synchronous gRPC (API calls orchestrator gRPC directly)</td>
+                        <td>Async job queue (API writes jobs, runners poll, report events)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>In-sandbox agent</strong></td>
+                        <td>envd (Go, Connect RPC + REST :49983)</td>
+                        <td>Sandbox daemon (Rust, Toolbox API :49983)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>API framework</strong></td>
+                        <td>Go + Gin</td>
+                        <td>NestJS (TypeScript)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Runner language</strong></td>
+                        <td>Go</td>
+                        <td>Go</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Open source</strong></td>
+                        <td>Yes (Apache-2.0, e2b-dev/runtime)</td>
+                        <td>Was open (AGPL-3.0, daytonaio/daytona v0.190.0), now closed-source (June 2026)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>When to Choose E2B vs Daytona</h3>
+            <ul>
+                <li><strong>Choose E2B if:</strong> You need VM-only isolation (every sandbox is a microVM), 
+                open-source backend (Apache-2.0), or you're self-hosting and want a simpler single-path architecture.</li>
+                <li><strong>Choose Daytona if:</strong> You need multi-class isolation (container for speed, VM for 
+                fork, GPU for ML), or you want a managed service with GPU support (Daytona Cloud).</li>
+            </ul>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Multi-Class Sandbox Comparison</h2>
+            <p>
+                In this exercise, you'll create container, VM, and GPU sandboxes via the Daytona SDK, measure 
+                startup latency, and test pause/resume/fork on VM sandboxes. You'll compare the trade-offs of 
+                each class.
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Prerequisites</h3>
+                <ul>
+                    <li><strong>Daytona account:</strong> Sign up at 
+                    <a href="https://app.daytona.io" target="_blank">app.daytona.io</a> and get an API key from 
+                    <a href="https://app.daytona.io/dashboard/keys" target="_blank">app.daytona.io/dashboard/keys</a>.</li>
+                    <li><strong>SDK:</strong> Python 3.10+ (<code>pip install daytona</code>) or TypeScript 18+ 
+                    (<code>npm install @daytona/sdk</code>).</li>
+                    <li><strong>GPU access (optional):</strong> GPU sandboxes require Daytona Tier 3+ and GPU quota. 
+                    If you don't have GPU access, skip the GPU section (the container and VM sections work on all tiers).</li>
+                </ul>
+                <p>
+                    <strong>Note:</strong> This exercise uses Daytona Cloud (managed service). If you want to 
+                    self-host, see the archived 
+                    <a href="https://github.com/daytonaio/daytona" target="_blank">daytonaio/daytona v0.190.0</a> 
+                    repository or the community fork 
+                    <a href="https://github.com/nightona-co/nightona" target="_blank">Nightona</a>.
+                </p>
+            </div>
+
+            <h3>Exercise: Compare Container, VM, and GPU Sandboxes</h3>
+
+            <h4>Step 1: Install SDK and Configure</h4>
+            <p>
+                <strong>Python:</strong>
+            </p>
+            <pre><code class="language-bash">pip install daytona</code></pre>
+            <p>
+                <strong>TypeScript:</strong>
+            </p>
+            <pre><code class="language-bash">npm install @daytona/sdk</code></pre>
+
+            <h4>Step 2: Create and Measure Container Sandbox</h4>
+            <p>
+                <strong>Python example:</strong>
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Daytona container sandbox: fast startup, no pause/resume.
+"""
+import time
+from daytona import Daytona, DaytonaConfig
+
+def measure(label, fn):
+    start = time.time()
+    result = fn()
+    elapsed = (time.time() - start) * 1000  # milliseconds
+    print(f"{label}: {elapsed:.1f}ms")
+    return result
+
+# Configure
+config = DaytonaConfig(api_key="YOUR_API_KEY")
+daytona = Daytona(config)
+
+print("=== Container Sandbox ===")
+container = measure(
+    "Create container",
+    lambda: daytona.create()  # Default class is container
+)
+print(f"Container ID: {container.id}")
+
+# Execute a command
+result = container.process.exec("echo 'Hello from container'")
+print(f"Output: {result.result}")
+
+# Try to pause (should fail)
+try:
+    container.pause()
+    print("Paused (unexpected!)")
+except Exception as e:
+    print(f"Pause failed (expected): {e}")
+
+# Clean up
+container.kill()
+print("Container killed")
+</code></pre>
+
+            <p>
+                <strong>TypeScript example:</strong>
+            </p>
+            <pre><code class="language-typescript">import { Daytona } from '@daytona/sdk';
+
+const measure = async (label: string, fn: () => Promise<any>) => {
+  const start = Date.now();
+  const result = await fn();
+  const elapsed = Date.now() - start;
+  console.log(`${label}: ${elapsed}ms`);
+  return result;
+};
+
+const daytona = new Daytona({ apiKey: 'YOUR_API_KEY' });
+
+console.log('=== Container Sandbox ===');
+const container = await measure(
+  'Create container',
+  async () => await daytona.create()  // Default class is container
+);
+console.log(`Container ID: ${container.id}`);
+
+// Execute a command
+const result = await container.process.exec('echo "Hello from container"');
+console.log(`Output: ${result.result}`);
+
+// Try to pause (should fail)
+try {
+  await container.pause();
+  console.log('Paused (unexpected!)');
+} catch (e) {
+  console.log(`Pause failed (expected): ${e.message}`);
+}
+
+// Clean up
+await container.kill();
+console.log('Container killed');
+</code></pre>
+
+            <h4>Step 3: Create and Test VM Sandbox with Pause/Resume/Fork</h4>
+            <p>
+                <strong>Python example:</strong>
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Daytona VM sandbox: pause/resume/fork.
+"""
+import time
+from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
+
+def measure(label, fn):
+    start = time.time()
+    result = fn()
+    elapsed = (time.time() - start) * 1000  # milliseconds
+    print(f"{label}: {elapsed:.1f}ms")
+    return result
+
+config = DaytonaConfig(api_key="YOUR_API_KEY")
+daytona = Daytona(config)
+
+print("\n=== VM Sandbox ===")
+vm = measure(
+    "Create VM",
+    lambda: daytona.create(CreateSandboxFromSnapshotParams(
+        snapshot_id="daytona-vm-small"  # Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
+    ))
+)
+print(f"VM ID: {vm.id}")
+
+# Execute a command
+result = vm.process.exec("echo 'Hello from VM'")
+print(f"Output: {result.result}")
+
+# Write state
+vm.process.exec("echo 'state before pause' > /tmp/state.txt")
+
+# Pause
+measure("Pause VM", lambda: vm.pause())
+
+# Resume
+measure("Resume VM", lambda: vm.connect())
+
+# Verify state persisted
+result = vm.process.exec("cat /tmp/state.txt")
+print(f"State after resume: {result.result}")
+
+# Fork
+print("\n=== Fork VM ===")
+children = measure("Fork 3 children", lambda: vm.fork(count=3))
+print(f"Child IDs: {[c.id for c in children]}")
+
+# Sample differently in each child
+for i, child in enumerate(children):
+    result = child.process.exec("cat /tmp/state.txt")
+    print(f"Child {i}: state: {result.result}")
+    
+    # Sample with unique seed
+    seed = 42 + i
+    result = child.process.exec(f"python3 -c 'import random; random.seed({seed}); print(random.randint(0, 100))'")
+    print(f"Child {i}: sampled value: {result.result}")
+
+# Clean up
+vm.kill()
+for child in children:
+    child.kill()
+print("All VMs killed")
+</code></pre>
+
+            <p>
+                <strong>TypeScript example:</strong>
+            </p>
+            <pre><code class="language-typescript">import { Daytona } from '@daytona/sdk';
+
+const measure = async (label: string, fn: () => Promise<any>) => {
+  const start = Date.now();
+  const result = await fn();
+  const elapsed = Date.now() - start;
+  console.log(`${label}: ${elapsed}ms`);
+  return result;
+};
+
+const daytona = new Daytona({ apiKey: 'YOUR_API_KEY' });
+
+console.log('\n=== VM Sandbox ===');
+const vm = await measure(
+  'Create VM',
+  async () => await daytona.create({
+    snapshotId: 'daytona-vm-small'  // Pre-built Linux VM snapshot (1 vCPU, 1GB RAM)
+  })
+);
+console.log(`VM ID: ${vm.id}`);
+
+// Execute a command
+let result = await vm.process.exec('echo "Hello from VM"');
+console.log(`Output: ${result.result}`);
+
+// Write state
+await vm.process.exec('echo "state before pause" > /tmp/state.txt');
+
+// Pause
+await measure('Pause VM', async () => await vm.pause());
+
+// Resume
+await measure('Resume VM', async () => await vm.connect());
+
+// Verify state persisted
+result = await vm.process.exec('cat /tmp/state.txt');
+console.log(`State after resume: ${result.result}`);
+
+// Fork
+console.log('\n=== Fork VM ===');
+const children = await measure('Fork 3 children', async () => await vm.fork(3));
+console.log(`Child IDs: ${children.map(c => c.id)}`);
+
+// Sample differently in each child
+for (const [i, child] of children.entries()) {
+  result = await child.process.exec('cat /tmp/state.txt');
+  console.log(`Child ${i}: state: ${result.result}`);
+  
+  // Sample with unique seed
+  const seed = 42 + i;
+  result = await child.process.exec(`python3 -c 'import random; random.seed(${seed}); print(random.randint(0, 100))'`);
+  console.log(`Child ${i}: sampled value: ${result.result}`);
+}
+
+// Clean up
+await vm.kill();
+for (const child of children) {
+  await child.kill();
+}
+console.log('All VMs killed');
+</code></pre>
+
+            <h4>Step 4 (Optional): Create GPU Sandbox</h4>
+            <p>
+                <strong>Python example:</strong>
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Daytona GPU sandbox: exclusive GPU allocation (requires Tier 3+).
+"""
+import time
+from daytona import Daytona, DaytonaConfig, CreateSandboxFromSnapshotParams
+
+def measure(label, fn):
+    start = time.time()
+    result = fn()
+    elapsed = (time.time() - start) * 1000
+    print(f"{label}: {elapsed:.1f}ms")
+    return result
+
+config = DaytonaConfig(api_key="YOUR_API_KEY")
+daytona = Daytona(config)
+
+print("\n=== GPU Sandbox ===")
+try:
+    gpu = measure(
+        "Create GPU",
+        lambda: daytona.create(CreateSandboxFromSnapshotParams(
+            # GPU sandboxes require specifying a GPU-compatible snapshot
+            # Check Daytona docs for available GPU snapshot IDs
+        ))
+    )
+    print(f"GPU ID: {gpu.id}")
+
+    # Check GPU availability
+    result = gpu.process.exec("nvidia-smi")
+    print(f"nvidia-smi output:\n{result.result}")
+
+    # Try to pause (should fail)
+    try:
+        gpu.pause()
+        print("Paused (unexpected!)")
+    except Exception as e:
+        print(f"Pause failed (expected for GPU): {e}")
+
+    gpu.kill()
+    print("GPU killed")
+except Exception as e:
+    print(f"GPU sandbox creation failed (expected if no GPU quota): {e}")
+</code></pre>
+
+            <h3>What You Learned</h3>
+            <ul>
+                <li>How to create container, VM, and GPU sandboxes via the Daytona SDK</li>
+                <li>How to measure startup latency: container (&lt;90ms vendor claim), VM (~100ms vendor claim), 
+                GPU (~100ms vendor claim)</li>
+                <li>How to pause/resume VM sandboxes and verify state persistence</li>
+                <li>How to fork a VM sandbox into N children with unique sampling</li>
+                <li>Why pause/resume/fork don't work on container or GPU sandboxes</li>
+                <li>The trade-offs of each class: container (speed), VM (fork), GPU (hardware)</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Going Further: Self-Hosting (v0.190.0)</h3>
+                <p>
+                    If you want to self-host Daytona, use the archived 
+                    <a href="https://github.com/daytonaio/daytona" target="_blank">daytonaio/daytona v0.190.0</a> 
+                    release or the community fork 
+                    <a href="https://github.com/nightona-co/nightona" target="_blank">Nightona</a>. The frozen 
+                    v0.190.0 codebase includes:
+                </p>
+                <ul>
+                    <li>Docker Compose stack for local development</li>
+                    <li>Kubernetes manifests for production deployment</li>
+                    <li>Terraform modules for GCP/AWS/Azure</li>
+                    <li>Runner Go agent source code</li>
+                    <li>Sandbox daemon Rust source code</li>
+                </ul>
+                <p>
+                    Note: Self-hosting v0.190.0 means no updates, no security patches, and no official support 
+                    (frozen June 2026). Use at your own risk.
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from Daytona's official documentation, the frozen v0.190.0 
+                codebase, or labeled as vendor claims. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>Daytona Official Documentation</h3>
+                <ul>
+                    <li><a href="https://www.daytona.io/docs" target="_blank">Daytona Documentation</a> — 
+                    Main documentation site (current, post-June 2026)</li>
+                    <li><a href="https://www.daytona.io/docs/en/architecture/" target="_blank">Architecture</a> — 
+                    Control plane, compute plane, runners, sandbox daemon, job-based orchestration</li>
+                    <li><a href="https://www.daytona.io/docs/en/isolation/" target="_blank">Isolation</a> — 
+                    Three isolation classes (container, VM, GPU), runtime/network/organization boundaries</li>
+                    <li><a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">Sandboxes</a> — 
+                    Sandbox lifecycle, classes, pause/resume/fork, nested virtualization</li>
+                    <li><a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">VMs: Pause & Fork</a> — 
+                    Announcement post: "Every Daytona sandbox can now run as a true microVM with full OS-level 
+                    isolation. Pause freezes the entire machine state and resumes it in under a second."</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Daytona Open Source (Frozen v0.190.0)</h3>
+                <ul>
+                    <li><a href="https://github.com/daytonaio/daytona" target="_blank">daytonaio/daytona</a> — 
+                    Main repository (AGPL-3.0, archived June 2026, v0.190.0 last release)</li>
+                    <li><a href="https://github.com/daytonaio/daytona/releases/tag/v0.190.0" target="_blank">v0.190.0 Release Notes</a> — 
+                    Last open-source release (June 23, 2026): pause action, sandbox domain allow list, Pi extension</li>
+                    <li><a href="https://www.daytona.io/dotfiles/updates/daytona-is-going-closed-source" target="_blank">Going Closed Source Announcement</a> — 
+                    "We are moving Daytona's production codebase to closed source. There is one reason behind this, 
+                    and it is the only reason that matters to us: security."</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Community Fork: Nightona</h3>
+                <ul>
+                    <li><a href="https://github.com/nightona-co/nightona" target="_blank">nightona-co/nightona</a> — 
+                    Community-maintained open-source fork of Daytona v0.190.0 (AGPL-3.0)</li>
+                    <li>Quote: "When Daytona moved its core development to a private codebase in June 2026, this 
+                    project picked up the last open release — v0.190.0, licensed under AGPL-3.0 — to keep a fully 
+                    open-source AI code execution sandbox alive, self-hostable, and community-driven."</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Firecracker (VM Runtime)</h3>
+                <ul>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker" target="_blank">firecracker-microvm/firecracker</a> — 
+                    The microVM runtime that powers Daytona VM sandboxes</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" target="_blank">Snapshot support</a> — 
+                    CreateSnapshot / LoadSnapshot APIs, full vs diff snapshots</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/handling-page-faults-on-snapshot-resume.md" target="_blank">Page faults on resume</a> — 
+                    userfaultfd lazy memory loading</li>
+                    <li><a href="https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/random-for-clones.md" target="_blank">RNG for clones</a> — 
+                    Clone hazard mitigation: reseed /dev/urandom, VMGenID</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Vendor Claims Summary</h3>
+                <p>
+                    Numbers marked as vendor claims (self-reported by Daytona, not independently verified):
+                </p>
+                <ul>
+                    <li><strong>Container startup:</strong> "&lt;90ms" from cached OCI image 
+                    (<a href="https://www.daytona.io/docs/en/sandboxes/" target="_blank">source</a>)</li>
+                    <li><strong>VM startup:</strong> "~100ms" from pre-built memory snapshot 
+                    (<a href="https://docs.rl.trydaytona.com/docs/documentation/" target="_blank">source</a>)</li>
+                    <li><strong>VM resume:</strong> "in under a second" 
+                    (<a href="https://www.daytona.io/dotfiles/vms-pause-and-fork" target="_blank">source</a>)</li>
+                    <li><strong>GPU startup:</strong> "~100ms" (inferred from sandbox docs, not explicitly stated)</li>
+                </ul>
+                <p>
+                    These are self-reported by Daytona. Your results will vary based on image/snapshot size, 
+                    runner performance, object storage latency, and network conditions.
+                </p>
+            </div>
+
+            <div class="info-box">
+                <h3>Related Systems (Comparison)</h3>
+                <ul>
+                    <li><strong>E2B (Lesson 06):</strong> 
+                    <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> — 
+                    VM-only (Firecracker), pause/resume/fork for all sandboxes, Apache-2.0</li>
+                    <li><strong>Modal:</strong> 
+                    <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal sandbox snapshots</a> — 
+                    gVisor default, VM for Docker-in-sandbox, filesystem/directory/memory snapshots</li>
+                    <li><strong>Fly Machines:</strong> 
+                    <a href="https://fly.io/docs/machines/" target="_blank">Fly Machines docs</a> — 
+                    Firecracker microVMs, fast stop/start, clone</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lesson</h3>
+                <p>
+                    In <strong>Lesson 08</strong>, you'll explore Modal's sandbox architecture: gVisor default 
+                    runtime, VM for Docker-in-sandbox, filesystem snapshots for setup sharing, memory snapshots 
+                    for debugging, and how to run SWE-bench's Modal backend.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../06-e2b-runtime/">← Lesson 06: E2B Runtime</a> | 
+                <a href="../">← Back to Curriculum</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>

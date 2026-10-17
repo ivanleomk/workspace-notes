@@ -13,6 +13,7 @@ This series teaches you how to build production-grade eval infrastructure from f
 5. **[Lesson 04: Firecracker Internals and Booting a microVM](04-firecracker-microvm/)** — Minimal VMMs, KVM, and ≤125ms boot times ✅
 6. **[Lesson 05: Snapshot/Restore and Forking Agent State](05-snapshot-restore-forking/)** — Warm pools, userfaultfd, and GRPO-style forking ✅
 7. **[Lesson 06: E2B's Open-Source Runtime Architecture](06-e2b-runtime/)** — Production snapshot/fork system with control/data plane separation ✅
+8. **[Lesson 07: Daytona Architecture and Container vs VM Classes](07-daytona/)** — Multi-class isolation (container/VM/GPU), job-based architecture, pause/resume/fork ✅
 
 ## Live Lessons
 
@@ -23,6 +24,7 @@ Visit the live interactive lessons at:
 - [Lesson 04: Firecracker Internals and Booting a microVM](https://ivanleomk.github.io/workspace-notes/infra/04-firecracker-microvm/)
 - [Lesson 05: Snapshot/Restore and Forking Agent State](https://ivanleomk.github.io/workspace-notes/infra/05-snapshot-restore-forking/)
 - [Lesson 06: E2B's Open-Source Runtime Architecture](https://ivanleomk.github.io/workspace-notes/infra/06-e2b-runtime/)
+- [Lesson 07: Daytona Architecture and Container vs VM Classes](https://ivanleomk.github.io/workspace-notes/infra/07-daytona/)
 
 ## What You'll Learn
 
