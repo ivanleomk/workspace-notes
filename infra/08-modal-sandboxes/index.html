@@ -42,8 +42,8 @@
             <p>
                 Where E2B gives you pause/resume/fork on VMs and Daytona separates container (fast) from VM (fork-capable), 
                 Modal gives you a single unified API — <code>modal.Sandbox.create(runtime="gvisor")</code> or 
-                <code>runtime="vm"</code> — backed by a serverless platform that elastically scales from zero to tens 
-                of thousands of concurrent sandboxes.
+                <code>runtime="vm"</code> — backed by a serverless platform that elastically autoscales sandboxes 
+                from zero on demand.
             </p>
 
             <div class="info-box">
@@ -71,7 +71,7 @@
                     <strong>All pricing claims cite Modal's pricing page as of October 2026.</strong> Prices and limits 
                     are vendor-reported and subject to change. Starter plan: $0/month + $30 included compute/month, 100 containers, 
                     10 GPU concurrency; Team plan: $250/month + $100 included compute/month, 5,000 containers, 50 GPU concurrency 
-                    (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 18, 2026).
+                    (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 15, 2026).
                 </p>
                 <p>
                     <strong>Vendor performance claims</strong> (e.g., memory snapshot 3-10x speedup per 
@@ -207,9 +207,9 @@ graph TB
             <p>
                 <strong>Modal's gVisor implementation:</strong> Modal uses gVisor's <strong>systrap platform</strong> 
                 (not KVM platform). Systrap uses <code>SECCOMP_RET_TRAP</code> to intercept syscalls (lesson 02 
-                seccomp-bpf) and redirect them to the Sentry. This is the default gVisor platform since mid-2023 
-                because it works everywhere (no <code>/dev/kvm</code> needed) and has lower syscall overhead than 
-                the older ptrace platform.
+                seccomp-bpf) and redirect them to the Sentry. Systrap is gVisor's current default platform because 
+                it works everywhere (no <code>/dev/kvm</code> needed) and has lower syscall overhead than the older 
+                ptrace platform.
             </p>
             <p>
                 <strong>Why gVisor for most workloads?</strong>
@@ -221,11 +221,11 @@ graph TB
                 <code>nvproxy</code> forwards NVIDIA GPU ioctl calls to the host without running a full guest kernel.</li>
                 <li><strong>Fast cold starts:</strong> gVisor containers start faster than microVMs (no kernel boot). 
                 Modal reports sub-second cold starts with image caching (vendor claim).</li>
-                <li><strong>Lower memory overhead:</strong> No guest kernel RAM. Sentry overhead ~10-20 MB per sandbox 
-                (varies by workload).</li>
-                <li><strong>Good syscall performance:</strong> Systrap platform has <~20% syscall overhead for common 
-                operations like read/write/open (gVisor docs). File I/O and network I/O go through the Gofer (lesson 
-                03), which adds latency for small I/O but is optimized for bulk transfers.</li>
+                <li><strong>Lower memory overhead:</strong> No guest kernel RAM. The Sentry (userspace kernel) adds modest 
+                per-sandbox memory overhead, but avoids the cost of a full guest OS.</li>
+                <li><strong>Good syscall performance:</strong> Systrap has lower syscall overhead than gVisor's older 
+                ptrace platform. File I/O and network I/O go through the Gofer (lesson 03), which adds latency for 
+                small I/O but is optimized for bulk transfers.</li>
             </ul>
             <p>
                 <strong>Trade-offs:</strong> No pause/resume/fork (gVisor Sentry doesn't expose snapshot APIs to 
@@ -265,10 +265,9 @@ print(p.stdout.read())  # "hello from Docker"
 sb.terminate()</code></pre>
             <p>
                 <strong>How it works (VMM not documented by Modal):</strong> Modal does not publish which hypervisor 
-                backs VM runtime. Candidates: KVM (Linux), Firecracker, or Cloud Hypervisor. Based on feature set 
-                (512 GiB root filesystem, no pause/resume/fork mentioned for Sandboxes), it's likely KVM or Cloud 
-                Hypervisor rather than Firecracker (Firecracker snapshots are available for Modal Functions, see memory 
-                snapshots section).
+                backs VM runtime. Candidates include KVM (Linux), Firecracker, or Cloud Hypervisor. Based on feature 
+                set (512 GiB root filesystem, no pause/resume/fork mentioned for Sandboxes), the specific hypervisor 
+                is undocumented.
             </p>
             <p>
                 <strong>Trade-offs:</strong> VM sandboxes have higher memory overhead (guest kernel + init), slightly 
@@ -591,9 +590,7 @@ def infer(x):
             </p>
             <ul>
                 <li><strong>GPU state:</strong> NVIDIA GPU contexts (CUDA kernels, device memory) are <em>not</em> 
-                checkpointed. Functions with GPUs will re-initialize GPU state on restore. gVisor's 
-                <code>cuda-checkpoint</code> (experimental, lesson 23 curriculum) is not yet available in Modal's 
-                production environment.</li>
+                checkpointed. Functions with GPUs will re-initialize GPU state on restore.</li>
                 <li><strong>Network connections:</strong> Open sockets (TCP, UDP) are not preserved. Functions that 
                 hold persistent connections (e.g., database pools) will see those connections closed on restore and 
                 must reconnect.</li>
@@ -680,15 +677,17 @@ graph TD
             </p>
 
             <h3>Network Controls</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-networking" target="_blank">Modal Networking docs</a>, 
+                sandboxes support network controls (verify exact parameter names and syntax in current documentation):
+            </p>
             <ul>
                 <li><strong><code>block_network=True</code>:</strong> Block all outbound network access. The sandbox 
                 can only talk to itself (localhost).</li>
-                <li><strong><code>outbound_cidr_allowlist=["10.0.0.0/8", "192.168.0.0/16"]</code>:</strong> Allowlist 
-                specific CIDRs. All other IPs are blocked.</li>
-                <li><strong><code>outbound_domain_allowlist=["*.example.com", "api.service.com"]</code>:</strong> 
-                Allowlist domain names (wildcard prefixes supported). All other domains are blocked.</li>
-                <li><strong><code>inbound_cidr_allowlist=["1.2.3.4/32"]</code>:</strong> Allowlist inbound connections 
-                (for tunnels/connection tokens). All other IPs are blocked.</li>
+                <li><strong>CIDR allowlists:</strong> Allowlist specific IP ranges. All other IPs are blocked.</li>
+                <li><strong>Domain allowlists:</strong> Allowlist domain names (wildcard prefixes may be supported). 
+                All other domains are blocked.</li>
+                <li><strong>Inbound allowlists:</strong> Allowlist inbound connections for tunnels. All other IPs are blocked.</li>
             </ul>
             <p>
                 <strong>Use case:</strong> Running untrusted LLM-generated code. Set 
@@ -772,7 +771,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>GPU Pricing and Limits</h3>
             <p>
-                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (accessed October 18, 2026):
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (accessed October 15, 2026):
             </p>
             <table>
                 <thead>
@@ -808,12 +807,12 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 <strong>Concurrency limits:</strong> Starter plan: 10 GPU sandboxes concurrently (with $0/month plan fee, 
                 $30 included compute). Team plan: 50 GPU sandboxes (with $250/month plan fee, $100 included compute). 
                 Enterprise: custom limits and pricing 
-                (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 18, 2026).
+                (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 15, 2026).
             </p>
         </section>
 
         <section id="elasticity" class="content-section">
-            <h2>Elasticity and Pricing: Pay-Per-Second, Burst to 50,000</h2>
+            <h2>Elasticity and Pricing: Pay-Per-Second Serverless</h2>
 
             <h3>Serverless Economics</h3>
             <p>
@@ -834,7 +833,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>Sandbox Pricing</h3>
             <p>
-                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (October 18, 2026):
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (October 15, 2026):
             </p>
             <ul>
                 <li><strong>CPU:</strong> $0.00003942 per physical core per second (0.125 core minimum). 
@@ -849,15 +848,18 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 Total: $0.005276 (~0.5 cents)
             </p>
             <p>
-                <strong>Compare to traditional cloud:</strong> AWS c7g.xlarge (4 vCPU, 8 GiB) costs $0.1512/hour on-demand 
-                = $0.000042/sec. Modal's 2 vCPU + 8 GiB = 1 core × $0.00003942 + 8 GiB × $0.00000667 = $0.00009278/sec 
-                (~2.2x AWS on-demand). But if your workload is spiky (10% utilization), Modal saves ~5x because you 
-                don't pay for idle. Modal's value prop: <strong>no idle charges, instant autoscale</strong>.
+                <strong>Compare to traditional cloud:</strong> AWS c7g.xlarge (4 vCPU, 8 GiB) costs $0.1512/hour 
+                on-demand in US East (N. Virginia) as of October 15, 2026 
+                (<a href="https://aws.amazon.com/ec2/pricing/on-demand/" target="_blank">AWS EC2 Pricing</a>) = 
+                $0.000042/sec. Modal's 2 vCPU + 8 GiB = 1 core × $0.00003942 + 8 GiB × $0.00000667 = $0.00009278/sec 
+                (~2.2x AWS on-demand per-second). For spiky workloads (e.g., 10% utilization), Modal's pay-per-second 
+                model saves costs because you don't pay for idle time (2.2x higher per-second rate × 10% utilization 
+                ≈ 0.22x total cost vs. 24/7 on-demand). Modal's value prop: <strong>no idle charges, instant autoscale</strong>.
             </p>
 
             <h3>Concurrency and Scale</h3>
             <p>
-                <strong>Plan limits (October 18, 2026):</strong>
+                <strong>Plan limits (October 15, 2026):</strong>
             </p>
             <ul>
                 <li><strong>Starter:</strong> $0/month plan fee, $30 included compute/month, 100 CPU containers, 10 GPU concurrency.</li>
@@ -865,12 +867,14 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 <li><strong>Enterprise:</strong> Custom limits and pricing.</li>
             </ul>
             <p>
-                <strong>For SWE-bench:</strong> SWE-bench Lite (300 instances) fits in Starter plan. SWE-bench full 
-                (2,294 instances) needs Team plan. If you run 1,000 instances in parallel (each instance takes ~5 
-                minutes), that's 1,000 concurrent sandboxes for 5 minutes = 300,000 sandbox-seconds. At $0.00003942 
-                per core-second (assume 1 core per sandbox), cost is ~$11.83 for compute. Add image build time (~10 
-                minutes one-time per image, maybe 50 images) = ~$2 for builds. Total: ~$14 for a full SWE-bench run 
-                on Modal (rough estimate, assumes no GPU, 1 core per instance).
+                <strong>For SWE-bench:</strong> SWE-bench Lite (300 instances) requires up to 300 concurrent containers 
+                at peak, which exceeds Starter plan's 100-container limit. Starter plan can run 300 instances sequentially 
+                or in batches of ≤100. SWE-bench full (2,294 instances) needs Team plan for higher concurrency (5,000 
+                container limit). <strong>Worked cost example (stated assumptions):</strong> Run 1,000 instances in 
+                parallel, each takes 5 minutes, 1 core CPU, 2 GiB memory. Total: 1,000 sandboxes × 300 sec = 300,000 
+                sandbox-seconds. Cost = 300,000 × (1 core × $0.00003942/core/sec + 2 GiB × $0.00000667/GiB/sec) = 
+                300,000 × $0.00005276 = $15.83. This excludes image build costs (depends on repo count and build time; 
+                measure your own). Total cost will vary based on actual CPU/memory requests and build overhead.
             </p>
         </section>
 
@@ -903,52 +907,34 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>SWE-bench Modal Integration</h3>
             <p>
-                <strong>Implementation:</strong> SWE-bench uses Modal Functions (not Sandboxes) for evaluation. The harness 
-                is located at <code>swebench/harness/modal_eval/run_evaluation_modal.py</code> in the 
-                <a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repository</a>.
+                <strong>Implementation:</strong> SWE-bench includes Modal integration for parallel evaluation. Consult 
+                <code>swebench/harness/modal_eval/</code> in the 
+                <a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repository</a> for the 
+                actual implementation.
             </p>
             <p>
-                <strong>How it works:</strong>
+                <strong>Conceptual workflow (verify against source):</strong>
             </p>
             <ol>
-                <li><strong>Image building:</strong> SWE-bench builds one Modal Image per repo (e.g., 
-                <code>django-base</code>, <code>flask-base</code>). The image includes:
+                <li><strong>Image building:</strong> Build base Modal Images per repository with dependencies pre-installed 
+                to avoid repeated setup across instances.</li>
+                <li><strong>Per-instance execution:</strong> For each test instance:
                     <ul>
-                        <li>Base Ubuntu 22.04 with Python 3.11</li>
-                        <li>Conda (for managing Python versions per instance)</li>
-                        <li>Repo cloned at a specific commit (the "base" commit before the fix)</li>
-                        <li>Dependencies installed via <code>pip install -e .</code></li>
+                        <li>Provision a container from the base image</li>
+                        <li>Apply the candidate patch</li>
+                        <li>Run the test suite with timeouts</li>
+                        <li>Capture test results and logs</li>
                     </ul>
                 </li>
-                <li><strong>Per-instance sandboxes:</strong> For each instance:
-                    <ul>
-                        <li>Create a Modal Sandbox from the repo's base image</li>
-                        <li>Apply the agent's patch (<code>git apply</code>)</li>
-                        <li>Run tests (<code>pytest</code>, <code>tox</code>, or repo-specific test command)</li>
-                        <li>Capture stdout/stderr, exit code, and test results</li>
-                        <li>Write logs to object storage (S3 or local filesystem)</li>
-                        <li>Terminate sandbox</li>
-                    </ul>
-                </li>
-                <li><strong>Parallelization:</strong> SWE-bench uses Modal's <code>.starmap()</code> to run N 
-                instances in parallel. Each instance is a separate Modal Function call:
-                    <pre><code class="language-python">run_instance_modal.starmap([
-    (instance_id_1, prediction_1, test_spec_1, run_id, timeout),
-    (instance_id_2, prediction_2, test_spec_2, run_id, timeout),
-    # ... 2,294 tuples
-])</code></pre>
-                    Modal schedules these across its worker fleet. If you have Team plan (5,000 container limit), 
-                    you can run 1,000+ instances concurrently (limited by API rate limits and your concurrency quota).
-                </li>
-                <li><strong>Results:</strong> Each instance writes a <code>test_output.txt</code> and 
-                <code>report.json</code> to the <code>logs/</code> directory. SWE-bench's harness then aggregates 
-                pass/fail counts and generates a final report.</li>
+                <li><strong>Parallelization:</strong> Modal's execution model allows running many instances concurrently, 
+                subject to plan limits (Starter: 100 containers, Team: 5,000 containers).</li>
+                <li><strong>Results aggregation:</strong> Test outcomes are collected and aggregated into pass/fail metrics.</li>
             </ol>
 
-            <h3>Code Walkthrough (Simplified)</h3>
+            <h3>Illustrative Code Example</h3>
             <p>
-                <strong>Note:</strong> The actual <code>run_evaluation_modal.py</code> is ~450 lines. Here's a 
-                simplified excerpt showing the key Modal integration:
+                <strong>Note:</strong> The following is a simplified, illustrative example showing Modal's evaluation 
+                pattern, not actual SWE-bench source code. Consult the SWE-bench repository for the real implementation.
             </p>
             <pre><code class="language-python"># Simplified from swebench/harness/modal_eval/run_evaluation_modal.py
 import modal
@@ -1085,7 +1071,7 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                     </tr>
                     <tr>
                         <td><strong>Elasticity</strong></td>
-                        <td>✅ Serverless, 0→50,000+ (vendor claim)</td>
+                        <td>✅ Serverless autoscaling</td>
                         <td>❌ Fixed capacity (you provision nodes)</td>
                         <td>❌ Fixed capacity (you provision runners)</td>
                         <td>❌ Fixed capacity (you provision nodes)</td>
@@ -1176,9 +1162,11 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                 $0.00000667/GiB/sec memory). Modal's serverless pricing can't be directly compared to traditional 
                 on-demand or spot instance pricing. No idle charges.</li>
                 <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: provision 100 
-                c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes 
-                = 100 × $0.1512/hr × (5/60 hr) = $12.60. But you pay for full hour on EC2 on-demand = $15.12. 
-                Spot instances: estimated ~$5-$8 (varies by region/time).</li>
+                c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes. 
+                EC2 Linux on-demand bills per-second with a 60-second minimum 
+                (<a href="https://aws.amazon.com/ec2/pricing/" target="_blank">AWS EC2 Pricing</a>), so 5 minutes = 
+                100 × $0.1512/hr × (5/60 hr) = $12.60. Spot instance costs vary by region, availability zone, and 
+                time; check current spot prices for your use case.</li>
                 <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same as E2B 
                 (provision EC2 instances).</li>
                 <li><strong>Self-hosted (spot instances):</strong> Spot prices vary significantly by region, 
@@ -1212,9 +1200,9 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                     <li><strong>Python 3.10+</strong> (Modal SDK requirement).</li>
                 </ul>
                 <p>
-                    <strong>Note:</strong> This exercise requires a Modal account with API key. The code is verified 
-                    against Modal Python SDK v1.6.1 (October 2026). If you don't have a Modal account, read the code 
-                    and learn the patterns (no execution required).
+                    <strong>Note:</strong> This exercise requires a Modal account with API key. The code examples follow 
+                    Modal SDK patterns as of October 2026. If you don't have a Modal account, read the code and learn 
+                    the patterns (no execution required). Verify API details against current Modal documentation.
                 </p>
             </div>
 
@@ -1291,15 +1279,15 @@ print("VM sandbox terminated")</code></pre>
             <pre><code>=== gVisor Sandbox (default) ===
 Create gVisor sandbox: [your timing]
 gVisor sandbox ID: sb-abc123...
-uname: Linux modal 6.1.0-gvisor...
-/proc/version: Linux version 6.1.0-gvisor...
+uname: Linux modal [gVisor version]
+/proc/version: Linux version [gVisor version]
 gVisor sandbox terminated
 
 === VM Sandbox ===
 Create VM sandbox: [your timing]
 VM sandbox ID: sb-def456...
-uname: Linux modal 6.8.0...
-/proc/version: Linux version 6.8.0...</code></pre>
+uname: Linux modal [kernel version]
+/proc/version: Linux version [kernel version]</code></pre>
 
             <h4>Step 3: Build Image with Caching, Snapshot Filesystem</h4>
             <pre><code class="language-python">#!/usr/bin/env python3
@@ -1454,7 +1442,7 @@ if __name__ == "__main__":
             </p>
             <pre><code>test-1: 0
 test-2: 0
-test-3: timeout
+test-3: 0
 test-4: 1
 test-5: timeout</code></pre>
 
@@ -1487,8 +1475,8 @@ test-5: timeout</code></pre>
                     CloudWatch) for post-mortem analysis.</li>
                     <li><strong>Idempotency:</strong> Write results to content-addressed keys (hash of 
                     instance_id + model + prompt) so retries don't duplicate work.</li>
-                    <li><strong>Cost tracking:</strong> Tag sandboxes with <code>tags={"run_id": "...", "model": "..."}</code> 
-                    to track cost per run/model in Modal's dashboard.</li>
+                    <li><strong>Cost tracking:</strong> Use Modal's dashboard to track sandbox usage and costs per 
+                    application or function.</li>
                 </ul>
             </div>
         </section>
@@ -1536,7 +1524,7 @@ test-5: timeout</code></pre>
                     the second based on whichever is higher: your resource request or your actual usage."</li>
                     <li><a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> — 
                     Per-second prices, concurrency limits, plan comparison (Starter, Team, Enterprise). Accessed 
-                    October 18, 2026.</li>
+                    October 15, 2026.</li>
                 </ul>
             </div>
 
