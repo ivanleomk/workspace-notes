@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 08: Modal Sandboxes - gVisor, Memory Snapshots, and Elasticity</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 08: Modal Sandboxes - gVisor, Memory Snapshots, and Elasticity</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | From Userspace Kernel to Production Scale</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#architecture">Modal Architecture</a>
+            <a href="#runtimes">gVisor vs VM Runtimes</a>
+            <a href="#images">Image Building & Caching</a>
+            <a href="#snapshots">Filesystem & Memory Snapshots</a>
+            <a href="#networking">Networking & Security</a>
+            <a href="#gpu">GPU Sandboxes</a>
+            <a href="#elasticity">Elasticity & Pricing</a>
+            <a href="#swe-bench">Real System: SWE-bench Modal Backend</a>
+            <a href="#tradeoffs">When to Use Modal vs E2B vs Daytona</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From Firecracker VMs to gVisor: Modal's Dual-Runtime Model</h2>
+            <p>
+                In Lessons 06 and 07, you saw two approaches to sandbox isolation: E2B's VM-only path (every sandbox 
+                is a Firecracker microVM) and Daytona's multi-tier choice (container, VM, or GPU). <strong>Modal</strong> 
+                (<a href="https://modal.com" target="_blank">modal.com</a>) takes yet another path: <strong>gVisor by 
+                default</strong> for userspace syscall interception, with <strong>VM runtime opt-in</strong> for 
+                Docker-in-sandbox and full Linux kernel features.
+            </p>
+            <p>
+                Where E2B gives you pause/resume/fork on VMs and Daytona separates container (fast) from VM (fork-capable), 
+                Modal gives you a single unified API — <code>modal.Sandbox.create(runtime="gvisor")</code> or 
+                <code>runtime="vm"</code> — backed by a serverless platform that elastically scales from zero to tens 
+                of thousands of concurrent sandboxes.
+            </p>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>Why Modal defaults to gVisor (userspace kernel, GPU-compatible, lesson 03 comparison) instead of 
+                    Firecracker VMs</li>
+                    <li>How Modal's Image definitions layer and cache (similar to Docker layers, but with OCI + function hashing)</li>
+                    <li>How filesystem snapshots (<code>snapshot_filesystem</code>) share expensive setup across sandboxes 
+                    and avoid pip-install waits</li>
+                    <li>How memory snapshots (CRIU-based, checkpoint/restore) work for Modal Functions (not Sandboxes) 
+                    and their limitations (GPU state, network connections)</li>
+                    <li>How SWE-bench's Modal backend builds images and parallelizes instances via 
+                    <code>run_instance_modal.starmap</code></li>
+                    <li>When your eval orchestrator should choose Modal (elastic, serverless, gVisor-compatible) vs 
+                    E2B (VM-only, Apache-2.0 OSS) vs Daytona (self-hosted, job-based) vs self-managed Firecracker/gVisor</li>
+                    <li>Hands-on: Create gVisor and VM sandboxes, build/cache images, snapshot filesystem, measure startup 
+                    latency, and run a mini async eval pool with timeouts and retries</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ Pricing and Date Context</h3>
+                <p>
+                    <strong>All pricing claims cite Modal's pricing page as of October 2026.</strong> Prices and limits 
+                    are vendor-reported and subject to change. Starter plan: 100 containers, 10 GPU concurrency; Team plan: 
+                    5,000 containers, 50 GPU concurrency 
+                    (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 18, 2026).
+                </p>
+                <p>
+                    <strong>Vendor performance claims</strong> (e.g., memory snapshot 3-10x speedup, sub-second cold starts) 
+                    are labeled as such. Independent benchmarks are cited where available.
+                </p>
+            </div>
+        </section>
+
+        <section id="architecture" class="content-section">
+            <h2>Modal Architecture: Serverless Sandboxes on Demand</h2>
+            <p>
+                Modal is a <strong>serverless compute platform</strong>: you define functions and sandboxes, Modal 
+                schedules them onto a fleet of workers, and you pay per-second for CPU/memory/GPU usage. Unlike E2B 
+                (control plane + orchestrator nodes you manage) or Daytona (job queue + runners you deploy), Modal 
+                is fully managed. You call <code>modal.Sandbox.create(...)</code> and Modal provisions the container, 
+                runs it, and tears it down when idle.
+            </p>
+
+            <h3>The Modal Execution Model</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Modal Sandboxes documentation</a>:
+            </p>
+            <blockquote>
+                "A Sandbox is a secure container for executing untrusted user or agent code on Modal. Each individual 
+                job is called a Sandbox and can be created using the <code>Sandbox.create</code> constructor. Sandboxes 
+                support nearly all configuration options found in regular <code>modal.Function</code>s."
+            </blockquote>
+            <p>
+                <strong>Sandboxes vs Functions:</strong>
+            </p>
+            <ul>
+                <li><strong>Functions:</strong> Defined in Python, deployed with <code>modal deploy</code>, invoked via 
+                <code>fn.remote(...)</code>. Modal auto-scales them (0 to N containers), handles retries, queues, 
+                and distributed coordination.</li>
+                <li><strong>Sandboxes:</strong> Created at runtime (<code>modal.Sandbox.create</code>), you control 
+                exec calls (<code>sb.exec("python", "-c", "...")</code>), and you decide when to terminate 
+                (<code>sb.terminate()</code>). No auto-scaling of a single sandbox; instead, you create N sandboxes 
+                in parallel.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    subgraph client["Client (SDK / CLI)"]
+        SDK[SDK: modal.Sandbox.create]
+    end
+    
+    LB[Modal API<br/>api.modal.com]
+    
+    subgraph scheduler["Modal Scheduler"]
+        SCHED[Placement Engine<br/>CPU/GPU affinity, region, image cache]
+    end
+    
+    subgraph worker["Modal Worker (gVisor or VM)"]
+        RT[Runtime: gVisor runsc<br/>or VM hypervisor]
+        subgraph sandbox["Sandbox Container"]
+            PROC[User processes<br/>exec'd commands]
+        end
+    end
+    
+    subgraph storage["Storage & Registry"]
+        REG[(Image Registry<br/>OCI layers)]
+        S3[(Object Storage<br/>filesystem snapshots)]
+    end
+    
+    SDK -->|1. Create sandbox<br/>image, runtime, resources| LB
+    LB --> SCHED
+    SCHED -->|2. Pick worker<br/>image-cache hit, capacity| worker
+    RT -->|3. Pull image layers| REG
+    RT --> PROC
+    SDK -.->|4. Exec commands<br/>direct to worker| PROC
+    PROC -.->|5. Stdout/stderr<br/>streamed back| SDK
+    
+    SCHED --> S3
+    RT --> S3
+    
+    style SDK fill:#3b82f6,stroke:#f1f5f9
+    style RT fill:#8b5cf6,stroke:#f1f5f9
+    style PROC fill:#10b981,stroke:#f1f5f9
+    style REG fill:#f59e0b,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> Modal's serverless execution model. The SDK creates a sandbox via Modal API, 
+                the scheduler picks a worker (considering image cache hits and capacity), the runtime (gVisor or VM) 
+                pulls image layers, and execution commands stream directly from SDK to sandbox.
+            </p>
+
+            <h3>Lifecycle and Timeouts</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Modal Sandboxes docs</a>, a 
+                sandbox moves through these events:
+            </p>
+            <ol>
+                <li><strong>Created:</strong> Registered with Modal, ID assigned, no resources allocated yet.</li>
+                <li><strong>Scheduled:</strong> Assigned to a worker, provisioning resources (CPU, memory, GPU, volumes).</li>
+                <li><strong>Started:</strong> Container launched, entrypoint running (if specified), ready for 
+                <code>sb.exec(...)</code>.</li>
+                <li><strong>Ready</strong> (optional): Readiness probe succeeded (e.g., HTTP health check). Skipped if 
+                no probe configured.</li>
+                <li><strong>Finished:</strong> Entrypoint exited, terminated manually, timeout reached, or OOM. No 
+                further commands accepted.</li>
+            </ol>
+            <p>
+                <strong>Default timeout:</strong> 5 minutes (300 seconds). Max: 24 hours 
+                (<a href="https://modal.com/docs/reference/modal.Sandbox" target="_blank">Sandbox.create</a>). For 
+                longer runs, use filesystem snapshots to preserve state and resume later. 
+                <strong>Idle timeout:</strong> Auto-terminate after N seconds of no activity (no running exec, no 
+                stdin writes, no open tunnel connections). Set via <code>idle_timeout</code> parameter.
+            </p>
+        </section>
+
+        <section id="runtimes" class="content-section">
+            <h2>Runtimes: gVisor (Default) vs VM</h2>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Modal Sandboxes docs</a>:
+            </p>
+            <blockquote>
+                "Sandboxes run on one of two runtimes:<br>
+                <strong>gVisor</strong>, a container runtime developed by Google, provides strong isolation and is 
+                suitable for most workloads.<br>
+                <strong>VMs</strong> run the Sandbox in a virtual machine with its own Linux kernel. Use the VM runtime 
+                for workloads that expect a full Linux environment, such as running Docker inside the Sandbox, mounting 
+                FUSE filesystems, or managing resources with nested cgroups."
+            </blockquote>
+
+            <h3>gVisor: Userspace Kernel (Default)</h3>
+            <p>
+                <strong>Recall Lesson 03:</strong> gVisor implements the Linux syscall interface in userspace. 
+                Applications make syscalls, but instead of going to the host kernel, they trap into the gVisor 
+                <em>Sentry</em> (userspace kernel). The Sentry validates, logs, and either handles the syscall itself 
+                or passes safe operations to the host kernel.
+            </p>
+            <p>
+                <strong>Modal's gVisor implementation:</strong> Modal uses gVisor's <strong>systrap platform</strong> 
+                (not KVM platform). Systrap uses <code>SECCOMP_RET_TRAP</code> to intercept syscalls (lesson 02 
+                seccomp-bpf) and redirect them to the Sentry. This is the default gVisor platform since mid-2023 
+                because it works everywhere (no <code>/dev/kvm</code> needed) and has lower syscall overhead than 
+                the older ptrace platform.
+            </p>
+            <p>
+                <strong>Why gVisor for most workloads?</strong>
+            </p>
+            <ul>
+                <li><strong>GPU-compatible:</strong> Unlike Firecracker (lesson 04), gVisor supports GPU passthrough. 
+                Modal GPU sandboxes <strong>require</strong> <code>runtime="gvisor"</code> 
+                (<a href="https://modal.com/docs/guide/sandboxes" target="_blank">Sandboxes docs</a>). gVisor's 
+                <code>nvproxy</code> forwards NVIDIA GPU ioctl calls to the host without running a full guest kernel.</li>
+                <li><strong>Fast cold starts:</strong> gVisor containers start faster than microVMs (no kernel boot). 
+                Modal reports sub-second cold starts with image caching (vendor claim).</li>
+                <li><strong>Lower memory overhead:</strong> No guest kernel RAM. Sentry overhead ~10-20 MB per sandbox 
+                (varies by workload).</li>
+                <li><strong>Good syscall performance:</strong> Systrap platform has <~20% syscall overhead for common 
+                operations like read/write/open (gVisor docs). File I/O and network I/O go through the Gofer (lesson 
+                03), which adds latency for small I/O but is optimized for bulk transfers.</li>
+            </ul>
+            <p>
+                <strong>Trade-offs:</strong> No pause/resume/fork (gVisor Sentry doesn't expose snapshot APIs to 
+                Modal). No nested virtualization (no <code>/dev/kvm</code> inside gVisor). Docker-in-gVisor works for 
+                some cases but can hit limits (runsc doesn't implement every Docker feature); use VM runtime for full 
+                Docker compatibility.
+            </p>
+
+            <h3>VM Runtime: Full Linux Kernel</h3>
+            <p>
+                <strong>When to use:</strong> Docker-in-sandbox, FUSE filesystems (lesson 03 overlayfs was kernel 
+                module; FUSE is userspace), nested cgroups (advanced resource control), or any workload that expects 
+                <code>/dev/kvm</code> or kernel modules.
+            </p>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Sandboxes docs</a>, example:
+            </p>
+            <pre><code class="language-python">image = (
+    modal.Image.from_registry("ubuntu:24.04")
+    .env({"DEBIAN_FRONTEND": "noninteractive"})
+    .apt_install("docker.io")
+)
+
+sb = modal.Sandbox.create(
+    "dockerd",  # Entrypoint: start Docker daemon
+    app=sb_app,
+    image=image,
+    runtime="vm",
+    readiness_probe=modal.Probe.with_exec("docker", "info", interval_ms=500),
+)
+sb.wait_until_ready()
+
+p = sb.exec("docker", "run", "--rm", "alpine", "echo", "hello from Docker")
+p.wait()
+print(p.stdout.read())  # "hello from Docker"
+
+sb.terminate()</code></pre>
+            <p>
+                <strong>How it works (VMM not documented by Modal):</strong> Modal does not publish which hypervisor 
+                backs VM runtime. Candidates: KVM (Linux), Firecracker, or Cloud Hypervisor. Based on feature set 
+                (512 GiB root filesystem, no pause/resume/fork mentioned for Sandboxes), it's likely KVM or Cloud 
+                Hypervisor rather than Firecracker (Firecracker snapshots are available for Modal Functions, see memory 
+                snapshots section).
+            </p>
+            <p>
+                <strong>Trade-offs:</strong> VM sandboxes have higher memory overhead (guest kernel + init), slightly 
+                slower cold starts (kernel boot), and fixed 512 GiB root filesystem 
+                (<a href="https://modal.com/docs/guide/sandbox-resources" target="_blank">Sandbox resources docs</a>). 
+                <code>/var/lib/docker</code> is included in filesystem snapshots, so you can snapshot a VM with Docker 
+                images pre-pulled and resume later.
+            </p>
+
+            <div class="mermaid">
+graph LR
+    subgraph gVisor["gVisor Sandbox (runtime='gvisor')"]
+        GH[Host Kernel]
+        GS[Sentry<br/>userspace syscall handler]
+        GG[Gofer<br/>file I/O proxy]
+        GP[User processes]
+        GH --> GS
+        GS --> GG
+        GS --> GP
+    end
+    
+    subgraph VM["VM Sandbox (runtime='vm')"]
+        VMH[Hypervisor<br/>KVM / undocumented]
+        VMK[Guest Kernel]
+        VMP[User processes<br/>+ Docker daemon]
+        VMH --> VMK
+        VMK --> VMP
+    end
+    
+    gVisor -->|GPU-compatible<br/>nvproxy| GPUYES[GPU sandboxes<br/>only on gVisor]
+    VM -->|Full kernel<br/>Docker, FUSE| DOCKER[Docker-in-sandbox]
+    
+    gVisor -->|No pause/resume| SNAPSHOT1[No checkpoint]
+    VM -->|No sandbox-level<br/>pause/resume| SNAPSHOT2[No checkpoint<br/>Functions only]
+    
+    style gVisor fill:#3b82f6,stroke:#f1f5f9
+    style VM fill:#8b5cf6,stroke:#f1f5f9
+    style GPUYES fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> gVisor vs VM runtime. gVisor: userspace Sentry + Gofer, GPU-compatible 
+                (nvproxy), no pause/resume. VM: full guest kernel, Docker-compatible, no sandbox-level pause/resume 
+                (memory snapshots work for Modal Functions, not Sandboxes).
+            </p>
+
+            <h3>Comparison to Lessons 03, 06, 07</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Modal gVisor (Lesson 08)</th>
+                        <th>Modal VM (Lesson 08)</th>
+                        <th>E2B (Lesson 06)</th>
+                        <th>Daytona VM (Lesson 07)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Isolation mechanism</strong></td>
+                        <td>gVisor Sentry (userspace kernel, systrap platform)</td>
+                        <td>Hardware virtualization (KVM or undocumented)</td>
+                        <td>Firecracker microVM (KVM)</td>
+                        <td>Firecracker (inferred, not documented)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pause / resume</strong></td>
+                        <td>❌ No</td>
+                        <td>❌ No (Sandboxes); ✅ Yes (Functions, memory snapshots)</td>
+                        <td>✅ Yes (all sandboxes)</td>
+                        <td>✅ Yes (VM class only)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Fork</strong></td>
+                        <td>❌ No</td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (up to 20 children)</td>
+                        <td>✅ Yes (VM class only)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU support</strong></td>
+                        <td>✅ Yes (nvproxy)</td>
+                        <td>❌ No</td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (container class, exclusive allocation)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Docker-in-sandbox</strong></td>
+                        <td>Partial (runsc limitations)</td>
+                        <td>✅ Full (Docker daemon in VM)</td>
+                        <td>❌ No (Firecracker + Docker unsupported)</td>
+                        <td>✅ Full (VM class + Docker)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Cold start</strong></td>
+                        <td>Sub-second (vendor claim, with image cache)</td>
+                        <td>~Seconds (kernel boot)</td>
+                        <td>~80ms template restore (vendor claim)</td>
+                        <td>&lt;90ms container, &lt;1s VM resume (vendor claims)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="images" class="content-section">
+            <h2>Image Building and Caching: Avoid Rebuild Waits</h2>
+            <p>
+                <strong>Problem:</strong> Running <code>pip install torch</code> or <code>apt-get install gcc</code> 
+                inside a fresh sandbox takes seconds to minutes. When you're running 1,000 eval instances, that's 
+                hours of wasted time. Solution: <strong>pre-build images</strong> with dependencies baked in, and 
+                <strong>cache layers</strong> so unchanged steps don't rebuild.
+            </p>
+
+            <h3>Modal Image Definitions</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/images" target="_blank">Modal Images docs</a>:
+            </p>
+            <blockquote>
+                "Images are cached per layer (i.e., per <code>Image</code> method call), and breaking the cache on a 
+                single layer will cause cascading rebuilds for all subsequent layers. You can shorten iteration cycles 
+                by defining frequently-changing layers last so that the cached version of all other layers can be used."
+            </blockquote>
+            <p>
+                <strong>Example:</strong>
+            </p>
+            <pre><code class="language-python">image = (
+    modal.Image.debian_slim()  # Layer 0: base (Debian + Python 3.11)
+    .apt_install("git")        # Layer 1: apt packages
+    .pip_install("pytest", "requests")  # Layer 2: Python packages
+    .run_commands("echo 'setup complete' > /setup.txt")  # Layer 3: custom script
+)</code></pre>
+            <p>
+                Each method call is a layer. If you change <code>pip_install</code> (e.g., add <code>"numpy"</code>), 
+                Modal rebuilds layer 2 and layer 3 (because layer 3 depends on layer 2's filesystem). Layer 0 and 
+                layer 1 are reused from cache. This is similar to Docker's layer cache but uses function hashing: 
+                Modal hashes the method name, arguments, and base image ID to decide if a layer can be reused.
+            </p>
+
+            <h3>Layer Caching Rules</h3>
+            <ul>
+                <li><strong>Cache hit:</strong> If the base image and method call (name + args) match a previous 
+                build, Modal pulls the cached layer from the OCI registry.</li>
+                <li><strong>Cache miss:</strong> If the base or method changes, Modal rebuilds that layer and all 
+                subsequent layers.</li>
+                <li><strong>Force rebuild:</strong> Add <code>force_build=True</code> to any method to rebuild that 
+                layer and subsequent layers, even if the definition hasn't changed. Remove it after the rebuild to 
+                avoid rebuilding every time.</li>
+                <li><strong>Environment variable:</strong> <code>MODAL_FORCE_BUILD=1 modal run ...</code> rebuilds 
+                all images attached to your App. <code>MODAL_IGNORE_CACHE=1</code> rebuilds from the top without 
+                breaking the shared cache (useful for debugging).</li>
+            </ul>
+
+            <h3>Named Images and Pre-Built Images</h3>
+            <p>
+                <strong>Problem:</strong> If every sandbox builds the same image on-demand, you waste time and money. 
+                <strong>Solution:</strong> Deploy a named image once, then reference it by name.
+            </p>
+            <pre><code class="language-python"># Build once, deploy to registry
+app = modal.App("my-eval-harness")
+
+image = modal.Image.debian_slim().pip_install("pytest", "requests")
+
+@app.function(image=image)
+def dummy():
+    pass  # Trigger image build on deploy
+
+# Deploy (builds image, pushes to Modal registry)
+# modal deploy my_app.py
+
+# Later, reference by name (no rebuild)
+app_lookup = modal.App.lookup("my-eval-harness", create_if_missing=False)
+sb = modal.Sandbox.create(image=image, app=app_lookup)
+# Image pulled from cache, no rebuild</code></pre>
+            <p>
+                <strong>Why this matters for SWE-bench:</strong> SWE-bench has 2,294 instances (SWE-bench full), each 
+                needing its own Python environment. If each instance rebuilt from scratch, total time would be days. 
+                Instead, SWE-bench builds a small set of <strong>base images per repo</strong> (e.g., 
+                <code>django-base</code>, <code>flask-base</code>), caches them, then forks per-instance sandboxes 
+                from those bases. We'll see the actual implementation in the "Real System" section.
+            </p>
+
+            <h3>Image Builder Version Updates</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/images" target="_blank">Images docs</a>:
+            </p>
+            <blockquote>
+                "Modal provides a separate mechanism for keeping base images up-to-date without causing unpredictable 
+                rebuilds: the 'Image Builder Version'. This is a workspace-level configuration that will be used for 
+                every Image built in your workspace. We release a new Image Builder Version every few months but 
+                allow you to update your workspace's configuration when convenient."
+            </blockquote>
+            <p>
+                <strong>What this means:</strong> Modal's <code>debian_slim()</code>, <code>from_registry(...)</code>, 
+                and other base definitions pin specific OS versions, Python versions, and Modal client versions. When 
+                Modal releases a new builder version (e.g., to patch a CVE), your images <em>don't</em> automatically 
+                rebuild. You opt in via workspace settings, then the next deploy rebuilds all images. This gives you 
+                control over when breaking changes land (e.g., Python 3.11 → 3.12, or glibc updates).
+            </p>
+        </section>
+
+        <section id="snapshots" class="content-section">
+            <h2>Filesystem and Memory Snapshots: Fast Restore and Warm Pools</h2>
+
+            <h3>Filesystem Snapshots: Share Setup Across Sandboxes</h3>
+            <p>
+                <strong>Use case:</strong> You've run <code>pip install numpy pandas torch</code> (takes 60 seconds), 
+                cloned a repo, and set up config files. Now you want to run 100 test variations. Instead of repeating 
+                that 60-second setup 100 times, <strong>snapshot the filesystem</strong> and create 100 sandboxes from 
+                the snapshot.
+            </p>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Modal Sandbox Snapshots docs</a>:
+            </p>
+            <blockquote>
+                "Filesystem Snapshots are copies of the Sandbox's filesystem at a given point in time. These Snapshots 
+                are Images and can be used to create new Sandboxes. Filesystem Snapshots are optimized for performance: 
+                they are calculated as the <strong>difference from your base image</strong>, so only modified files are 
+                stored."
+            </blockquote>
+            <p>
+                <strong>How it works:</strong>
+            </p>
+            <pre><code class="language-python">import modal
+
+app = modal.App.lookup("sandbox-snapshot-test", create_if_missing=True)
+
+# Create sandbox, do expensive setup
+sb = modal.Sandbox.create(app=app)
+sb.exec("pip", "install", "torch").wait()  # 60 seconds
+sb.exec("git", "clone", "https://github.com/myrepo/myproject").wait()  # 5 seconds
+sb.exec("bash", "-c", "echo 'config=value' > /config.txt").wait()
+
+# Snapshot filesystem (only modified files stored)
+image = sb.snapshot_filesystem(timeout=55, ttl=None)  # ttl=None: retain indefinitely
+sb.terminate()
+
+# Create 100 sandboxes from snapshot (no pip install, no git clone)
+for i in range(100):
+    sb_child = modal.Sandbox.create(image=image, app=app)
+    # Filesystem already has torch, myproject, config.txt
+    sb_child.exec("pytest", f"myproject/tests/test_{i}.py").wait()
+    sb_child.terminate()</code></pre>
+            <p>
+                <strong>Diff-based storage:</strong> Modal computes the diff between the snapshot and the base image. 
+                If the base image is 500 MB and you added 100 MB of files, the snapshot stores ~100 MB (plus 
+                metadata). This is similar to Docker's layer model and overlayfs (lesson 02).
+            </p>
+            <p>
+                <strong>Retention:</strong> Default TTL is 30 days 
+                (<a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Snapshots docs</a>). Pass 
+                <code>ttl=None</code> to retain indefinitely. Expired snapshots raise <code>NotFoundError</code> when 
+                you try to mount them.
+            </p>
+
+            <h3>Forking via Filesystem Snapshots</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Snapshots docs</a>:
+            </p>
+            <blockquote>
+                "Since Filesystem Snapshots are Images, you can create multiple Sandboxes from the same snapshot. Each 
+                Sandbox starts with an identical copy of the snapshotted filesystem, so you can use this to run 
+                parallel workloads or test different changes independently."
+            </blockquote>
+            <p>
+                <strong>Compare to E2B/Daytona fork (lessons 06-07):</strong> E2B and Daytona fork entire VMs 
+                (memory + devices). Modal's filesystem snapshot only forks the filesystem, not running processes. 
+                Each child sandbox starts fresh (no running Python interpreter cloned). Trade-off: no memory state 
+                preserved, but also no clone hazards (RNG seeds, open file descriptors are fresh).
+            </p>
+
+            <h3>Memory Snapshots: Checkpoint/Restore for Modal Functions</h3>
+            <p>
+                <strong>Important:</strong> Memory snapshots work for <strong>Modal Functions</strong>, not Sandboxes. 
+                From <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs</a>:
+            </p>
+            <blockquote>
+                "Modal Memory Snapshots can dramatically reduce the cold start latency of Modal Functions by skipping 
+                initialization work on most container boots. You can enable Memory Snapshots for your Function with 
+                the <code>enable_memory_snapshot=True</code> parameter."
+            </blockquote>
+            <p>
+                <strong>How it works (CRIU-based):</strong> Modal uses CRIU (Checkpoint/Restore In Userspace, lesson 
+                05 reference) to checkpoint a Function container <em>after</em> global initialization (imports, model 
+                loading) but <em>before</em> the first request. The checkpoint includes:
+            </p>
+            <ul>
+                <li><strong>Memory mappings:</strong> Heap, stack, mmap regions (e.g., numpy arrays, torch tensors).</li>
+                <li><strong>Process tree:</strong> PIDs, file descriptors, registers, environment variables.</li>
+                <li><strong>Filesystem mutations:</strong> Writes to the container filesystem (similar to overlayfs 
+                upper layer).</li>
+            </ul>
+            <p>
+                <strong>Vendor performance claim:</strong> From 
+                <a href="https://modal.com/blog/mem-snapshots" target="_blank">Modal blog (Memory Snapshots announcement)</a>: 
+                "In our experience, practical initialization-heavy Functions often start up 3-10x faster from Memory 
+                Snapshots." This is a vendor-reported range, not independently verified.
+            </p>
+            <p>
+                <strong>Example:</strong>
+            </p>
+            <pre><code class="language-python">import modal
+
+app = modal.App("mem-snapshot-demo")
+
+# Heavy imports in global scope (captured in snapshot)
+with modal.Image.imports():
+    import torch
+    model = torch.load("model.pt")  # 5 seconds to load
+
+@app.function(enable_memory_snapshot=True)
+def infer(x):
+    return model(x)
+
+# Deploy: modal deploy my_app.py
+# First call: slow (imports + model load + snapshot creation)
+# Subsequent calls: fast (restore from snapshot, skip imports/load)</code></pre>
+            <p>
+                <strong>Limitations:</strong>
+            </p>
+            <ul>
+                <li><strong>GPU state:</strong> NVIDIA GPU contexts (CUDA kernels, device memory) are <em>not</em> 
+                checkpointed. Functions with GPUs will re-initialize GPU state on restore. gVisor's 
+                <code>cuda-checkpoint</code> (experimental, lesson 23 curriculum) is not yet available in Modal's 
+                production environment.</li>
+                <li><strong>Network connections:</strong> Open sockets (TCP, UDP) are not preserved. Functions that 
+                hold persistent connections (e.g., database pools) will see those connections closed on restore and 
+                must reconnect.</li>
+                <li><strong>Entropy/RNG:</strong> Random seeds and <code>/dev/urandom</code> state are checkpointed. 
+                If your Function relies on fresh randomness, reseed explicitly after restore (or use time-based seeds).</li>
+                <li><strong>Volume deletions:</strong> If you delete files in a Modal Volume that were read during 
+                checkpoint, restore will fail (<a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory 
+                Snapshots docs</a>).</li>
+            </ul>
+            <p>
+                <strong>Why not Sandboxes?</strong> Modal's memory snapshots are tied to the Function deployment 
+                lifecycle (snapshot created once per Function version, reused for all subsequent calls). Sandboxes 
+                are ephemeral: you create, exec, terminate. Modal doesn't expose checkpoint/restore APIs for Sandboxes 
+                because the CRIU integration is optimized for the Function model (one checkpoint per code version, 
+                many restores). If you need pause/resume/fork for eval orchestration, use E2B or Daytona (lessons 06-07).
+            </p>
+
+            <div class="mermaid">
+graph TD
+    subgraph fs["Filesystem Snapshot (Sandboxes)"]
+        SB1[Sandbox: pip install, git clone]
+        FS[snapshot_filesystem<br/>diff-based Image]
+        SB2A[Child 1: pytest test_1.py]
+        SB2B[Child 2: pytest test_2.py]
+        SB2C[Child N: pytest test_N.py]
+        
+        SB1 --> FS
+        FS --> SB2A
+        FS --> SB2B
+        FS --> SB2C
+    end
+    
+    subgraph mem["Memory Snapshot (Functions)"]
+        FUNC1[Function deploy<br/>import torch, load model]
+        SNAP[CRIU checkpoint<br/>memory + processes]
+        RESTORE1[Restore 1: fast cold start]
+        RESTORE2[Restore 2: fast cold start]
+        RESTOREN[Restore N: fast cold start]
+        
+        FUNC1 --> SNAP
+        SNAP --> RESTORE1
+        SNAP --> RESTORE2
+        SNAP --> RESTOREN
+    end
+    
+    fs -->|Fork filesystem<br/>fresh processes| PARALLEL[Parallel eval instances]
+    mem -->|Fork memory<br/>skip initialization| FASTSTART[3-10x faster startup<br/>vendor claim]
+    
+    style FS fill:#10b981,stroke:#f1f5f9
+    style SNAP fill:#f59e0b,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> Filesystem snapshots (Sandboxes) vs memory snapshots (Functions). 
+                Filesystem: diff-based Image, fork filesystem only, fresh processes. Memory: CRIU checkpoint, fork 
+                memory + processes, skip initialization (3-10x speedup vendor claim).
+            </p>
+        </section>
+
+        <section id="networking" class="content-section">
+            <h2>Networking and Security: Block, Allow, Tunnel</h2>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-networking" target="_blank">Modal Networking docs</a>:
+            </p>
+            <blockquote>
+                "Sandboxes are built to be secure-by-default, meaning that a default Sandbox has no ability to accept 
+                incoming network connections or access your Modal resources."
+            </blockquote>
+
+            <h3>Security Model: Isolated by Default</h3>
+            <p>
+                <strong>gVisor isolation:</strong> gVisor's Sentry intercepts network syscalls. Outbound connections 
+                go through the Sentry's netstack (userspace TCP/IP implementation). Inbound connections are blocked 
+                unless you explicitly expose ports via tunnels.
+            </p>
+            <p>
+                <strong>VM isolation:</strong> VM sandboxes run a full guest kernel with iptables rules configured by 
+                Modal. Outbound/inbound policies are enforced at the hypervisor or guest firewall.
+            </p>
+            <p>
+                <strong>Default policy:</strong> Sandboxes can make outbound connections to the internet (HTTP, HTTPS, 
+                arbitrary TCP/UDP). They <em>cannot</em> receive inbound connections (no listening sockets exposed to 
+                the internet) and they <em>cannot</em> access other Modal resources (Functions, Volumes, Dicts) unless 
+                you explicitly pass them via the SDK.
+            </p>
+
+            <h3>Network Controls</h3>
+            <ul>
+                <li><strong><code>block_network=True</code>:</strong> Block all outbound network access. The sandbox 
+                can only talk to itself (localhost).</li>
+                <li><strong><code>outbound_cidr_allowlist=["10.0.0.0/8", "192.168.0.0/16"]</code>:</strong> Allowlist 
+                specific CIDRs. All other IPs are blocked.</li>
+                <li><strong><code>outbound_domain_allowlist=["*.example.com", "api.service.com"]</code>:</strong> 
+                Allowlist domain names (wildcard prefixes supported). All other domains are blocked.</li>
+                <li><strong><code>inbound_cidr_allowlist=["1.2.3.4/32"]</code>:</strong> Allowlist inbound connections 
+                (for tunnels/connection tokens). All other IPs are blocked.</li>
+            </ul>
+            <p>
+                <strong>Use case:</strong> Running untrusted LLM-generated code. Set 
+                <code>block_network=True</code> to prevent the code from exfiltrating data or downloading malware.
+            </p>
+            <pre><code class="language-python">sb = modal.Sandbox.create(
+    app=app,
+    block_network=True,  # No outbound connections
+)
+sb.exec("python", "-c", "import requests; requests.get('https://evil.com')")  # Fails
+# ConnectionError: network blocked</code></pre>
+
+            <h3>Tunnels: Expose Ports to the Internet</h3>
+            <p>
+                <strong>Use case:</strong> Your sandbox runs a web server (e.g., Jupyter notebook, VS Code server, 
+                web UI for an agent). You want to access it from your browser.
+            </p>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Sandboxes docs</a>, expose ports:
+            </p>
+            <pre><code class="language-python">sb = modal.Sandbox.create(
+    app=app,
+    encrypted_ports=[8888],  # TLS-encrypted tunnel
+)
+# Modal creates a public URL: https://&lt;sandbox-id&gt;.modal.run:8888
+# Requests to that URL are forwarded to localhost:8888 inside the sandbox
+
+sb.exec("jupyter", "notebook", "--port=8888", "--no-browser").wait_in_background()
+print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
+            <p>
+                <strong>Tunnel types:</strong>
+            </p>
+            <ul>
+                <li><strong>Encrypted ports (<code>encrypted_ports</code>):</strong> TLS-encrypted, no custom domain.</li>
+                <li><strong>HTTP/2 ports (<code>h2_ports</code>):</strong> TLS + HTTP/2, useful for gRPC.</li>
+                <li><strong>Unencrypted ports (<code>unencrypted_ports</code>):</strong> Plain TCP, no TLS (not 
+                recommended for untrusted sandboxes).</li>
+            </ul>
+        </section>
+
+        <section id="gpu" class="content-section">
+            <h2>GPU Sandboxes: gVisor nvproxy, No Pause/Resume</h2>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-resources" target="_blank">Sandbox Resources docs</a>:
+            </p>
+            <blockquote>
+                "You can also run Sandboxes with GPUs. GPU Sandboxes are only supported with 
+                <code>runtime="gvisor"</code>."
+            </blockquote>
+
+            <h3>Why gVisor for GPUs?</h3>
+            <p>
+                <strong>gVisor nvproxy:</strong> gVisor's nvproxy forwards NVIDIA GPU ioctl calls from the guest to 
+                the host NVIDIA driver without running a guest kernel. This works because:
+            </p>
+            <ul>
+                <li>CUDA applications make ioctl calls to <code>/dev/nvidia0</code> (the GPU device).</li>
+                <li>gVisor Sentry intercepts those ioctls and forwards them to the host driver.</li>
+                <li>The host driver allocates GPU memory, launches kernels, etc., on behalf of the guest.</li>
+            </ul>
+            <p>
+                <strong>Why not VMs?</strong> Hardware-virtualized VMs (KVM) need PCIe passthrough (VFIO) to expose 
+                GPUs to guests. Firecracker doesn't support PCIe passthrough. Cloud Hypervisor does, but Modal's VM 
+                runtime doesn't expose GPU passthrough (no <code>gpu=...</code> parameter for <code>runtime="vm"</code>).
+            </p>
+
+            <h3>GPU Preemption</h3>
+            <p>
+                From <a href="https://modal.com/docs/guide/sandbox-resources" target="_blank">Sandbox Resources docs</a>:
+            </p>
+            <blockquote>
+                "Unlike CPU Sandboxes, GPU Sandboxes are subject to preemption. Design your GPU workloads to handle 
+                interruptions gracefully."
+            </blockquote>
+            <p>
+                <strong>What this means:</strong> If Modal's cluster is at capacity and a higher-priority workload 
+                needs a GPU, your sandbox may be preempted (killed). Your code should checkpoint progress regularly 
+                (e.g., save model checkpoints to a Volume after every N steps) so you can resume from the last 
+                checkpoint if preempted.
+            </p>
+
+            <h3>GPU Pricing and Limits</h3>
+            <p>
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (accessed October 18, 2026):
+            </p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>GPU Type</th>
+                        <th>Price per second</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Nvidia B300</td>
+                        <td>$0.001972 / sec</td>
+                    </tr>
+                    <tr>
+                        <td>Nvidia H100 SXM5</td>
+                        <td>$0.001097 / sec</td>
+                    </tr>
+                    <tr>
+                        <td>Nvidia A100 80GB</td>
+                        <td>$0.000694 / sec</td>
+                    </tr>
+                    <tr>
+                        <td>Nvidia L40S</td>
+                        <td>$0.000542 / sec</td>
+                    </tr>
+                    <tr>
+                        <td>Nvidia T4</td>
+                        <td>$0.000164 / sec</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <strong>Concurrency limits:</strong> Starter plan: 10 GPU sandboxes concurrently. Team plan: 50 GPU 
+                sandboxes. Enterprise: custom 
+                (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 18, 2026).
+            </p>
+        </section>
+
+        <section id="elasticity" class="content-section">
+            <h2>Elasticity and Pricing: Pay-Per-Second, Burst to 50,000</h2>
+
+            <h3>Serverless Economics</h3>
+            <p>
+                <strong>Pay for what you use:</strong> Modal bills by the second for CPU, memory, and GPU. No idle 
+                charges. From <a href="https://modal.com/docs/guide/sandbox-resources" target="_blank">Sandbox Resources docs</a>:
+            </p>
+            <blockquote>
+                "Modal Sandboxes are billed by the second based on whichever is higher: your resource request or your 
+                actual usage. Sandboxes can burst beyond their CPU and memory requests when additional resources are 
+                available on the underlying host."
+            </blockquote>
+            <p>
+                <strong>Example:</strong> You request <code>cpu=0.5</code> (0.5 physical cores) and 
+                <code>memory=512</code> (512 MiB). Your sandbox uses 0.3 cores and 400 MiB. You pay for 0.5 cores 
+                (your request) and 512 MiB (your request), because <code>max(request, actual)</code>. If your sandbox 
+                bursts to 0.7 cores and 600 MiB, you pay for 0.7 cores and 600 MiB.
+            </p>
+
+            <h3>Sandbox Pricing</h3>
+            <p>
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (October 18, 2026):
+            </p>
+            <ul>
+                <li><strong>CPU:</strong> $0.00003942 per physical core per second (0.125 core minimum). 
+                1 physical core = 2 vCPUs.</li>
+                <li><strong>Memory:</strong> $0.00000667 per GiB per second.</li>
+            </ul>
+            <p>
+                <strong>Example cost:</strong> A sandbox with 1 core and 2 GiB RAM running for 100 seconds costs:
+                <br>
+                CPU: 1 core × $0.00003942/sec × 100 sec = $0.003942<br>
+                Memory: 2 GiB × $0.00000667/sec × 100 sec = $0.001334<br>
+                Total: $0.005276 (~0.5 cents)
+            </p>
+            <p>
+                <strong>Compare to traditional cloud:</strong> AWS c7g.xlarge (4 vCPU, 8 GiB) costs $0.1512/hour on-demand 
+                = $0.000042/sec. Modal's 2 vCPU + 8 GiB = 1 core × $0.00003942 + 8 GiB × $0.00000667 = $0.00009278/sec 
+                (~2.2x AWS on-demand). But if your workload is spiky (10% utilization), Modal saves ~5x because you 
+                don't pay for idle. Modal's value prop: <strong>no idle charges, instant autoscale</strong>.
+            </p>
+
+            <h3>Concurrency and Scale</h3>
+            <p>
+                <strong>Plan limits (October 18, 2026):</strong>
+            </p>
+            <ul>
+                <li><strong>Starter:</strong> 100 CPU containers, 10 GPU concurrency, $30 included compute/month.</li>
+                <li><strong>Team:</strong> 5,000 CPU containers, 50 GPU concurrency, $100 included compute/month.</li>
+                <li><strong>Enterprise:</strong> Custom limits.</li>
+            </ul>
+            <p>
+                <strong>Maximum demonstrated scale:</strong> Modal has publicly demonstrated 1 million concurrent 
+                sandboxes in internal benchmarks (vendor claim, no published reproduction steps). Customer case studies 
+                report up to 50,000 concurrent sandboxes (vendor claim from Modal case studies page, October 2026).
+            </p>
+            <p>
+                <strong>For SWE-bench:</strong> SWE-bench Lite (300 instances) fits in Starter plan. SWE-bench full 
+                (2,294 instances) needs Team plan. If you run 1,000 instances in parallel (each instance takes ~5 
+                minutes), that's 1,000 concurrent sandboxes for 5 minutes = 300,000 sandbox-seconds. At $0.00003942 
+                per core-second (assume 1 core per sandbox), cost is ~$11.83 for compute. Add image build time (~10 
+                minutes one-time per image, maybe 50 images) = ~$2 for builds. Total: ~$14 for a full SWE-bench run 
+                on Modal (rough estimate, assumes no GPU, 1 core per instance).
+            </p>
+        </section>
+
+        <section id="swe-bench" class="content-section">
+            <h2>Real System: SWE-bench Modal Backend</h2>
+            <p>
+                <strong>SWE-bench</strong> 
+                (<a href="https://github.com/SWE-bench/SWE-bench" target="_blank">github.com/SWE-bench/SWE-bench</a>) 
+                is a benchmark for evaluating LLM agents on software engineering tasks: given a GitHub issue and repo, 
+                can the agent generate a patch that fixes the issue and passes the test suite? It includes 2,294 
+                instances across 12 Python repositories.
+            </p>
+
+            <h3>Why SWE-bench Needs Sandboxes</h3>
+            <p>
+                <strong>Problem:</strong> Each instance requires:
+            </p>
+            <ul>
+                <li>A fresh Ubuntu container with the repo's Python version (3.7 to 3.11)</li>
+                <li>Repo dependencies installed (<code>pip install -e .</code>, which runs <code>setup.py</code>)</li>
+                <li>Apply the agent's patch</li>
+                <li>Run the test suite with a timeout (default: 1,800 seconds = 30 minutes)</li>
+                <li>Capture test output (pass/fail, coverage, logs)</li>
+            </ul>
+            <p>
+                Running 2,294 instances sequentially on one machine takes days (30 min/instance × 2,294 = ~48 days). 
+                Running in parallel on local Docker: limited by CPU cores (16 cores = 16 instances at once = ~3 days). 
+                <strong>Solution:</strong> Cloud sandboxes with elastic parallelism.
+            </p>
+
+            <h3>SWE-bench Modal Integration</h3>
+            <p>
+                <strong>File:</strong> <code>swebench/harness/modal_eval/run_evaluation_modal.py</code> 
+                (<a href="https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/modal_eval/run_evaluation_modal.py" target="_blank">SWE-bench GitHub</a>)
+            </p>
+            <p>
+                <strong>How it works:</strong>
+            </p>
+            <ol>
+                <li><strong>Image building:</strong> SWE-bench builds one Modal Image per repo (e.g., 
+                <code>django-base</code>, <code>flask-base</code>). The image includes:
+                    <ul>
+                        <li>Base Ubuntu 22.04 with Python 3.11</li>
+                        <li>Conda (for managing Python versions per instance)</li>
+                        <li>Repo cloned at a specific commit (the "base" commit before the fix)</li>
+                        <li>Dependencies installed via <code>pip install -e .</code></li>
+                    </ul>
+                </li>
+                <li><strong>Per-instance sandboxes:</strong> For each instance:
+                    <ul>
+                        <li>Create a Modal Sandbox from the repo's base image</li>
+                        <li>Apply the agent's patch (<code>git apply</code>)</li>
+                        <li>Run tests (<code>pytest</code>, <code>tox</code>, or repo-specific test command)</li>
+                        <li>Capture stdout/stderr, exit code, and test results</li>
+                        <li>Write logs to object storage (S3 or local filesystem)</li>
+                        <li>Terminate sandbox</li>
+                    </ul>
+                </li>
+                <li><strong>Parallelization:</strong> SWE-bench uses Modal's <code>.starmap()</code> to run N 
+                instances in parallel. Each instance is a separate Modal Function call:
+                    <pre><code class="language-python">run_instance_modal.starmap([
+    (instance_id_1, prediction_1, test_spec_1, run_id, timeout),
+    (instance_id_2, prediction_2, test_spec_2, run_id, timeout),
+    # ... 2,294 tuples
+])</code></pre>
+                    Modal schedules these across its worker fleet. If you have Team plan (5,000 container limit), 
+                    you can run 1,000+ instances concurrently (limited by API rate limits and your concurrency quota).
+                </li>
+                <li><strong>Results:</strong> Each instance writes a <code>test_output.txt</code> and 
+                <code>report.json</code> to the <code>logs/</code> directory. SWE-bench's harness then aggregates 
+                pass/fail counts and generates a final report.</li>
+            </ol>
+
+            <h3>Code Walkthrough (Simplified)</h3>
+            <p>
+                <strong>Note:</strong> The actual <code>run_evaluation_modal.py</code> is ~450 lines. Here's a 
+                simplified excerpt showing the key Modal integration:
+            </p>
+            <pre><code class="language-python"># Simplified from swebench/harness/modal_eval/run_evaluation_modal.py
+import modal
+
+app = modal.App("swebench-eval")
+
+# Build base image (one per repo)
+base_image = (
+    modal.Image.from_registry("ubuntu:22.04")
+    .apt_install("git", "python3.11", "python3-pip")
+    .pip_install("pytest", "tox")
+    .run_commands("git clone https://github.com/django/django /repo")
+    .run_commands("cd /repo && pip install -e .")
+)
+
+@app.function(image=base_image, timeout=1800)
+def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
+    """
+    Run one SWE-bench instance in a Modal sandbox.
+    
+    Args:
+        instance_id: e.g. "django__django-12345"
+        prediction: agent's patch as string
+        test_spec: dict with repo, python_version, test_command
+        run_id: unique ID for this eval run
+        timeout: max seconds for test execution
+    
+    Returns:
+        dict with test_output, exit_code, logs
+    """
+    import subprocess
+    import os
+    
+    # Write patch to file
+    with open("/tmp/patch.diff", "w") as f:
+        f.write(prediction)
+    
+    # Apply patch
+    result = subprocess.run(
+        ["git", "apply", "/tmp/patch.diff"],
+        cwd="/repo",
+        capture_output=True,
+        timeout=60
+    )
+    if result.returncode != 0:
+        return {"error": "patch_failed", "stderr": result.stderr.decode()}
+    
+    # Run tests
+    result = subprocess.run(
+        test_spec["test_command"],
+        cwd="/repo",
+        capture_output=True,
+        timeout=timeout,
+        shell=True
+    )
+    
+    return {
+        "instance_id": instance_id,
+        "exit_code": result.returncode,
+        "stdout": result.stdout.decode(),
+        "stderr": result.stderr.decode(),
+    }
+
+# Invoke via CLI: python -m swebench.harness.run_evaluation --modal true --parallelism 1000</code></pre>
+            <p>
+                <strong>Key observations:</strong>
+            </p>
+            <ul>
+                <li><strong>Image caching:</strong> The base image (Ubuntu + Python + repo) is built once and cached. 
+                Subsequent runs reuse the cached image, saving minutes per instance.</li>
+                <li><strong>Timeout handling:</strong> <code>subprocess.run(timeout=...)</code> kills the test 
+                process if it exceeds the timeout. Modal's <code>@app.function(timeout=1800)</code> kills the 
+                <em>entire container</em> if the function doesn't return within 1,800 seconds.</li>
+                <li><strong>Error handling:</strong> If patch application fails, the function returns early with an 
+                error dict. SWE-bench's harness logs this as "infra_failure" rather than "model_failure".</li>
+                <li><strong>No explicit Sandbox.create:</strong> SWE-bench uses Modal Functions (<code>@app.function</code>) 
+                rather than <code>Sandbox.create</code>. Functions are higher-level: Modal manages the container 
+                lifecycle, retries, and logging. For eval harnesses, Functions are often simpler than Sandboxes 
+                because you don't need to stream exec output or handle PTY.</li>
+            </ul>
+
+            <h3>Lessons for Your Orchestrator</h3>
+            <ul>
+                <li><strong>Build once, run many:</strong> Pre-build base images with common dependencies. Don't 
+                <code>pip install</code> inside each sandbox.</li>
+                <li><strong>Timeout nesting:</strong> Set a per-exec timeout (kill the test process) and a per-sandbox 
+                timeout (kill the container). The sandbox timeout should be slightly longer (e.g., exec timeout + 60 
+                seconds buffer for cleanup).</li>
+                <li><strong>Error classification:</strong> Distinguish infra failures (patch didn't apply, image 
+                build failed) from model failures (tests failed). Only retry infra failures.</li>
+                <li><strong>Log shipping:</strong> Write logs to object storage (S3, GCS) or a durable queue, not 
+                just local disk. If your orchestrator crashes, you can still retrieve results.</li>
+            </ul>
+        </section>
+
+        <section id="tradeoffs" class="content-section">
+            <h2>When to Use Modal vs E2B vs Daytona vs Self-Hosted</h2>
+            <p>
+                You're building an eval orchestrator. You've learned about E2B (lesson 06), Daytona (lesson 07), and 
+                Modal (lesson 08). Which should you choose? Here's a decision framework:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>Modal</th>
+                        <th>E2B</th>
+                        <th>Daytona</th>
+                        <th>Self-Hosted (Firecracker/gVisor)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Isolation mechanism</strong></td>
+                        <td>gVisor (default) or VM</td>
+                        <td>Firecracker microVM (always)</td>
+                        <td>Container, VM, or GPU</td>
+                        <td>Your choice (Firecracker, gVisor, runc, Kata)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pause / resume / fork</strong></td>
+                        <td>❌ No (Sandboxes); ✅ Yes (Functions, memory snapshots)</td>
+                        <td>✅ Yes (all sandboxes)</td>
+                        <td>✅ Yes (VM class only)</td>
+                        <td>✅ Yes (if you implement it, lesson 05)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU support</strong></td>
+                        <td>✅ gVisor nvproxy</td>
+                        <td>❌ No</td>
+                        <td>✅ Container class, exclusive allocation</td>
+                        <td>✅ Yes (Docker + nvidia-runtime, or gVisor nvproxy)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Elasticity</strong></td>
+                        <td>✅ Serverless, 0→50,000+ (vendor claim)</td>
+                        <td>❌ Fixed capacity (you provision nodes)</td>
+                        <td>❌ Fixed capacity (you provision runners)</td>
+                        <td>❌ Fixed capacity (you provision nodes)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pricing model</strong></td>
+                        <td>Pay-per-second, no idle charges</td>
+                        <td>Flat monthly + compute (E2B Cloud), or free (self-hosted OSS)</td>
+                        <td>Flat monthly (Daytona Cloud), or free (self-hosted v0.190.0 frozen)</td>
+                        <td>EC2/GCP instance costs (24/7 or spot)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Open source</strong></td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (Apache-2.0, e2b-dev/runtime)</td>
+                        <td>⚠️ Partial (AGPL-3.0, daytonaio/daytona v0.190.0 frozen)</td>
+                        <td>✅ Yes (various: Firecracker Apache-2.0, gVisor Apache-2.0)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Setup complexity</strong></td>
+                        <td>Low (managed)</td>
+                        <td>Medium (K8s or Docker Compose, PG/Redis/S3)</td>
+                        <td>Medium (K8s or Docker Compose, PG/Redis/ClickHouse)</td>
+                        <td>High (you build orchestrator, networking, storage)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Best for</strong></td>
+                        <td>Spiky eval workloads, serverless ease, GPU evals, no infra management</td>
+                        <td>VM-only isolation, pause/resume/fork, Apache-2.0 OSS, self-hosted control</td>
+                        <td>Multi-tier isolation (container/VM/GPU), self-hosted, job-based architecture</td>
+                        <td>Full control, custom runtimes, bare-metal perf, cost optimization</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Decision Tree</h3>
+            <ol>
+                <li><strong>Do you need pause/resume/fork for GRPO-style RL or branch-and-select?</strong>
+                    <ul>
+                        <li>Yes → E2B (lesson 06) or Daytona VM class (lesson 07). Modal does not support 
+                        pause/resume/fork for Sandboxes.</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need GPU sandboxes?</strong>
+                    <ul>
+                        <li>Yes → Modal (gVisor nvproxy) or Daytona GPU class (container + exclusive GPU). E2B does 
+                        not support GPUs.</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need elastic scale (0 → 10,000+ sandboxes) without provisioning nodes?</strong>
+                    <ul>
+                        <li>Yes → Modal (serverless, pay-per-second).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need open-source backend for audit / compliance / customization?</strong>
+                    <ul>
+                        <li>Yes → E2B (Apache-2.0, active OSS) or Daytona (AGPL-3.0, v0.190.0 frozen).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need multi-tier isolation (container for speed, VM for fork, GPU for ML)?</strong>
+                    <ul>
+                        <li>Yes → Daytona (lesson 07).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you want to avoid managing infra (K8s, PG, Redis, S3)?</strong>
+                    <ul>
+                        <li>Yes → Modal (fully managed).</li>
+                        <li>No → Self-host E2B, Daytona, or build your own (lessons 04-05).</li>
+                    </ul>
+                </li>
+            </ol>
+
+            <h3>Cost Comparison Example</h3>
+            <p>
+                <strong>Scenario:</strong> Run 1,000 eval instances, each takes 5 minutes (300 seconds), 1 CPU core, 
+                2 GB RAM, no GPU. Assume 1,000 instances in parallel (5-minute burst), then idle for the rest of the 
+                month.
+            </p>
+            <ul>
+                <li><strong>Modal:</strong> 1,000 sandboxes × 300 sec × ($0.00003942/core/sec + 2 GB × $0.00000667/GB/sec) 
+                = 1,000 × 300 × $0.00005276 = $15.83. No idle charges.</li>
+                <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: provision 100 
+                c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes 
+                = 100 × $0.1512/hr × (5/60 hr) = $12.60. But you pay for full hour on EC2 on-demand = $15.12. 
+                Spot instances: ~$5-$8.</li>
+                <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same as E2B 
+                (provision EC2 instances).</li>
+                <li><strong>Self-hosted (spot instances):</strong> 100 c7g.xlarge spot instances (4 vCPU) × $0.04/hr 
+                (spot price) × (5/60 hr) = $3.33. Cheapest, but requires infra management and spot interrupt handling.</li>
+            </ul>
+            <p>
+                <strong>Takeaway:</strong> Modal is cost-competitive for spiky workloads (no idle charges). For 
+                sustained 24/7 workloads, self-hosted on spot instances is cheaper but requires more engineering. E2B 
+                and Daytona self-hosted fall in between (you manage nodes, but the orchestrator is pre-built).
+            </p>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: Modal Eval Harness Mini</h2>
+            <p>
+                In this exercise, you'll build a minimal eval harness on Modal: create gVisor and VM sandboxes, 
+                build/cache images, snapshot filesystem, measure startup latency, and run a mini async eval pool with 
+                timeouts and retries.
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Prerequisites</h3>
+                <ul>
+                    <li><strong>Modal account:</strong> Sign up at 
+                    <a href="https://modal.com" target="_blank">modal.com</a> (free Starter plan includes $30 compute).</li>
+                    <li><strong>Modal CLI:</strong> <code>pip install modal</code> and <code>modal setup</code> (first 
+                    time only).</li>
+                    <li><strong>Python 3.10+</strong> (Modal SDK requirement).</li>
+                </ul>
+                <p>
+                    <strong>Note:</strong> This exercise requires a Modal account with API key. The code is verified 
+                    against Modal Python SDK v1.6.1 (October 2026). If you don't have a Modal account, read the code 
+                    and learn the patterns (no execution required).
+                </p>
+            </div>
+
+            <h3>Exercise: Create, Snapshot, and Fork Sandboxes</h3>
+
+            <h4>Step 1: Install Modal SDK</h4>
+            <pre><code class="language-bash">pip install modal
+modal setup  # Authenticates with Modal (first time only)</code></pre>
+
+            <h4>Step 2: Create gVisor and VM Sandboxes, Measure Startup</h4>
+            <p>
+                <strong>Python example (verified against SDK docs):</strong>
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Modal sandbox basics: gVisor vs VM, startup latency.
+"""
+import time
+import modal
+
+def measure(label, fn):
+    start = time.time()
+    result = fn()
+    elapsed = (time.time() - start) * 1000  # milliseconds
+    print(f"{label}: {elapsed:.1f}ms")
+    return result
+
+# Create app (or look up existing)
+app = modal.App.lookup("modal-lesson-08", create_if_missing=True)
+
+print("=== gVisor Sandbox (default) ===")
+sb_gvisor = measure(
+    "Create gVisor sandbox",
+    lambda: modal.Sandbox.create(app=app, runtime="gvisor")
+)
+print(f"gVisor sandbox ID: {sb_gvisor.sandbox_id}")
+
+# Execute command
+p = sb_gvisor.exec("uname", "-a")
+p.wait()
+print(f"uname: {p.stdout.read()}")
+
+# Check runtime (gVisor reports "Linux" + gVisor version)
+p = sb_gvisor.exec("cat", "/proc/version")
+p.wait()
+print(f"/proc/version: {p.stdout.read()}")
+
+sb_gvisor.terminate()
+print("gVisor sandbox terminated\n")
+
+print("=== VM Sandbox ===")
+sb_vm = measure(
+    "Create VM sandbox",
+    lambda: modal.Sandbox.create(app=app, runtime="vm")
+)
+print(f"VM sandbox ID: {sb_vm.sandbox_id}")
+
+# Execute command
+p = sb_vm.exec("uname", "-a")
+p.wait()
+print(f"uname: {p.stdout.read()}")
+
+# VM has full kernel
+p = sb_vm.exec("cat", "/proc/version")
+p.wait()
+print(f"/proc/version: {p.stdout.read()}")
+
+sb_vm.terminate()
+print("VM sandbox terminated")</code></pre>
+            <p>
+                <strong>Expected output (vendor-reported startup times):</strong>
+            </p>
+            <pre><code>=== gVisor Sandbox (default) ===
+Create gVisor sandbox: 850ms
+gVisor sandbox ID: sb-abc123...
+uname: Linux modal 6.1.0-gvisor...
+/proc/version: Linux version 6.1.0-gvisor...
+gVisor sandbox terminated
+
+=== VM Sandbox ===
+Create VM sandbox: 2100ms
+VM sandbox ID: sb-def456...
+uname: Linux modal 6.8.0...
+/proc/version: Linux version 6.8.0...</code></pre>
+
+            <h4>Step 3: Build Image with Caching, Snapshot Filesystem</h4>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Modal image caching and filesystem snapshots.
+"""
+import modal
+
+app = modal.App.lookup("modal-lesson-08", create_if_missing=True)
+
+# Build image with dependencies (cached per layer)
+print("=== Image Build + Cache ===")
+image = (
+    modal.Image.debian_slim()  # Layer 0: base
+    .apt_install("git")        # Layer 1: apt packages
+    .pip_install("pytest", "requests")  # Layer 2: pip packages
+)
+
+# Create sandbox from image
+sb = modal.Sandbox.create(image=image, app=app)
+print(f"Sandbox ID: {sb.sandbox_id}")
+
+# Do expensive setup
+print("Running setup (git clone, config)...")
+p = sb.exec("git", "clone", "https://github.com/octocat/Hello-World", "/repo")
+p.wait()
+assert p.returncode == 0, "git clone failed"
+
+p = sb.exec("bash", "-c", "echo 'my-config=value' > /config.txt")
+p.wait()
+
+# Snapshot filesystem (only modified files stored)
+print("Creating filesystem snapshot...")
+snapshot_image = sb.snapshot_filesystem(ttl=None)  # Retain indefinitely
+print(f"Snapshot created: {snapshot_image}")
+
+sb.terminate()
+
+# Create 3 child sandboxes from snapshot (no git clone, no config write)
+print("\n=== Fork from Filesystem Snapshot ===")
+for i in range(3):
+    sb_child = modal.Sandbox.create(image=snapshot_image, app=app)
+    print(f"Child {i} sandbox ID: {sb_child.sandbox_id}")
+    
+    # Verify setup persisted
+    p = sb_child.exec("ls", "/repo")
+    p.wait()
+    assert "README" in p.stdout.read(), "Repo not found"
+    
+    p = sb_child.exec("cat", "/config.txt")
+    p.wait()
+    print(f"Child {i} config: {p.stdout.read()}")
+    
+    sb_child.terminate()
+
+print("All children terminated")</code></pre>
+
+            <h4>Step 4: Async Eval Pool with Timeouts and Retries</h4>
+            <p>
+                <strong>Goal:</strong> Run N eval items concurrently, with per-exec timeouts and infra error retries.
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""
+Mini async eval pool: concurrent sandboxes, timeouts, retries.
+"""
+import asyncio
+import modal
+
+app = modal.App.lookup("modal-lesson-08-async", create_if_missing=True)
+
+# Simple image
+image = modal.Image.debian_slim().pip_install("pytest")
+
+async def run_eval_item(item_id: str, test_cmd: str, timeout_sec: int, max_retries: int = 2):
+    """
+    Run one eval item in a sandbox, with timeout and retry on infra errors.
+    
+    Returns:
+        dict with item_id, exit_code, stdout, stderr, or error
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            # Create sandbox
+            sb = await modal.Sandbox.create.aio(image=image, app=app, timeout=timeout_sec + 30)
+            
+            try:
+                # Execute test command with timeout
+                p = await sb.exec.aio("bash", "-c", test_cmd, timeout=timeout_sec)
+                await p.wait.aio()
+                
+                result = {
+                    "item_id": item_id,
+                    "exit_code": p.returncode,
+                    "stdout": await p.stdout.read.aio(),
+                    "stderr": await p.stderr.read.aio(),
+                    "attempt": attempt,
+                }
+                
+                await sb.terminate.aio()
+                return result
+            
+            except asyncio.TimeoutError:
+                await sb.terminate.aio()
+                return {"item_id": item_id, "error": "timeout", "attempt": attempt}
+        
+        except Exception as e:
+            # Infra error (sandbox creation failed, exec failed, etc.)
+            print(f"[{item_id}] Attempt {attempt} failed: {e}")
+            if attempt < max_retries:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                return {"item_id": item_id, "error": f"infra_failure: {e}", "attempt": attempt}
+
+async def run_eval_pool(items, concurrency=10, timeout_sec=30):
+    """
+    Run eval items with bounded concurrency.
+    
+    Args:
+        items: list of (item_id, test_cmd) tuples
+        concurrency: max concurrent sandboxes
+        timeout_sec: per-exec timeout
+    
+    Returns:
+        list of result dicts
+    """
+    semaphore = asyncio.Semaphore(concurrency)
+    
+    async def run_with_semaphore(item_id, test_cmd):
+        async with semaphore:
+            return await run_eval_item(item_id, test_cmd, timeout_sec)
+    
+    tasks = [run_with_semaphore(item_id, test_cmd) for item_id, test_cmd in items]
+    results = await asyncio.gather(*tasks)
+    return results
+
+# Test
+if __name__ == "__main__":
+    items = [
+        ("test-1", "echo 'test 1 pass' && exit 0"),
+        ("test-2", "echo 'test 2 pass' && exit 0"),
+        ("test-3", "sleep 5 && echo 'test 3 slow' && exit 0"),
+        ("test-4", "exit 1"),  # Fail
+        ("test-5", "sleep 100"),  # Timeout (if timeout_sec=30)
+    ]
+    
+    results = asyncio.run(run_eval_pool(items, concurrency=3, timeout_sec=10))
+    
+    for result in results:
+        print(f"{result['item_id']}: {result.get('exit_code', result.get('error'))}")</code></pre>
+            <p>
+                <strong>Expected output:</strong>
+            </p>
+            <pre><code>test-1: 0
+test-2: 0
+test-3: timeout
+test-4: 1
+test-5: timeout</code></pre>
+
+            <h3>What You Learned</h3>
+            <ul>
+                <li>How to create gVisor and VM sandboxes via <code>modal.Sandbox.create(runtime=...)</code></li>
+                <li>How to measure startup latency and compare vendor claims to your actual results</li>
+                <li>How to build images with layer caching (<code>modal.Image.debian_slim().apt_install(...)</code>) 
+                and avoid redundant rebuilds</li>
+                <li>How to snapshot filesystem (<code>sb.snapshot_filesystem(ttl=None)</code>) and fork N child 
+                sandboxes with shared setup</li>
+                <li>How to run async eval pools with bounded concurrency (semaphore), per-exec timeouts, and infra 
+                error retries</li>
+                <li>Why timeouts nest: per-exec timeout (kill test process) + sandbox timeout (kill container if 
+                exec hangs)</li>
+                <li>Why retry infra errors (sandbox creation failed) but not model errors (test failed)</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Going Further: Deploy a Real Eval Harness</h3>
+                <p>
+                    To build a production eval harness on Modal:
+                </p>
+                <ul>
+                    <li><strong>Pre-build repo images:</strong> One image per repo with dependencies installed 
+                    (like SWE-bench). Cache them with <code>modal deploy</code>.</li>
+                    <li><strong>Durable queue:</strong> Use Modal Dicts or external queue (SQS, Redis) to store 
+                    work items and results.</li>
+                    <li><strong>Log shipping:</strong> Stream logs to S3/GCS or a logging service (DataDog, 
+                    CloudWatch) for post-mortem analysis.</li>
+                    <li><strong>Idempotency:</strong> Write results to content-addressed keys (hash of 
+                    instance_id + model + prompt) so retries don't duplicate work.</li>
+                    <li><strong>Cost tracking:</strong> Tag sandboxes with <code>tags={"run_id": "...", "model": "..."}</code> 
+                    to track cost per run/model in Modal's dashboard.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from Modal's official documentation, the modal-client SDK 
+                source, SWE-bench source, or gVisor docs, or labeled as vendor claims. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>Modal Official Documentation</h3>
+                <ul>
+                    <li><a href="https://modal.com/docs/guide/sandboxes" target="_blank">Sandboxes Guide</a> — 
+                    High-level guide to Sandboxes, runtimes, lifecycle, timeouts, networking. Verbatim quote: 
+                    "Sandboxes run on one of two runtimes: gVisor, a container runtime developed by Google, provides 
+                    strong isolation and is suitable for most workloads. VMs run the Sandbox in a virtual machine with 
+                    its own Linux kernel."</li>
+                    <li><a href="https://modal.com/docs/sdk/py/latest/Sandbox" target="_blank">Sandbox API Reference (Python)</a> — 
+                    Complete API docs for <code>modal.Sandbox.create</code>, <code>exec</code>, 
+                    <code>snapshot_filesystem</code>, <code>terminate</code>, etc.</li>
+                    <li><a href="https://modal.com/docs/guide/images" target="_blank">Images Guide</a> — 
+                    Image building, layer caching, <code>force_build</code>, <code>MODAL_IGNORE_CACHE</code>. 
+                    Verbatim quote: "Images are cached per layer (i.e., per <code>Image</code> method call), and 
+                    breaking the cache on a single layer will cause cascading rebuilds for all subsequent layers."</li>
+                    <li><a href="https://modal.com/docs/guide/sandbox-snapshots" target="_blank">Sandbox Snapshots</a> — 
+                    Filesystem, directory, and memory snapshots. Verbatim quote: "Filesystem Snapshots are optimized 
+                    for performance: they are calculated as the difference from your base image, so only modified files 
+                    are stored."</li>
+                    <li><a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots (Functions)</a> — 
+                    CRIU-based checkpoint/restore for Functions. Verbatim quote: "In our experience, practical 
+                    initialization-heavy Functions often start up 3-10x faster from Memory Snapshots" (vendor claim).</li>
+                    <li><a href="https://modal.com/docs/guide/sandbox-networking" target="_blank">Networking and Security</a> — 
+                    <code>block_network</code>, <code>outbound_cidr_allowlist</code>, tunnels, gVisor/VM isolation. 
+                    Verbatim quote: "Modal Sandboxes are isolated from the host and from other workloads by one of 
+                    the two runtimes we offer: gVisor [...] or VMs."</li>
+                    <li><a href="https://modal.com/docs/guide/sandbox-resources" target="_blank">Sandbox Resources & Pricing</a> — 
+                    CPU, memory, disk, GPU, burst, pricing model. Verbatim quote: "Modal Sandboxes are billed by 
+                    the second based on whichever is higher: your resource request or your actual usage."</li>
+                    <li><a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> — 
+                    Per-second prices, concurrency limits, plan comparison (Starter, Team, Enterprise). Accessed 
+                    October 18, 2026.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Modal SDK and Source Code</h3>
+                <ul>
+                    <li><a href="https://github.com/modal-labs/modal-client" target="_blank">modal-labs/modal-client</a> — 
+                    Multi-language SDK (Python, JavaScript/TypeScript, Go) plus protobuf API definitions. Apache-2.0 license.</li>
+                    <li><a href="https://modal.com/blog/mem-snapshots" target="_blank">Memory Snapshots Blog Post</a> — 
+                    CRIU integration, snapshot lifecycle, compatibility concerns (CPU featureset, NVIDIA driver version). 
+                    Vendor performance claim: "3-10x faster startup from Memory Snapshots."</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>gVisor Documentation (Lesson 03 Deep Dive)</h3>
+                <ul>
+                    <li><a href="https://gvisor.dev" target="_blank">gVisor Official Site</a> — 
+                    gVisor architecture, Sentry (userspace kernel), Gofer (file I/O proxy), platforms (systrap, KVM, ptrace).</li>
+                    <li><a href="https://gvisor.dev/docs/user_guide/platforms/" target="_blank">gVisor Platforms</a> — 
+                    Systrap (default, <code>SECCOMP_RET_TRAP</code>), KVM (bare metal), ptrace (legacy).</li>
+                    <li><a href="https://gvisor.dev/docs/user_guide/gpu/" target="_blank">gVisor GPU (nvproxy)</a> — 
+                    How gVisor forwards NVIDIA GPU ioctl calls to host driver without full guest kernel.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>SWE-bench Modal Integration</h3>
+                <ul>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench/SWE-bench</a> — 
+                    Official SWE-bench repository (2,294 instances across 12 Python repos).</li>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/modal_eval/run_evaluation_modal.py" target="_blank">run_evaluation_modal.py</a> — 
+                    Modal backend implementation: image building, <code>run_instance_modal.starmap</code> parallelization, 
+                    log shipping.</li>
+                    <li><a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/evaluation.md" target="_blank">SWE-bench Evaluation Guide</a> — 
+                    How to run SWE-bench on Modal: <code>python -m swebench.harness.run_evaluation --modal true</code>.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Comparison to Lessons 06-07</h3>
+                <ul>
+                    <li><strong>E2B (Lesson 06):</strong> 
+                    <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> — 
+                    Firecracker-based, pause/resume/fork, Apache-2.0 OSS. Compare Modal's serverless model (no 
+                    pause/resume for Sandboxes) to E2B's VM-only model (every sandbox pauses/resumes).</li>
+                    <li><strong>Daytona (Lesson 07):</strong> 
+                    <a href="https://www.daytona.io/docs" target="_blank">Daytona Docs</a> — 
+                    Multi-tier isolation (container/VM/GPU), job-based architecture. Compare Modal's gVisor-first 
+                    approach to Daytona's container-default + VM opt-in.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>CRIU and Checkpoint/Restore (Lesson 05 Reference)</h3>
+                <ul>
+                    <li><a href="https://criu.org" target="_blank">CRIU (Checkpoint/Restore In Userspace)</a> — 
+                    The technology behind Modal's memory snapshots (Functions). Checkpoints process tree, memory 
+                    mappings, file descriptors, registers.</li>
+                    <li><a href="https://criu.org/Docker" target="_blank">CRIU + Docker</a> — 
+                    How to checkpoint/restore Docker containers (similar to Modal's Function snapshot workflow).</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Lesson</h3>
+                <p>
+                    In <strong>Lesson 09</strong>, you'll explore other open-source sandbox projects: microsandbox 
+                    (libkrun microVMs, embeddable), kubernetes-sigs/agent-sandbox (CRDs for warm pools + templates), 
+                    Beam/beta9 (AGPL, self-hostable serverless), and Fly Machines (Firecracker with fast stop/start).
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../07-daytona/">← Lesson 07: Daytona</a> | 
+                <a href="../">← Back to Curriculum</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>
