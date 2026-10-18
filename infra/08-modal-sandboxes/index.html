@@ -54,10 +54,9 @@
                     <li>How Modal's Image definitions layer and cache (similar to Docker layers, but with OCI + function hashing)</li>
                     <li>How filesystem snapshots (<code>snapshot_filesystem</code>) share expensive setup across sandboxes 
                     and avoid pip-install waits</li>
-                    <li>How memory snapshots (CRIU-based, checkpoint/restore) work for Modal Functions (not Sandboxes) 
-                    and their limitations (GPU state, network connections)</li>
-                    <li>How SWE-bench's Modal backend builds images and parallelizes instances via 
-                    <code>run_instance_modal.starmap</code></li>
+                    <li>How memory snapshots (mechanism undocumented, checkpoint/restore) work for Modal Functions (not Sandboxes) 
+                    and their limitations (GPU snapshots are alpha, randomness caveats)</li>
+                    <li>How SWE-bench's Modal harness creates per-instance images and runs evaluations in Sandboxes</li>
                     <li>When your eval orchestrator should choose Modal (elastic, serverless, gVisor-compatible) vs 
                     E2B (VM-only, Apache-2.0 OSS) vs Daytona (self-hosted, job-based) vs self-managed Firecracker/gVisor</li>
                     <li>Hands-on: Create gVisor and VM sandboxes, build/cache images, snapshot filesystem, measure startup 
@@ -537,7 +536,7 @@ for i in range(100):
                 preserved, but also no clone hazards (RNG seeds, open file descriptors are fresh).
             </p>
 
-            <h3>Memory Snapshots: Checkpoint/Restore for Modal Functions</h3>
+            <h3>Memory Snapshots: For Modal Functions Only</h3>
             <p>
                 <strong>Important:</strong> Memory snapshots work for <strong>Modal Functions</strong>, not Sandboxes. 
                 From <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs</a>:
@@ -548,16 +547,11 @@ for i in range(100):
                 the <code>enable_memory_snapshot=True</code> parameter."
             </blockquote>
             <p>
-                <strong>How it works (CRIU-based):</strong> Modal uses CRIU (Checkpoint/Restore In Userspace, lesson 
-                05 reference) to checkpoint a Function container <em>after</em> global initialization (imports, model 
-                loading) but <em>before</em> the first request. The checkpoint includes:
+                <strong>How it works (mechanism undocumented):</strong> Modal checkpoints a Function container 
+                <em>after</em> global initialization (imports, model loading) but <em>before</em> the first request, 
+                then restores new containers from that checkpoint. The underlying checkpoint/restore mechanism is not 
+                documented by Modal.
             </p>
-            <ul>
-                <li><strong>Memory mappings:</strong> Heap, stack, mmap regions (e.g., numpy arrays, torch tensors).</li>
-                <li><strong>Process tree:</strong> PIDs, file descriptors, registers, environment variables.</li>
-                <li><strong>Filesystem mutations:</strong> Writes to the container filesystem (similar to overlayfs 
-                upper layer).</li>
-            </ul>
             <p>
                 <strong>Vendor performance claim:</strong> From 
                 <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Modal Memory Snapshots docs</a>: 
@@ -569,14 +563,15 @@ for i in range(100):
             </p>
             <pre><code class="language-python">import modal
 
+image = modal.Image.debian_slim().pip_install("torch")
+
+with image.imports():
+    import torch
+    model = torch.load("model.pt")
+
 app = modal.App("mem-snapshot-demo")
 
-# Heavy imports in global scope (captured in snapshot)
-with modal.Image.imports():
-    import torch
-    model = torch.load("model.pt")  # 5 seconds to load
-
-@app.function(enable_memory_snapshot=True)
+@app.function(enable_memory_snapshot=True, image=image)
 def infer(x):
     return model(x)
 
@@ -587,23 +582,27 @@ def infer(x):
                 <strong>Limitations:</strong>
             </p>
             <ul>
-                <li><strong>GPU state:</strong> NVIDIA GPU contexts (CUDA kernels, device memory) are <em>not</em> 
-                checkpointed. Functions with GPUs will re-initialize GPU state on restore.</li>
-                <li><strong>Network connections:</strong> Open sockets (TCP, UDP) are not preserved. Functions that 
-                hold persistent connections (e.g., database pools) will see those connections closed on restore and 
-                must reconnect.</li>
-                <li><strong>Entropy/RNG:</strong> Random seeds and <code>/dev/urandom</code> state are checkpointed. 
-                If your Function relies on fresh randomness, reseed explicitly after restore (or use time-based seeds).</li>
-                <li><strong>Volume deletions:</strong> If you delete files in a Modal Volume that were read during 
-                checkpoint, restore will fail (<a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory 
-                Snapshots docs</a>).</li>
+                <li><strong>GPU Memory Snapshots (alpha):</strong> GPU Memory Snapshots are available as an alpha feature 
+                via <code>experimental_options={"enable_gpu_snapshot": True}</code>. CPU-only memory snapshots block GPU 
+                access during <code>@modal.enter(snap=True)</code> methods. See 
+                <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs</a> for 
+                GPU snapshotting limitations and workarounds.</li>
+                <li><strong>Randomness:</strong> From the docs: "if a variable is randomly initialized and that value 
+                included in a Memory Snapshot, that variable will be identical after every restore." If your application 
+                depends on uniqueness of state, verify your code is resilient to snapshotting.</li>
+                <li><strong>Volume deletions:</strong> Deleting files in a Modal Volume that were read during 
+                checkpoint will cause restore failures 
+                (<a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs</a>).</li>
+                <li><strong>Snapshot counts:</strong> CPU-only Functions need around 6 snapshots for full coverage. GPU 
+                Functions need 2-3 snapshots per GPU type 
+                (<a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs FAQ</a>).</li>
             </ul>
             <p>
                 <strong>Why not Sandboxes?</strong> Modal's memory snapshots are tied to the Function deployment 
                 lifecycle (snapshot created once per Function version, reused for all subsequent calls). Sandboxes 
                 are ephemeral: you create, exec, terminate. Modal doesn't expose checkpoint/restore APIs for Sandboxes 
-                because the CRIU integration is optimized for the Function model (one checkpoint per code version, 
-                many restores). If you need pause/resume/fork for eval orchestration, use E2B or Daytona (lessons 06-07).
+                because the implementation is optimized for the Function model (one checkpoint per code version, many 
+                restores). If you need pause/resume/fork for eval orchestration, use E2B or Daytona (lessons 06-07).
             </p>
 
             <div class="mermaid">
@@ -623,7 +622,7 @@ graph TD
     
     subgraph mem["Memory Snapshot (Functions)"]
         FUNC1[Function deploy<br/>import torch, load model]
-        SNAP[CRIU checkpoint<br/>memory + processes]
+        SNAP[Checkpoint<br/>mechanism undocumented]
         RESTORE1[Restore 1: fast cold start]
         RESTORE2[Restore 2: fast cold start]
         RESTOREN[Restore N: fast cold start]
@@ -635,15 +634,15 @@ graph TD
     end
     
     fs -->|Fork filesystem<br/>fresh processes| PARALLEL[Parallel eval instances]
-    mem -->|Fork memory<br/>skip initialization| FASTSTART[3-10x faster startup<br/>vendor claim]
+    mem -->|Restore state<br/>skip initialization| FASTSTART[3-10x faster startup<br/>vendor claim]
     
     style FS fill:#10b981,stroke:#f1f5f9
     style SNAP fill:#f59e0b,stroke:#f1f5f9
             </div>
             <p class="diagram-caption">
                 <strong>Figure 3:</strong> Filesystem snapshots (Sandboxes) vs memory snapshots (Functions). 
-                Filesystem: diff-based Image, fork filesystem only, fresh processes. Memory: CRIU checkpoint, fork 
-                memory + processes, skip initialization (3-10x speedup vendor claim).
+                Filesystem: diff-based Image, fork filesystem only, fresh processes. Memory: checkpoint/restore 
+                (mechanism undocumented), skip initialization (3-10x speedup vendor claim).
             </p>
         </section>
 
@@ -888,45 +887,37 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>Why SWE-bench Needs Sandboxes</h3>
             <p>
-                <strong>Problem:</strong> Each instance requires:
-            </p>
-            <ul>
-                <li>A fresh Ubuntu container with the repo's Python version (3.7 to 3.11)</li>
-                <li>Repo dependencies installed (<code>pip install -e .</code>, which runs <code>setup.py</code>)</li>
-                <li>Apply the agent's patch</li>
-                <li>Run the test suite with a timeout (default: 1,800 seconds = 30 minutes)</li>
-                <li>Capture test output (pass/fail, coverage, logs)</li>
-            </ul>
-            <p>
-                Running 2,294 instances sequentially on one machine takes days (30 min/instance × 2,294 = ~48 days). 
-                Running in parallel on local Docker: limited by CPU cores (16 cores = 16 instances at once = ~3 days). 
-                <strong>Solution:</strong> Cloud sandboxes with elastic parallelism.
+                <strong>Problem:</strong> Each instance requires repo setup, dependencies installation, patch application, 
+                and test execution. Running thousands of instances sequentially or on limited local resources would take 
+                substantial time. <strong>Solution:</strong> Cloud sandboxes with elastic parallelism.
             </p>
 
             <h3>SWE-bench Modal Integration</h3>
             <p>
-                <strong>Implementation:</strong> SWE-bench includes Modal integration for parallel evaluation. Consult 
-                <code>swebench/harness/modal_eval/</code> in the 
-                <a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repository</a> for the 
-                actual implementation.
+                <strong>Implementation:</strong> SWE-bench's Modal harness is in 
+                <code>swebench/harness/modal_eval/run_evaluation_modal.py</code> 
+                (<a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repository</a>).
             </p>
             <p>
-                <strong>Conceptual workflow (verify against source):</strong>
+                <strong>Actual implementation (from source):</strong>
             </p>
             <ol>
-                <li><strong>Image building:</strong> Build base Modal Images per repository with dependencies pre-installed 
-                to avoid repeated setup across instances.</li>
-                <li><strong>Per-instance execution:</strong> For each test instance:
-                    <ul>
-                        <li>Provision a container from the base image</li>
-                        <li>Apply the candidate patch</li>
-                        <li>Run the test suite with timeouts</li>
-                        <li>Capture test results and logs</li>
-                    </ul>
-                </li>
-                <li><strong>Parallelization:</strong> Modal's execution model allows running many instances concurrently, 
-                subject to plan limits (Starter: 100 containers, Team: 5,000 containers).</li>
-                <li><strong>Results aggregation:</strong> Test outcomes are collected and aggregated into pass/fail metrics.</li>
+                <li><strong>Modal Function wrapper:</strong> <code>@app.function</code> decorator on 
+                <code>run_instance_modal</code> with 120-minute timeout to account for image build time.</li>
+                <li><strong>Per-instance image building:</strong> <code>ModalSandboxRuntime.get_instance_image(test_spec)</code> 
+                builds a unique Modal Image for each test instance from Ubuntu 22.04 + Python 3.11 + Miniconda, runs 
+                <code>setup_env.sh</code> and <code>setup_repo.sh</code> from the test spec, installs repo at 
+                <code>/testbed/</code>. Modal automatically caches images.</li>
+                <li><strong>Sandbox creation:</strong> <code>modal.Sandbox.create()</code> with the instance image, 
+                4 CPUs, default 30-minute timeout (configurable).</li>
+                <li><strong>Patch application:</strong> Write patch to <code>/tmp/patch.diff</code>, apply via 
+                <code>git apply</code> or <code>patch --batch --fuzz=5</code>.</li>
+                <li><strong>Test execution:</strong> Run <code>eval.sh</code> script from test spec.</li>
+                <li><strong>Parallelization:</strong> <code>run_instance_modal.starmap()</code> runs instances in 
+                parallel. Errors set <code>errored=True</code> in <code>TestOutput</code>.</li>
+                <li><strong>Results:</strong> Logs saved to <code>RUN_EVALUATION_LOG_DIR/run_id/model/instance_id/</code> 
+                with <code>run_instance.log</code>, <code>test_output.txt</code>, <code>patch.diff</code>, 
+                <code>report.json</code>.</li>
             </ol>
 
             <h3>Illustrative Code Example</h3>
@@ -934,7 +925,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 <strong>Note:</strong> The following is a simplified, illustrative example showing Modal's evaluation 
                 pattern, not actual SWE-bench source code. Consult the SWE-bench repository for the real implementation.
             </p>
-            <pre><code class="language-python"># Simplified from swebench/harness/modal_eval/run_evaluation_modal.py
+            <pre><code class="language-python"># Illustrative example showing Modal's evaluation pattern
 import modal
 
 app = modal.App("swebench-eval")
@@ -994,24 +985,20 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
         "exit_code": result.returncode,
         "stdout": result.stdout.decode(),
         "stderr": result.stderr.decode(),
-    }
-
-# Invoke via CLI: python -m swebench.harness.run_evaluation --modal true --parallelism 1000</code></pre>
+    }</code></pre>
             <p>
                 <strong>Key observations:</strong>
             </p>
             <ul>
-                <li><strong>Image caching:</strong> The base image (Ubuntu + Python + repo) is built once and cached. 
-                Subsequent runs reuse the cached image, saving minutes per instance.</li>
-                <li><strong>Timeout handling:</strong> <code>subprocess.run(timeout=...)</code> kills the test 
-                process if it exceeds the timeout. Modal's <code>@app.function(timeout=1800)</code> kills the 
-                <em>entire container</em> if the function doesn't return within 1,800 seconds.</li>
-                <li><strong>Error handling:</strong> If patch application fails, the function returns early with an 
-                error dict. SWE-bench's harness logs this as "infra_failure" rather than "model_failure".</li>
-                <li><strong>No explicit Sandbox.create:</strong> SWE-bench uses Modal Functions (<code>@app.function</code>) 
-                rather than <code>Sandbox.create</code>. Functions are higher-level: Modal manages the container 
-                lifecycle, retries, and logging. For eval harnesses, Functions are often simpler than Sandboxes 
-                because you don't need to stream exec output or handle PTY.</li>
+                <li><strong>Image caching:</strong> Modal automatically caches images. The source builds a unique image 
+                per instance but Modal's caching minimizes rebuild overhead.</li>
+                <li><strong>Timeout handling:</strong> <code>ModalSandboxRuntime</code> uses <code>modal.Sandbox.create()</code> 
+                inside the Function with configurable timeout (default 30 minutes). The Function itself has a 120-minute timeout.</li>
+                <li><strong>Error handling:</strong> If patch application fails or exceptions occur, the function returns 
+                <code>TestOutput</code> with <code>errored=True</code>. The source uses <code>EvaluationError</code> 
+                exceptions, not "infra_failure" strings.</li>
+                <li><strong>Hybrid approach:</strong> SWE-bench wraps <code>modal.Sandbox.create()</code> calls inside 
+                a <code>@app.function</code> decorator to leverage Modal's parallelization via <code>.starmap()</code>.</li>
             </ul>
 
             <h3>Lessons for Your Orchestrator</h3>
@@ -1121,9 +1108,9 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                         <li>No → Continue.</li>
                     </ul>
                 </li>
-                <li><strong>Do you need elastic scale (0 → 10,000+ sandboxes) without provisioning nodes?</strong>
+                <li><strong>Do you need elastic serverless scale without provisioning nodes?</strong>
                     <ul>
-                        <li>Yes → Modal (serverless, pay-per-second).</li>
+                        <li>Yes → Modal (serverless autoscaling, pay-per-second).</li>
                         <li>No → Continue.</li>
                     </ul>
                 </li>
@@ -1149,33 +1136,33 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
 
             <h3>Cost Comparison Example</h3>
             <p>
-                <strong>Scenario:</strong> Run 1,000 eval instances, each takes 5 minutes (300 seconds), 1 CPU core, 
-                2 GB RAM, no GPU. Assume 1,000 instances in parallel (5-minute burst), then idle for the rest of the 
-                month.
+                <strong>Illustrative scenario:</strong> Run 1,000 eval instances, each takes 5 minutes (300 seconds), 
+                1 CPU core, 2 GB RAM, no GPU. Assume 1,000 instances run in parallel (5-minute burst), then idle for 
+                the rest of the month.
             </p>
             <ul>
                 <li><strong>Modal:</strong> 1,000 sandboxes × 300 sec × ($0.00003942/core/sec + 2 GiB × $0.00000667/GiB/sec) 
                 = 1,000 × 300 × $0.00005276 = $15.83 (pricing from 
-                <a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>: $0.00003942/core/sec CPU, 
-                $0.00000667/GiB/sec memory). Modal's serverless pricing can't be directly compared to traditional 
-                on-demand or spot instance pricing. No idle charges.</li>
-                <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: provision 100 
-                c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes. 
-                EC2 Linux on-demand bills per-second with a 60-second minimum 
+                <a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>). No idle charges. Modal's 
+                per-second rate is ~2.2x AWS c7g.xlarge per-second on-demand, but Modal charges only for active time 
+                (5 minutes), while maintaining an always-on instance would incur 24/7 charges (2.2x × 5 minutes / 24 hours 
+                ≈ 0.8% of the always-on monthly cost).</li>
+                <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: To run 1,000 one-core 
+                instances concurrently, provision 250 c7g.xlarge instances (4 cores each = 1,000 cores). EC2 Linux 
+                on-demand bills per-second with a 60-second minimum 
                 (<a href="https://aws.amazon.com/ec2/pricing/" target="_blank">AWS EC2 Pricing</a>), so 5 minutes = 
-                100 × $0.1512/hr × (5/60 hr) = $12.60. Spot instance costs vary by region, availability zone, and 
-                time; check current spot prices for your use case.</li>
-                <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same as E2B 
-                (provision EC2 instances).</li>
+                250 × $0.1512/hr × (5/60 hr) = $31.50. To run in batches of 400 concurrently (100 instances), cost = 
+                100 × $0.1512/hr × (5/60 hr) × 3 batches = $37.80. Spot instance costs vary by region and time.</li>
+                <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same arithmetic 
+                as E2B (provision EC2 instances).</li>
                 <li><strong>Self-hosted (spot instances):</strong> Spot prices vary significantly by region, 
                 availability zone, and time. Check <a href="https://aws.amazon.com/ec2/spot/pricing/" target="_blank">AWS 
-                Spot Pricing</a> for current rates and plug in a current price for the instance type you choose 
-                (e.g., 100 c7g.xlarge spot instances for 5 minutes = 100 × [your spot price/hr] × (5/60 hr)). 
+                Spot Pricing</a> for current rates and plug in for your instance type and concurrency needs. 
                 Cheapest option, but requires infra management and spot interrupt handling.</li>
             </ul>
             <p>
-                <strong>Takeaway:</strong> Modal is cost-competitive for spiky workloads (no idle charges). For 
-                sustained 24/7 workloads, self-hosted on spot instances is cheaper but requires more engineering. E2B 
+                <strong>Takeaway:</strong> Modal is cost-competitive for spiky workloads (pay only for active time). 
+                For sustained 24/7 workloads, self-hosted on spot instances is cheaper but requires more engineering. E2B 
                 and Daytona self-hosted fall in between (you manage nodes, but the orchestrator is pre-built).
             </p>
         </section>
@@ -1511,8 +1498,9 @@ test-5: timeout</code></pre>
                     for performance: they are calculated as the difference from your base image, so only modified files 
                     are stored."</li>
                     <li><a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots (Functions)</a> — 
-                    CRIU-based checkpoint/restore for Functions. Verbatim quote: "In our experience, practical 
-                    initialization-heavy Functions often start up 3-10x faster from Memory Snapshots" (vendor claim).</li>
+                    Checkpoint/restore for Functions (mechanism undocumented). Verbatim quote: "In our experience, practical 
+                    initialization-heavy Functions often start up 3-10x faster from Memory Snapshots" (vendor claim). 
+                    Describes GPU Memory Snapshots (alpha) and CPU-only snapshot limitations.</li>
                     <li><a href="https://modal.com/docs/guide/sandbox-networking" target="_blank">Networking and Security</a> — 
                     <code>block_network</code>, <code>outbound_cidr_allowlist</code>, tunnels, gVisor/VM isolation. 
                     Verbatim quote: "Modal Sandboxes are isolated from the host and from other workloads by one of 
@@ -1572,16 +1560,6 @@ test-5: timeout</code></pre>
                 </ul>
             </div>
 
-            <div class="info-box">
-                <h3>CRIU and Checkpoint/Restore (Lesson 05 Reference)</h3>
-                <ul>
-                    <li><a href="https://criu.org" target="_blank">CRIU (Checkpoint/Restore In Userspace)</a> — 
-                    The technology behind Modal's memory snapshots (Functions). Checkpoints process tree, memory 
-                    mappings, file descriptors, registers.</li>
-                    <li><a href="https://criu.org/Docker" target="_blank">CRIU + Docker</a> — 
-                    How to checkpoint/restore Docker containers (similar to Modal's Function snapshot workflow).</li>
-                </ul>
-            </div>
 
             <div class="info-box">
                 <h3>Next Lesson</h3>
