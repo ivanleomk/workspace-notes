@@ -1171,17 +1171,21 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
             </p>
             <ul>
                 <li><strong>Modal:</strong> 1,000 sandboxes × 300 sec × ($0.00003942/core/sec + 2 GiB × $0.00000667/GiB/sec) 
-                = 1,000 × 300 × $0.00005276 = $15.83. No idle charges.</li>
+                = 1,000 × 300 × $0.00005276 = $15.83 (pricing from 
+                <a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>: $0.00003942/core/sec CPU, 
+                $0.00000667/GiB/sec memory). Modal's serverless pricing can't be directly compared to traditional 
+                on-demand or spot instance pricing. No idle charges.</li>
                 <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: provision 100 
                 c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes 
                 = 100 × $0.1512/hr × (5/60 hr) = $12.60. But you pay for full hour on EC2 on-demand = $15.12. 
                 Spot instances: estimated ~$5-$8 (varies by region/time).</li>
                 <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same as E2B 
                 (provision EC2 instances).</li>
-                <li><strong>Self-hosted (spot instances):</strong> Estimated ~$3-4 for 100 c7g.xlarge spot instances 
-                (4 vCPU) × typical spot price × (5/60 hr). Cheapest option, but requires infra management and spot 
-                interrupt handling. Spot prices vary by region/time; check 
-                <a href="https://aws.amazon.com/ec2/spot/pricing/" target="_blank">AWS Spot Pricing</a> for current rates.</li>
+                <li><strong>Self-hosted (spot instances):</strong> Spot prices vary significantly by region, 
+                availability zone, and time. Check <a href="https://aws.amazon.com/ec2/spot/pricing/" target="_blank">AWS 
+                Spot Pricing</a> for current rates and plug in a current price for the instance type you choose 
+                (e.g., 100 c7g.xlarge spot instances for 5 minutes = 100 × [your spot price/hr] × (5/60 hr)). 
+                Cheapest option, but requires infra management and spot interrupt handling.</li>
             </ul>
             <p>
                 <strong>Takeaway:</strong> Modal is cost-competitive for spiky workloads (no idle charges). For 
@@ -1282,8 +1286,7 @@ sb_vm.terminate()
 print("VM sandbox terminated")</code></pre>
             <p>
                 <strong>Expected output:</strong> Timings will vary based on image cache state, network latency, and Modal 
-                cluster load. Typical ranges: gVisor sandboxes start in 500-2000ms, VM sandboxes in 1000-3000ms. Record 
-                your own timings to compare gVisor vs VM startup latency.
+                cluster load. Record your own timings to compare gVisor vs VM startup latency.
             </p>
             <pre><code>=== gVisor Sandbox (default) ===
 Create gVisor sandbox: [your timing]
