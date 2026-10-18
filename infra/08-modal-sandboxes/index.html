@@ -71,7 +71,7 @@
                     <strong>All pricing claims cite Modal's pricing page as of October 2026.</strong> Prices and limits 
                     are vendor-reported and subject to change. Starter plan: $0/month + $30 included compute/month, 100 containers, 
                     10 GPU concurrency; Team plan: $250/month + $100 included compute/month, 5,000 containers, 50 GPU concurrency 
-                    (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 15, 2026).
+                    (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 18, 2026).
                 </p>
                 <p>
                     <strong>Vendor performance claims</strong> (e.g., memory snapshot 3-10x speedup per 
@@ -562,9 +562,7 @@ for i in range(100):
                 <strong>Vendor performance claim:</strong> From 
                 <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Modal Memory Snapshots docs</a>: 
                 "In our experience, practical initialization-heavy Functions often start up 3-10x faster from Memory 
-                Snapshots." This is a vendor-reported range. Modal's 
-                <a href="https://modal.com/blog/mem-snapshots" target="_blank">blog post</a> reports 2.5x speedup in 
-                practical benchmarks (Stable Diffusion, torch import). Not independently verified.
+                Snapshots." This is a vendor-reported range, not independently verified.
             </p>
             <p>
                 <strong>Example:</strong>
@@ -771,7 +769,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>GPU Pricing and Limits</h3>
             <p>
-                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (accessed October 15, 2026):
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (accessed October 18, 2026):
             </p>
             <table>
                 <thead>
@@ -807,7 +805,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 <strong>Concurrency limits:</strong> Starter plan: 10 GPU sandboxes concurrently (with $0/month plan fee, 
                 $30 included compute). Team plan: 50 GPU sandboxes (with $250/month plan fee, $100 included compute). 
                 Enterprise: custom limits and pricing 
-                (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 15, 2026).
+                (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 18, 2026).
             </p>
         </section>
 
@@ -833,7 +831,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>Sandbox Pricing</h3>
             <p>
-                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (October 15, 2026):
+                From <a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> (October 18, 2026):
             </p>
             <ul>
                 <li><strong>CPU:</strong> $0.00003942 per physical core per second (0.125 core minimum). 
@@ -849,7 +847,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
             </p>
             <p>
                 <strong>Compare to traditional cloud:</strong> AWS c7g.xlarge (4 vCPU, 8 GiB) costs $0.1512/hour 
-                on-demand in US East (N. Virginia) as of October 15, 2026 
+                on-demand in US East (N. Virginia) as of October 18, 2026 
                 (<a href="https://aws.amazon.com/ec2/pricing/on-demand/" target="_blank">AWS EC2 Pricing</a>) = 
                 $0.000042/sec. Modal's 2 vCPU + 8 GiB = 1 core × $0.00003942 + 8 GiB × $0.00000667 = $0.00009278/sec 
                 (~2.2x AWS on-demand per-second). For spiky workloads (e.g., 10% utilization), Modal's pay-per-second 
@@ -859,7 +857,7 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>Concurrency and Scale</h3>
             <p>
-                <strong>Plan limits (October 15, 2026):</strong>
+                <strong>Plan limits (October 18, 2026):</strong>
             </p>
             <ul>
                 <li><strong>Starter:</strong> $0/month plan fee, $30 included compute/month, 100 CPU containers, 10 GPU concurrency.</li>
@@ -1524,7 +1522,7 @@ test-5: timeout</code></pre>
                     the second based on whichever is higher: your resource request or your actual usage."</li>
                     <li><a href="https://modal.com/pricing" target="_blank">Modal Pricing</a> — 
                     Per-second prices, concurrency limits, plan comparison (Starter, Team, Enterprise). Accessed 
-                    October 15, 2026.</li>
+                    October 18, 2026.</li>
                 </ul>
             </div>
 
@@ -1533,9 +1531,6 @@ test-5: timeout</code></pre>
                 <ul>
                     <li><a href="https://github.com/modal-labs/modal-client" target="_blank">modal-labs/modal-client</a> — 
                     Multi-language SDK (Python, JavaScript/TypeScript, Go) plus protobuf API definitions. Apache-2.0 license.</li>
-                    <li><a href="https://modal.com/blog/mem-snapshots" target="_blank">Memory Snapshots Blog Post</a> — 
-                    CRIU integration, snapshot lifecycle, compatibility concerns (CPU featureset, NVIDIA driver version). 
-                    Vendor performance claim: "3-10x faster startup from Memory Snapshots."</li>
                 </ul>
             </div>
 
