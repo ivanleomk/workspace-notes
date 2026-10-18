@@ -441,10 +441,11 @@ sb = modal.Sandbox.create(image=image, app=app_lookup)
 # Image pulled from cache, no rebuild</code></pre>
             <p>
                 <strong>Why this matters for SWE-bench:</strong> SWE-bench has 2,294 instances (SWE-bench full), each 
-                needing its own Python environment. If each instance rebuilt from scratch, total time would be days. 
-                Instead, SWE-bench builds a small set of <strong>base images per repo</strong> (e.g., 
-                <code>django-base</code>, <code>flask-base</code>), caches them, then forks per-instance sandboxes 
-                from those bases. We'll see the actual implementation in the "Real System" section.
+                needing its own environment. If each instance rebuilt from scratch, total time would be days. 
+                Instead, SWE-bench's <code>get_instance_image</code> builds a unique Modal Image per instance from 
+                test specs, and Modal's automatic image layer caching minimizes rebuild overhead for shared base layers 
+                (Ubuntu 22.04, Python 3.11, Miniconda, common apt packages). We'll see the actual implementation in 
+                the "Real System" section.
             </p>
 
             <h3>Image Builder Version Updates</h3>
@@ -930,7 +931,7 @@ import modal
 
 app = modal.App("swebench-eval")
 
-# Build base image (one per repo)
+# Build base image (illustrative example)
 base_image = (
     modal.Image.from_registry("ubuntu:22.04")
     .apt_install("git", "python3.11", "python3-pip")
@@ -1452,8 +1453,8 @@ test-5: timeout</code></pre>
                     To build a production eval harness on Modal:
                 </p>
                 <ul>
-                    <li><strong>Pre-build repo images:</strong> One image per repo with dependencies installed 
-                    (like SWE-bench). Cache them with <code>modal deploy</code>.</li>
+                    <li><strong>Pre-build images:</strong> Build images with dependencies installed and cache them 
+                    with <code>modal deploy</code>. Modal automatically caches layers.</li>
                     <li><strong>Durable queue:</strong> Use Modal Dicts or external queue (SQS, Redis) to store 
                     work items and results.</li>
                     <li><strong>Log shipping:</strong> Stream logs to S3/GCS or a logging service (DataDog, 
@@ -1540,8 +1541,8 @@ test-5: timeout</code></pre>
                     <li><a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench/SWE-bench</a> — 
                     Official SWE-bench repository (2,294 instances across 12 Python repos).</li>
                     <li>Modal backend implementation in <code>swebench/harness/modal_eval/run_evaluation_modal.py</code>: 
-                    uses Modal Functions with image caching, <code>starmap</code> parallelization, and log shipping to run 
-                    instances at scale.</li>
+                    wraps <code>modal.Sandbox.create</code> inside a Modal Function (<code>@app.function</code>) to leverage 
+                    <code>starmap</code> parallelization and Modal's infrastructure for running instances at scale.</li>
                     <li>Consult the SWE-bench repository's evaluation documentation for usage instructions.</li>
                 </ul>
             </div>
