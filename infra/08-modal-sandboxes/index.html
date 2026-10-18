@@ -69,13 +69,14 @@
                 <h3>⚠️ Pricing and Date Context</h3>
                 <p>
                     <strong>All pricing claims cite Modal's pricing page as of October 2026.</strong> Prices and limits 
-                    are vendor-reported and subject to change. Starter plan: 100 containers, 10 GPU concurrency; Team plan: 
-                    5,000 containers, 50 GPU concurrency 
+                    are vendor-reported and subject to change. Starter plan: $0/month + $30 included compute/month, 100 containers, 
+                    10 GPU concurrency; Team plan: $250/month + $100 included compute/month, 5,000 containers, 50 GPU concurrency 
                     (<a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>, accessed October 18, 2026).
                 </p>
                 <p>
-                    <strong>Vendor performance claims</strong> (e.g., memory snapshot 3-10x speedup, sub-second cold starts) 
-                    are labeled as such. Independent benchmarks are cited where available.
+                    <strong>Vendor performance claims</strong> (e.g., memory snapshot 3-10x speedup per 
+                    <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Memory Snapshots docs</a>, 
+                    sub-second cold starts) are labeled as such. Independent benchmarks are cited where available.
                 </p>
             </div>
         </section>
@@ -560,9 +561,11 @@ for i in range(100):
             </ul>
             <p>
                 <strong>Vendor performance claim:</strong> From 
-                <a href="https://modal.com/blog/mem-snapshots" target="_blank">Modal blog (Memory Snapshots announcement)</a>: 
+                <a href="https://modal.com/docs/guide/memory-snapshots" target="_blank">Modal Memory Snapshots docs</a>: 
                 "In our experience, practical initialization-heavy Functions often start up 3-10x faster from Memory 
-                Snapshots." This is a vendor-reported range, not independently verified.
+                Snapshots." This is a vendor-reported range. Modal's 
+                <a href="https://modal.com/blog/mem-snapshots" target="_blank">blog post</a> reports 2.5x speedup in 
+                practical benchmarks (Stable Diffusion, torch import). Not independently verified.
             </p>
             <p>
                 <strong>Example:</strong>
@@ -802,8 +805,9 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 </tbody>
             </table>
             <p>
-                <strong>Concurrency limits:</strong> Starter plan: 10 GPU sandboxes concurrently. Team plan: 50 GPU 
-                sandboxes. Enterprise: custom 
+                <strong>Concurrency limits:</strong> Starter plan: 10 GPU sandboxes concurrently (with $0/month plan fee, 
+                $30 included compute). Team plan: 50 GPU sandboxes (with $250/month plan fee, $100 included compute). 
+                Enterprise: custom limits and pricing 
                 (<a href="https://modal.com/pricing" target="_blank">Pricing page</a>, October 18, 2026).
             </p>
         </section>
@@ -856,15 +860,10 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
                 <strong>Plan limits (October 18, 2026):</strong>
             </p>
             <ul>
-                <li><strong>Starter:</strong> 100 CPU containers, 10 GPU concurrency, $30 included compute/month.</li>
-                <li><strong>Team:</strong> 5,000 CPU containers, 50 GPU concurrency, $100 included compute/month.</li>
-                <li><strong>Enterprise:</strong> Custom limits.</li>
+                <li><strong>Starter:</strong> $0/month plan fee, $30 included compute/month, 100 CPU containers, 10 GPU concurrency.</li>
+                <li><strong>Team:</strong> $250/month plan fee, $100 included compute/month, 5,000 CPU containers, 50 GPU concurrency.</li>
+                <li><strong>Enterprise:</strong> Custom limits and pricing.</li>
             </ul>
-            <p>
-                <strong>Maximum demonstrated scale:</strong> Modal has publicly demonstrated 1 million concurrent 
-                sandboxes in internal benchmarks (vendor claim, no published reproduction steps). Customer case studies 
-                report up to 50,000 concurrent sandboxes (vendor claim from Modal case studies page, October 2026).
-            </p>
             <p>
                 <strong>For SWE-bench:</strong> SWE-bench Lite (300 instances) fits in Starter plan. SWE-bench full 
                 (2,294 instances) needs Team plan. If you run 1,000 instances in parallel (each instance takes ~5 
@@ -904,8 +903,9 @@ print(f"Jupyter: {sb.tunnels()[8888].url}")  # Print public URL</code></pre>
 
             <h3>SWE-bench Modal Integration</h3>
             <p>
-                <strong>File:</strong> <code>swebench/harness/modal_eval/run_evaluation_modal.py</code> 
-                (<a href="https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/modal_eval/run_evaluation_modal.py" target="_blank">SWE-bench GitHub</a>)
+                <strong>Implementation:</strong> SWE-bench uses Modal Functions (not Sandboxes) for evaluation. The harness 
+                is located at <code>swebench/harness/modal_eval/run_evaluation_modal.py</code> in the 
+                <a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench repository</a>.
             </p>
             <p>
                 <strong>How it works:</strong>
@@ -1170,16 +1170,18 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                 month.
             </p>
             <ul>
-                <li><strong>Modal:</strong> 1,000 sandboxes × 300 sec × ($0.00003942/core/sec + 2 GB × $0.00000667/GB/sec) 
+                <li><strong>Modal:</strong> 1,000 sandboxes × 300 sec × ($0.00003942/core/sec + 2 GiB × $0.00000667/GiB/sec) 
                 = 1,000 × 300 × $0.00005276 = $15.83. No idle charges.</li>
                 <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: provision 100 
                 c7g.xlarge (4 vCPU each, 400 total vCPU = 200 cores, supports ~100 concurrent VMs) for 5 minutes 
                 = 100 × $0.1512/hr × (5/60 hr) = $12.60. But you pay for full hour on EC2 on-demand = $15.12. 
-                Spot instances: ~$5-$8.</li>
+                Spot instances: estimated ~$5-$8 (varies by region/time).</li>
                 <li><strong>Daytona Cloud:</strong> Not published (contact sales). Self-hosted Daytona: same as E2B 
                 (provision EC2 instances).</li>
-                <li><strong>Self-hosted (spot instances):</strong> 100 c7g.xlarge spot instances (4 vCPU) × $0.04/hr 
-                (spot price) × (5/60 hr) = $3.33. Cheapest, but requires infra management and spot interrupt handling.</li>
+                <li><strong>Self-hosted (spot instances):</strong> Estimated ~$3-4 for 100 c7g.xlarge spot instances 
+                (4 vCPU) × typical spot price × (5/60 hr). Cheapest option, but requires infra management and spot 
+                interrupt handling. Spot prices vary by region/time; check 
+                <a href="https://aws.amazon.com/ec2/spot/pricing/" target="_blank">AWS Spot Pricing</a> for current rates.</li>
             </ul>
             <p>
                 <strong>Takeaway:</strong> Modal is cost-competitive for spiky workloads (no idle charges). For 
@@ -1279,17 +1281,19 @@ print(f"/proc/version: {p.stdout.read()}")
 sb_vm.terminate()
 print("VM sandbox terminated")</code></pre>
             <p>
-                <strong>Expected output (vendor-reported startup times):</strong>
+                <strong>Expected output:</strong> Timings will vary based on image cache state, network latency, and Modal 
+                cluster load. Typical ranges: gVisor sandboxes start in 500-2000ms, VM sandboxes in 1000-3000ms. Record 
+                your own timings to compare gVisor vs VM startup latency.
             </p>
             <pre><code>=== gVisor Sandbox (default) ===
-Create gVisor sandbox: 850ms
+Create gVisor sandbox: [your timing]
 gVisor sandbox ID: sb-abc123...
 uname: Linux modal 6.1.0-gvisor...
 /proc/version: Linux version 6.1.0-gvisor...
 gVisor sandbox terminated
 
 === VM Sandbox ===
-Create VM sandbox: 2100ms
+Create VM sandbox: [your timing]
 VM sandbox ID: sb-def456...
 uname: Linux modal 6.8.0...
 /proc/version: Linux version 6.8.0...</code></pre>
@@ -1561,11 +1565,10 @@ test-5: timeout</code></pre>
                 <ul>
                     <li><a href="https://github.com/SWE-bench/SWE-bench" target="_blank">SWE-bench/SWE-bench</a> — 
                     Official SWE-bench repository (2,294 instances across 12 Python repos).</li>
-                    <li><a href="https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/modal_eval/run_evaluation_modal.py" target="_blank">run_evaluation_modal.py</a> — 
-                    Modal backend implementation: image building, <code>run_instance_modal.starmap</code> parallelization, 
-                    log shipping.</li>
-                    <li><a href="https://github.com/SWE-bench/SWE-bench/blob/main/docs/guides/evaluation.md" target="_blank">SWE-bench Evaluation Guide</a> — 
-                    How to run SWE-bench on Modal: <code>python -m swebench.harness.run_evaluation --modal true</code>.</li>
+                    <li>Modal backend implementation in <code>swebench/harness/modal_eval/run_evaluation_modal.py</code>: 
+                    uses Modal Functions with image caching, <code>starmap</code> parallelization, and log shipping to run 
+                    instances at scale.</li>
+                    <li>Consult the SWE-bench repository's evaluation documentation for usage instructions.</li>
                 </ul>
             </div>
 
