@@ -1146,8 +1146,8 @@ def run_instance_modal(instance_id, prediction, test_spec, run_id, timeout):
                 = 1,000 × 300 × $0.00005276 = $15.83 (pricing from 
                 <a href="https://modal.com/pricing" target="_blank">modal.com/pricing</a>). No idle charges. Modal's 
                 per-second rate is ~2.2x AWS c7g.xlarge per-second on-demand, but Modal charges only for active time 
-                (5 minutes), while maintaining an always-on instance would incur 24/7 charges (2.2x × 5 minutes / 24 hours 
-                ≈ 0.8% of the always-on monthly cost).</li>
+                (5 minutes), while maintaining an always-on instance would incur 24/7 charges. For a 30-day month: 
+                2.2x × (5 minutes / 43,200 minutes per month) = 2.2 × 0.0001157 ≈ 0.025% of monthly always-on cost.</li>
                 <li><strong>E2B Cloud:</strong> Not published (contact sales). Self-hosted E2B: To run 1,000 one-core 
                 instances concurrently, provision 250 c7g.xlarge instances (4 cores each = 1,000 cores). EC2 Linux 
                 on-demand bills per-second with a 60-second minimum 
