@@ -25,6 +25,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 10 | B | ✅ Complete | Tülu 3: Open Post-Training | Lambert et al. (Allen AI, 2024) |
 | 11 | A | ✅ Complete | IFEval: Verifiable Instruction-Following | Zhou et al. (Google Research, 2023) |
 | 12 | B | ✅ Complete | DeepSeek-R1: Reasoning via RL | DeepSeek-AI (2025) |
+| 13 | A | ✅ Complete | TruthfulQA: Imitative Falsehoods | Lin, Hilton, Evans (ACL 2022) |
+| 14 | B | 📝 Next | ORPO/SimPO: Alignment without Reward Models | Hong et al. / Meng et al. (2024) |
 
 ## Learning Objectives by Track
 
@@ -67,9 +69,13 @@ Each lesson includes:
 - ✅ Lesson 10 (Track B): Tülu 3 - Open Post-Training (Lambert et al., Allen AI, 2024)
 - ✅ Lesson 11 (Track A): IFEval - Verifiable Instruction-Following Evaluation (Zhou et al., Google Research, 2023)
 - ✅ Lesson 12 (Track B): DeepSeek-R1 - Reasoning via Reinforcement Learning (DeepSeek-AI, 2025)
+- ✅ Lesson 13 (Track A): TruthfulQA - Imitative Falsehoods (Lin, Hilton, Evans, ACL 2022)
 
 **Next Up:**
-Lesson 13 (Track A): A foundational classic not yet covered could explore benchmark contamination and evaluation integrity (e.g., "Documenting Large Webtext Corpora" or contamination detection methods), cross-lingual evaluation frameworks, or adversarial robustness benchmarks.
+Lesson 14 (Track B): Modern preference optimization without reward models. Strong candidates:
+- **ORPO (Odds Ratio Preference Optimization):** Hong et al. (2024) - Combines SFT and preference learning in one stage, eliminating the reward model and separate RL phase
+- **SimPO (Simple Preference Optimization):** Meng et al. (2024) - Further simplifies DPO by using length-normalized rewards and removing the reference model
+- **KTO (Kahneman-Tversky Optimization):** Ethayarajh et al. (2024) - Uses only binary "good/bad" labels instead of pairwise preferences
 
 ## How to Request a Lesson
 
