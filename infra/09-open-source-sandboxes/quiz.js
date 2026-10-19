@@ -15,12 +15,12 @@ const quizQuestions = [
         question: "How does agent-sandbox's SandboxWarmPool reduce allocation latency from 10-30 seconds to sub-2 seconds?",
         options: [
             "It uses Firecracker snapshot/restore to resume pre-warmed VMs",
-            "It pre-warms N pods (labeled agents.x-k8s.io/pool=<name>) before any SandboxClaim is created, so claiming a sandbox relabels an already-running pod instead of waiting for image pull + container start",
+            "It pre-warms N pods (labeled agents.x-k8s.io/warm-pool-sandbox) before any SandboxClaim is created, so claiming a sandbox adopts an already-running pod instead of waiting for image pull + container start",
             "It uses memory snapshots (like Modal Functions) to skip initialization",
             "It uses gVisor's systrap platform which has lower syscall overhead than runc"
         ],
         correctAnswer: 1,
-        explanation: "agent-sandbox's SandboxWarmPool CRD pre-warms N pods (spec.replicas) before any user creates a SandboxClaim. These pods are labeled agents.x-k8s.io/pool=<warmpool-name>, are already running (image pulled, container started), and sit idle waiting to be claimed. When a SandboxClaim references the warm pool, the controller claims one pod from the pool (relabels it to agents.x-k8s.io/sandbox-name-hash), and the WarmPool controller creates a replacement pod to maintain replica count. This eliminates image pull and container start latency (10-30 seconds) and achieves sub-2-second allocation (vendor claim from quickstart README). agent-sandbox does not use Firecracker snapshot/restore (it delegates to Kubernetes RuntimeClasses like runc, gVisor, or Kata). It does not use memory snapshots (that's Modal Functions, lesson 08). The latency improvement comes from pre-warming pods, not from the isolation mechanism."
+        explanation: "agent-sandbox's SandboxWarmPool CRD pre-warms N pods (spec.replicas) before any user creates a SandboxClaim. These pods are labeled agents.x-k8s.io/warm-pool-sandbox, are already running (image pulled, container started), and sit idle waiting to be claimed. When a SandboxClaim references the warm pool, the controller claims one pod from the pool, and the WarmPool manager creates a replacement pod to maintain replica count. This eliminates image pull and container start latency (10-30 seconds) and achieves sub-2-second allocation (vendor claim from quickstart README). agent-sandbox does not use Firecracker snapshot/restore (it delegates to Kubernetes RuntimeClasses like runc, gVisor, or Kata). It does not use memory snapshots (that's Modal Functions, lesson 08). The latency improvement comes from pre-warming pods, not from the isolation mechanism."
     },
     {
         question: "What licensing consideration applies to beta9 (Beam) that does NOT apply to microsandbox or agent-sandbox?",
