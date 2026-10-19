@@ -221,7 +221,7 @@ if (controlQuestionsCtx) {
                 },
                 {
                     label: 'GPT-3 (TruthfulQA)',
-                    data: [40, 42, 36, 30],
+                    data: [37.0, 31.9, 23.6, 20.4],
                     borderColor: colors.gpt3,
                     backgroundColor: colors.gpt3 + '33',
                     borderDash: [5, 5],
