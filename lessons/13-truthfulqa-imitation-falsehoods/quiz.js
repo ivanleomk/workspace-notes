@@ -63,7 +63,7 @@ const quizQuestions = [
             "It counts as truthful only if the question is ambiguous or subjective"
         ],
         correct: 1,
-        explanation: "The paper defines an answer as truthful if it *avoids asserting a false statement* (Section 2.1). 'I have no comment' or 'I don't know' don't assert anything false, so they're truthful—even if the model could answer correctly. This means a model could score 100% truthful by refusing every question, but it would score 0% informative. This creates a precision-recall tradeoff."
+        explanation: "The paper defines an answer as truthful if it *avoids asserting a false statement* (Section 2.1). 'I have no comment' or 'I don't know' don't assert anything false, so they're truthful—even if the model could answer correctly. This means a model could score 100% truthful by refusing every question, but it would score near zero on informativeness (Table 9: 0.1 score on answerable questions). This creates a precision-recall tradeoff."
     },
     {
         question: "What is the % false AND informative rate for the best model vs human?",
@@ -96,7 +96,7 @@ const quizQuestions = [
             "They verified that all false answers appeared verbatim in the training data"
         ],
         correct: 1,
-        explanation: "Section 4.3 and Figure 2 (bottom panel) show that on 'matched control questions'—created by editing 1-3 words to turn misconception questions into straightforward trivia—larger models *do better*. GPT-3-175B achieves high accuracy on controls. This proves the inverse scaling is specific to question *content* (eliciting misconceptions), not syntax or style. Additional evidence: GPT-Neo/J shows similar inverse scaling despite not being used in adversarial filtering, and paraphrased questions still show inverse scaling."
+        explanation: "Section 4.3 and Figure 2 (bottom panel) show that on 'matched control questions'—created by editing 1-3 words to turn misconception questions into straightforward trivia—larger models *do better*. GPT-3-175B achieves high accuracy on controls. This suggests the inverse scaling is specific to question *content* (eliciting misconceptions), not syntax or style. Additional evidence: GPT-Neo/J shows similar inverse scaling despite not being used in adversarial filtering, and paraphrased questions still show inverse scaling."
     },
     {
         question: "Which post-training technique does TruthfulQA most directly motivate?",
@@ -107,7 +107,7 @@ const quizQuestions = [
             "Distillation from larger models to smaller models to reduce falsehoods"
         ],
         correct: 1,
-        explanation: "TruthfulQA motivates RLHF and other post-training methods that optimize for truthfulness rather than pure imitation of web text (paper abstract: 'scaling up models alone is less promising for improving truthfulness than fine-tuning using training objectives other than imitation'). InstructGPT (Appendix B.3) showed improved TruthfulQA performance via RLHF with human feedback on helpfulness, harmlessness, and truthfulness. DPO and Constitutional AI offer similar pathways to reward accuracy over popularity."
+        explanation: "TruthfulQA motivates RLHF and other post-training methods that optimize for truthfulness rather than pure imitation of web text (paper abstract: 'scaling up models alone is less promising for improving truthfulness than fine-tuning using training objectives other than imitation'). InstructGPT (Appendix B.3, Figure 10) showed improved TruthfulQA performance via RLHF with human preferences to follow instructions. DPO and Constitutional AI offer similar pathways to reward accuracy over popularity."
     }
 ];
 
