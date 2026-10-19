@@ -708,8 +708,8 @@ kubectl --context k3d-beta9 get services -n beta9</code></pre>
                 <a href="https://fly.io/docs/reference/architecture" target="_blank">Fly.io Architecture</a>:
             </p>
             <ul>
-                <li><strong>Compute:</strong> Firecracker microVMs on dedicated servers (8-32 physical cores, 
-                32-256GB RAM per server). Each Firecracker process encapsulates one microVM (lesson 04 design).</li>
+                <li><strong>Compute:</strong> Firecracker microVMs on dedicated servers. Each Firecracker process 
+                encapsulates one microVM (lesson 04 design).</li>
                 <li><strong>BGP Anycast:</strong> Fly broadcasts IP ranges in all datacenters. Incoming connections 
                 are matched to a customer application and proxied to the closest available microVM.</li>
                 <li><strong>fly-proxy:</strong> Rust-based proxy on every server. Accepts client connections, applies 
@@ -767,7 +767,7 @@ graph TB
                 running arbitrary or agent-generated code: a filesystem that survives on its own, checkpoints you 
                 can restore in place, and an opt-in egress allowlist. The snapshot and restore semantics described 
                 earlier are the mechanism underneath."
-            </p>
+            </blockquote>
             <p>
                 <strong>Vendor claim:</strong> "sub-second" start/stop 
                 (<a href="https://fly.io/learn/firecracker-vm/" target="_blank">source</a>). Not independently 
@@ -799,8 +799,8 @@ graph TB
 
             <h3>Why Fly Machines Are Relevant (Despite Not Being OSS)</h3>
             <ul>
-                <li><strong>Firecracker best practices:</strong> Fly has run Firecracker in production at scale 
-                since ~2018. Their architecture (BGP Anycast, WireGuard backhaul, individual VM lifecycle) is a 
+                <li><strong>Firecracker best practices:</strong> Fly has run Firecracker in production at scale. 
+                Their architecture (BGP Anycast, WireGuard backhaul, individual VM lifecycle) is a 
                 proven design you can study for your own orchestrator.</li>
                 <li><strong>Sub-second lifecycle:</strong> If your eval orchestrator needs fast sandbox allocation 
                 (like Fly's sub-second start), you can apply Firecracker's snapshot/resume (lesson 05) and 
@@ -808,7 +808,7 @@ graph TB
                 <li><strong>Open init code:</strong> The 
                 <a href="https://github.com/superfly/init-snapshot" target="_blank">init-snapshot</a> repo is a 
                 rare public example of production Firecracker guest init in Rust. Compare it to E2B's Go-based 
-                orchestrator (lesson 06) and Daytona's Rust daemon (lesson 07) for alternative designs.</li>
+                orchestrator (lesson 06) and Daytona's Go runner (lesson 07) for alternative designs.</li>
             </ul>
             <p>
                 <strong>Trade-offs:</strong> You cannot self-host Fly.io. It's a hosted platform. If you need 
@@ -865,7 +865,7 @@ graph TB
                         <td>✅ Yes</td>
                         <td>❌ No (not documented)</td>
                         <td>❌ No</td>
-                        <td>⚠️ Sprites (beta)</td>
+                        <td>⚠️ Sprites</td>
                         <td>⚠️ VM only (not container/GPU)</td>
                         <td>✅ Yes (up to 20 children)</td>
                         <td>❌ No</td>
@@ -949,7 +949,7 @@ graph TB
                     <ul>
                         <li>Yes, and you want self-hosted → <strong>E2B</strong> (lesson 06) or 
                         <strong>microsandbox</strong> (this lesson).</li>
-                        <li>Yes, and you're okay with hosted → <strong>Fly Sprites</strong> (beta, this lesson) or 
+                        <li>Yes, and you're okay with hosted → <strong>Fly Sprites</strong> (this lesson) or 
                         <strong>Modal Functions</strong> (lesson 08, memory snapshots).</li>
                         <li>No → Continue.</li>
                     </ul>
@@ -1380,7 +1380,7 @@ kind delete cluster --name agent-sandbox-demo</code></pre>
                 <h3>Next Steps</h3>
                 <p>
                     In <strong>Lesson 10</strong>, you'll learn Ray Core: tasks, actors, object store, and GCS. 
-                    Ray is the orchestration layer used by verl, OpenRLHF, and SkyRL (lessons 13) for distributed 
+                    Ray is the orchestration layer used by verl, OpenRLHF, and SkyRL for distributed 
                     RL rollouts. You'll understand how Ray's async actor pools fit eval harnesses, when the object 
                     store helps vs when it bottlenecks, and how to build a Ray-based sandbox pool manager on top 
                     of E2B, agent-sandbox, or Firecracker.
