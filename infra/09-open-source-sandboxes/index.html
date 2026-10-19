@@ -338,13 +338,13 @@ graph TB
     subgraph k8s["Kubernetes API"]
         TEMPLATE[(SandboxTemplate<br/>runtime, image, resources)]
         WARMPOOL[(SandboxWarmPool<br/>replicas=N, templateRef)]
-        POD1[Pre-warmed Pod 1<br/>label: pool=warmpool-name]
-        POD2[Pre-warmed Pod 2<br/>label: pool=warmpool-name]
+        POD1[Pre-warmed Pod 1<br/>label: warm-pool-sandbox]
+        POD2[Pre-warmed Pod 2<br/>label: warm-pool-sandbox]
     end
     
     subgraph sandbox["Claimed Sandbox"]
-        SB[Sandbox<br/>label: sandbox-name-hash]
-        SBPOD[Pod<br/>annotation: pod-name]
+        SB[Sandbox<br/>bound to Pod]
+        SBPOD[Pod<br/>from warm pool]
     end
     
     CLAIM -->|1. Create claim| CTRL
@@ -352,7 +352,7 @@ graph TB
     CTRL -->|3. Claim pod<br/>from warm pool| POD1
     POOL -->|4. Maintain<br/>replicas| WARMPOOL
     WARMPOOL -->|5. Pre-warm pods| POD2
-    POD1 -.->|6. Relabel<br/>pool → sandbox-name-hash| SB
+    POD1 -.->|6. Bind via<br/>.status.sandbox.name| SB
     SB --> SBPOD
     
     style CLAIM fill:#3b82f6,stroke:#f1f5f9
@@ -480,8 +480,9 @@ spec:
             </ul>
             <p>
                 <strong>Trade-offs:</strong> Requires Kubernetes (no standalone deployment). No fork built into the 
-                CRDs (not documented as a feature). Pause/resume (hibernation with automatic resume on network 
-                activity) is supported as part of the Sandbox lifecycle. No GPU-specific scheduling documented 
+                CRDs (not documented as a feature). The core README lists "pausing and resuming" as implemented; 
+                deep hibernation (saving state to persistent storage) and automatic resume on network activity are 
+                listed under Desired Sandbox Characteristics (aspirational). No GPU-specific scheduling documented 
                 (use Kubernetes device plugins for GPUs). For serverless autoscaling (0 to N pods), you'd layer 
                 Knative or KEDA on top of agent-sandbox, or use a platform like beta9 (next section).
             </p>
@@ -852,7 +853,7 @@ graph TB
                     <tr>
                         <td><strong>Pause / resume</strong></td>
                         <td>✅ Yes (snapshot/restore)</td>
-                        <td>✅ Yes (hibernation, automatic resume)</td>
+                        <td>⚠️ Pausing and resuming (per README); deep hibernation and automatic resume are aspirational</td>
                         <td>❌ No (not documented)</td>
                         <td>✅ Yes (Firecracker snapshot)</td>
                         <td>⚠️ VM only (not container/GPU)</td>
@@ -1099,8 +1100,8 @@ kubectl get pods -l agents.x-k8s.io/warm-pool-sandbox</code></pre>
                 <strong>Note:</strong> This step and the following Python code are <strong>untested</strong> and 
                 based on the 
                 <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/README.md" target="_blank">client README</a> 
-                and 
-                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/test_client.py" target="_blank">test_client.py</a>. 
+                and source code in 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/tree/main/clients/python/agentic-sandbox-client/k8s_agent_sandbox" target="_blank">k8s_agent_sandbox/</a>. 
                 Verify against current documentation and report any issues.
             </p>
             <pre><code class="language-bash"># Create a virtual environment
@@ -1112,7 +1113,8 @@ pip install k8s-agent-sandbox
 
 # Deploy the sandbox-router (required for SDK connectivity)
 # Follow https://github.com/kubernetes-sigs/agent-sandbox/tree/main/sandbox-router/deploy
-kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/agent-sandbox/main/sandbox-router/deploy/router.yaml</code></pre>
+cd agent-sandbox
+kubectl apply -k sandbox-router/deploy/</code></pre>
 
             <h3>Step 6: Measure Warm-Pool Allocation Latency (Python SDK, Untested)</h3>
             <p>
@@ -1126,101 +1128,91 @@ from k8s_agent_sandbox import SandboxClient
 from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
 
 # Connect to agent-sandbox via local tunnel (kubectl port-forward)
-client = SandboxClient(
+# SandboxLocalTunnelConnectionConfig has: port_forward_ready_timeout, server_port, router_namespace
+# No kubeconfig_path field - it uses the default ~/.kube/config
+with SandboxClient(
     connection_config=SandboxLocalTunnelConnectionConfig(
         router_namespace="agent-sandbox-system",  # Where sandbox-router is deployed
-        kubeconfig_path=None  # Uses default ~/.kube/config
+        port_forward_ready_timeout=30,
+        server_port=8888
     )
-)
+) as client:
+    print("=== Warm-Pool Allocation Test ===")
+    print("Creating sandbox from warm pool...")
 
-print("=== Warm-Pool Allocation Test ===")
-print("Creating sandbox from warm pool...")
+    start_time = time.time()
 
-start_time = time.time()
+    # create_sandbox claims a pod from the warm pool
+    # The SDK waits for the sandbox to be Ready before returning
+    # Returns a Sandbox object with .claim_name and .sandbox_id attributes
+    sandbox = client.create_sandbox(warmpool="python-warmpool", namespace="default")
 
-# create_sandbox claims a pod from the warm pool
-# The SDK waits for the sandbox to be Ready before returning
-sandbox = client.create_sandbox(warmpool="python-warmpool", namespace="default")
+    allocation_time = time.time() - start_time
 
-allocation_time = time.time() - start_time
+    print(f"Sandbox claim name: {sandbox.claim_name}")
+    print(f"Sandbox ID: {sandbox.sandbox_id}")
+    print(f"Allocation time: {allocation_time:.2f} seconds")
+    print(f"This includes: API call, warm pod claim, and SDK wait for Ready condition.")
+    print("\nRecord your timing here: ___________ seconds\n")
 
-print(f"Sandbox ready: {sandbox.name}")
-print(f"Allocation time: {allocation_time:.2f} seconds")
-print(f"This includes: API call, warm pod claim, and SDK wait for Ready condition.")
-print("\nRecord your timing here: ___________ seconds\n")
+    # Test the sandbox is working
+    result = sandbox.commands.run("python3 -c 'print(\"Hello from warm pool\")'")
+    print(f"Test output: {result.stdout.strip()}")
 
-# Test the sandbox is working
-result = sandbox.commands.run("python3 -c 'print(\"Hello from warm pool\")'")
-print(f"Test output: {result.stdout.strip()}")
-
-# Clean up
-sandbox.terminate()
-client.close()
+    # Clean up - sandbox.terminate() deletes the claim
+    sandbox.terminate()
 
 print("\n=== Test Complete ===")
 </code></pre>
             <pre><code class="language-bash">python3 test_warmpool_timing.py</code></pre>
             <p>
                 <strong>Record your timing:</strong> Write down the allocation time reported by the script. With a 
-                warm pool, the pod is already running (image pulled, container started), so allocation should be fast 
-                (sub-2 seconds per the quickstart vendor claim, but your results may vary based on local kind 
-                performance).
+                warm pool, the pod is already running (image pulled, container started), so allocation should be fast. 
+                Your results may vary based on local kind performance.
             </p>
 
-            <h3>Step 7: Measure Cold-Pod Allocation Latency (Python SDK, Untested)</h3>
+            <h3>Step 7: Measure Cold-Pod Allocation Latency (kubectl, Not SDK)</h3>
             <p>
-                Now measure allocation time <em>without</em> a warm pool. Create a second script 
-                <code>test_cold_timing.py</code>:
+                The Python SDK's <code>create_sandbox</code> method only supports <code>warmpool</code> parameter, 
+                not <code>template</code>. To measure cold-pod allocation latency, use <code>kubectl</code> to create 
+                a bare <code>Sandbox</code> CR and time it with <code>kubectl wait</code>:
             </p>
-            <pre><code class="language-python">#!/usr/bin/env python3
-"""Measure cold-pod allocation latency (no warm pool)."""
-import time
-from k8s_agent_sandbox import SandboxClient
-from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
+            <pre><code class="language-yaml"># Save as cold-sandbox.yaml
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: cold-test
+  namespace: default
+spec:
+  podTemplate:
+    spec:
+      containers:
+      - name: sandbox
+        image: python:3.11-slim
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"</code></pre>
+            <pre><code class="language-bash"># Measure cold-pod allocation latency
+# time reports when the command completes, not when kubectl returns
+# Use date to measure the full kubectl wait duration
+START=$(date +%s)
+kubectl apply -f cold-sandbox.yaml
+kubectl wait --for=condition=Ready sandbox/cold-test --timeout=90s
+END=$(date +%s)
+ELAPSED=$((END - START))
 
-client = SandboxClient(
-    connection_config=SandboxLocalTunnelConnectionConfig(
-        router_namespace="agent-sandbox-system",
-        kubeconfig_path=None
-    )
-)
+echo "Cold-pod allocation time: ${ELAPSED} seconds"
+echo "This includes: pod scheduling, image pull (if not cached), container start, and wait for Ready."
+echo "Record your timing here: ___________ seconds"
 
-print("=== Cold-Pod Allocation Test ===")
-print("Creating sandbox without warm pool...")
-print("This will schedule a new pod, pull the image (if not cached), and start the container.\n")
-
-start_time = time.time()
-
-# Create sandbox directly from template (no warm pool)
-# The SDK creates a Sandbox CRD and waits for pod to be Ready
-sandbox = client.create_sandbox(template="python-runtime-template", namespace="default")
-
-allocation_time = time.time() - start_time
-
-print(f"Sandbox ready: {sandbox.name}")
-print(f"Allocation time: {allocation_time:.2f} seconds")
-print(f"This includes: API call, pod scheduling, image pull (if not cached), container start, and SDK wait for Ready.")
-print("\nRecord your timing here: ___________ seconds\n")
-
-# Test the sandbox
-result = sandbox.commands.run("python3 -c 'print(\"Hello from cold pod\")'")
-print(f"Test output: {result.stdout.strip()}")
-
-# Clean up
-sandbox.terminate()
-client.close()
-
-print("\n=== Test Complete ===")
-print("\nCompare your two timings:")
-print("Warm-pool allocation: ___________ seconds")
-print("Cold-pod allocation: ___________ seconds")
-print("\nThe warm pool should be significantly faster (image already pulled, pod already running).")
-</code></pre>
-            <pre><code class="language-bash">python3 test_cold_timing.py</code></pre>
+# Verify the sandbox
+kubectl get sandbox cold-test</code></pre>
             <p>
-                <strong>Record your timing:</strong> Write down the allocation time. On kind with a warm Docker image 
-                cache, you might see 5-15 seconds. Without cache (first pull of <code>python:3.11-slim</code>), 
-                expect 15-30+ seconds depending on network speed.
+                <strong>Record your timing:</strong> Write down the cold-pod allocation time. On kind with a warm 
+                Docker image cache, you might see variable timings depending on node resource availability. Without 
+                cache (first pull of <code>python:3.11-slim</code>), expect longer times for image download.
             </p>
 
             <h3>Step 8: Clean Up</h3>
@@ -1235,13 +1227,16 @@ kind delete cluster --name agent-sandbox-demo</code></pre>
             <ul>
                 <li>How to deploy agent-sandbox on a local kind cluster with CRDs and controllers</li>
                 <li>How to define a SandboxTemplate (reusable blueprint) and create a SandboxWarmPool (pre-warmed pods)</li>
-                <li>How to use the <code>k8s-agent-sandbox</code> Python SDK to create sandboxes programmatically</li>
+                <li>How to use the <code>k8s-agent-sandbox</code> Python SDK to create sandboxes programmatically 
+                from a warm pool</li>
+                <li>That the SDK's <code>create_sandbox</code> method accepts <code>warmpool</code> parameter, not 
+                <code>template</code>; cold-pod timing requires <code>kubectl</code></li>
                 <li>How to measure warm-pool allocation (fast: pod already running) vs cold-pod allocation (slower: 
                 image pull + container start)</li>
                 <li>Why warm pools matter for eval orchestration: pre-warmed pods eliminate image pull and container 
                 start latency, enabling fast sandbox allocation for high-throughput agent pipelines</li>
-                <li>How the Python SDK (<code>SandboxClient</code>) abstracts CRD creation and waits for sandboxes 
-                to become Ready</li>
+                <li>How the Python SDK (<code>SandboxClient</code>) uses a context manager pattern and returns 
+                <code>Sandbox</code> objects with <code>.claim_name</code> and <code>.sandbox_id</code> attributes</li>
             </ul>
 
             <div class="info-box">
@@ -1287,9 +1282,11 @@ kind delete cluster --name agent-sandbox-demo</code></pre>
                     One process per sandbox, with an integrated agent relay over Unix domain sockets."</li>
                     <li><a href="https://docs.rs/msb_krun/latest/msb_krun/" target="_blank">docs.rs/msb_krun</a> — 
                     Rust API documentation for msb_krun (libkrun wrapper).</li>
-                    <li>Source code paths verified as of October 2026: <code>crates/microsandbox/</code>, 
-                    <code>crates/runtime/</code>, <code>crates/filesystem/</code>, <code>crates/cli/</code>, 
-                    <code>vendor/libkrunfw/</code>.</li>
+                    <li>Source code paths verified as of October 2026: <code>crates/cli/</code>, 
+                    <code>crates/runtime/</code>, <code>crates/filesystem/</code>, <code>crates/agentd/</code>, 
+                    <code>crates/image/</code>, <code>crates/network/</code>, <code>crates/protocol/</code>, 
+                    <code>sdk/node-ts/</code>, <code>sdk/python/</code>, <code>sdk/go/</code>, <code>sdk/rust/</code>, 
+                    <code>sdk/ruby/</code>, <code>vendor/libkrunfw/</code>.</li>
                 </ul>
             </div>
 
@@ -1309,7 +1306,7 @@ kind delete cluster --name agent-sandbox-demo</code></pre>
                     <code>k8s/crds/extensions.agents.x-k8s.io_sandboxtemplates.yaml</code>, 
                     <code>k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml</code>, 
                     <code>extensions/controllers/sandboxwarmpool_controller.go</code>, 
-                    <code>extensions/examples/</code>.</li>
+                    <code>examples/</code> (e.g., <code>examples/warmpool-quickstart/</code>).</li>
                 </ul>
             </div>
 
