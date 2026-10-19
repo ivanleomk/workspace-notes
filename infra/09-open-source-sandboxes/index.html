@@ -1044,7 +1044,9 @@ kubectl wait --for=condition=Available deployment/agent-sandbox-controller \
 
             <h3>Step 3: Create a SandboxTemplate</h3>
             <p>
-                Define a template for Python sandboxes with 1 CPU and 2 GiB memory:
+                Use the official Python runtime sandbox template from the agent-sandbox repository 
+                (<code>clients/python/agentic-sandbox-client/python-sandbox-template.yaml</code>). This template 
+                includes a runtime server on port 8888 that supports <code>sandbox.commands.run()</code> in Step 6:
             </p>
             <pre><code class="language-yaml"># Save as python-template.yaml
 apiVersion: extensions.agents.x-k8s.io/v1beta1
@@ -1057,16 +1059,21 @@ spec:
     spec:
       # runtimeClassName: gvisor  # Uncomment if gVisor is installed
       containers:
-      - name: sandbox
-        image: python:3.11-slim
-        command: ["sleep", "infinity"]
+      - name: python-runtime
+        image: us-central1-docker.pkg.dev/k8s-staging-images/agent-sandbox/python-runtime-sandbox:latest-main
+        ports:
+        - containerPort: 8888
+        readinessProbe:
+          httpGet:
+            path: "/"
+            port: 8888
+          initialDelaySeconds: 0
+          periodSeconds: 1
         resources:
           requests:
-            cpu: "1"
-            memory: "2Gi"
-          limits:
-            cpu: "1"
-            memory: "2Gi"</code></pre>
+            cpu: "250m"
+            memory: "512Mi"
+      restartPolicy: "OnFailure"</code></pre>
             <pre><code class="language-bash">kubectl apply -f python-template.yaml
 kubectl get sandboxtemplate</code></pre>
 
@@ -1112,8 +1119,7 @@ source .venv/bin/activate
 pip install k8s-agent-sandbox
 
 # Deploy the sandbox-router (required for SDK connectivity)
-# Follow https://github.com/kubernetes-sigs/agent-sandbox/tree/main/sandbox-router/deploy
-cd agent-sandbox
+# You are already in the agent-sandbox directory from Step 2
 kubectl apply -k sandbox-router/deploy/</code></pre>
 
             <h3>Step 6: Measure Warm-Pool Allocation Latency (Python SDK, Untested)</h3>
@@ -1175,7 +1181,8 @@ print("\n=== Test Complete ===")
             <p>
                 The Python SDK's <code>create_sandbox</code> method only supports <code>warmpool</code> parameter, 
                 not <code>template</code>. To measure cold-pod allocation latency, use <code>kubectl</code> to create 
-                a bare <code>Sandbox</code> CR and time it with <code>kubectl wait</code>:
+                a bare <code>Sandbox</code> CR and time it with <code>kubectl wait</code>. This measures time to 
+                Ready only (no command execution):
             </p>
             <pre><code class="language-yaml"># Save as cold-sandbox.yaml
 apiVersion: agents.x-k8s.io/v1beta1
