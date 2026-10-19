@@ -57,7 +57,7 @@ Explore Daytona's three isolation classes (container, VM, GPU). Learn job-based 
 **08. Modal Sandboxes: gVisor, Memory Snapshots, and Elasticity** ✅ *Complete*  
 Learn Modal's dual runtime (gVisor default, VM for Docker-in-sandbox). Use filesystem snapshots for setup sharing, memory snapshots for debugging, and named images to avoid rebuild waits. Run SWE-bench's Modal backend.
 
-**09. Other Open-Source Sandboxes** 📝 *Planned*  
+**09. Other Open-Source Sandboxes** ✅ *Complete*  
 Survey microsandbox (libkrun microVMs, embeddable), kubernetes-sigs/agent-sandbox (CRDs for warm pools + templates), Beam/beta9 (AGPL, self-hostable serverless), and Fly Machines (Firecracker with fast stop/start).
 
 ### Phase 4: Ray for Orchestration (Lessons 10–13)

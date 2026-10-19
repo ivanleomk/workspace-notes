@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 09: Open-Source Sandboxes - microsandbox, agent-sandbox, beta9, and Fly</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 09: Open-Source Sandboxes</h1>
+            <p class="subtitle">Eval Infrastructure Deep Dive | microsandbox, agent-sandbox, beta9, and Fly Machines</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#microsandbox">microsandbox</a>
+            <a href="#agent-sandbox">agent-sandbox</a>
+            <a href="#beta9">beta9</a>
+            <a href="#fly">Fly Machines</a>
+            <a href="#comparison">Comparison Table</a>
+            <a href="#exercise">Build It Yourself</a>
+            <a href="#quiz">Quiz</a>
+            <a href="#go-deeper">Go Deeper</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>From Hosted Platforms to Self-Hosted Sandboxes</h2>
+            <p>
+                In Lessons 06-08, you studied three hosted sandbox platforms: E2B's Firecracker-based VM orchestrator 
+                (lesson 06), Daytona's multi-tier architecture (lesson 07), and Modal's serverless gVisor-first model 
+                (lesson 08). Each solved the <strong>orchestration problem</strong>: how to schedule, create, pause, 
+                resume, fork, and tear down thousands of isolated sandboxes for eval workloads.
+            </p>
+            <p>
+                But what if you need <strong>self-hosted control</strong>? Maybe you're running evals on bare metal 
+                for cost efficiency (spot instances at $0.02/hr vs $0.00005/sec), or you need HIPAA compliance and 
+                can't send data to third-party clouds, or you're extending an existing Kubernetes cluster and want 
+                to reuse its networking and storage primitives.
+            </p>
+            <p>
+                This lesson surveys four sandbox systems that span the spectrum from <strong>embeddable libraries</strong> 
+                (microsandbox) to <strong>Kubernetes-native operators</strong> (agent-sandbox) to <strong>self-hostable 
+                serverless runtimes</strong> (beta9) to <strong>hosted-only platforms</strong> (Fly Machines). You'll 
+                learn which isolation mechanisms they use, how their lifecycles work, what warm-pool and snapshot 
+                capabilities they expose, and when to choose each for your eval orchestrator.
+            </p>
+
+            <div class="info-box">
+                <h3>What You'll Learn</h3>
+                <ul>
+                    <li>How microsandbox's embeddable libkrun SDK boots microVMs directly from your application (no 
+                    daemon) with ~100ms cold starts (vendor claim) and fork/snapshot support</li>
+                    <li>How kubernetes-sigs/agent-sandbox's CRDs (SandboxTemplate, SandboxWarmPool, SandboxClaim) 
+                    provide pre-warmed pod pools on Kubernetes with sub-2-second allocation (vendor claim) and 
+                    support for runc, gVisor, and Kata runtimes</li>
+                    <li>How beta9 (Beam's AGPL-3.0 open-source engine) runs a self-hostable serverless platform 
+                    with fast cold starts (&lt;1 second vendor claim) and GPU support on Kubernetes</li>
+                    <li>How Fly Machines runs Firecracker microVMs with sub-second start/stop (vendor claim), BGP 
+                    Anycast routing, and individual VM lifecycle control, though Fly.io is a hosted platform (not OSS)</li>
+                    <li>When your orchestrator should embed microsandbox (low-level control, no K8s), use agent-sandbox 
+                    (K8s-native warm pools), self-host beta9 (serverless on your cluster), or adopt a hosted platform</li>
+                    <li>Hands-on: Deploy agent-sandbox on a local kind cluster, create a SandboxTemplate and WarmPool, 
+                    claim a sandbox, and measure allocation latency</li>
+                </ul>
+            </div>
+
+            <div class="info-box warning">
+                <h3>⚠️ Licensing and Self-Hosting Context</h3>
+                <p>
+                    <strong>microsandbox:</strong> Apache-2.0 
+                    (<a href="https://github.com/superradcompany/microsandbox/blob/main/LICENSE" target="_blank">github.com/superradcompany/microsandbox</a>). 
+                    Permissive license, can be embedded in proprietary applications.
+                </p>
+                <p>
+                    <strong>agent-sandbox:</strong> Apache-2.0 
+                    (<a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/LICENSE" target="_blank">github.com/kubernetes-sigs/agent-sandbox</a>). 
+                    Kubernetes SIG project, permissive license.
+                </p>
+                <p>
+                    <strong>beta9:</strong> GNU AGPL-3.0 
+                    (<a href="https://github.com/beam-cloud/beta9/blob/main/LICENSE" target="_blank">github.com/beam-cloud/beta9</a>). 
+                    Copyleft license. If you run a modified beta9 as a network service (e.g., internal API for your 
+                    team), you must offer the modified source to users. Review with legal counsel for compliance.
+                </p>
+                <p>
+                    <strong>Fly Machines:</strong> Proprietary hosted platform, not open-source. Fly.io operates the 
+                    infrastructure; you cannot self-host. Mentioned here because it's built on Firecracker (OSS) and 
+                    relevant for eval orchestration design comparisons.
+                </p>
+            </div>
+        </section>
+
+        <section id="microsandbox" class="content-section">
+            <h2>microsandbox: Embeddable libkrun MicroVMs</h2>
+            <p>
+                <strong>microsandbox</strong> 
+                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">github.com/superradcompany/microsandbox</a>) 
+                is an embeddable microVM runtime built on libkrun, a KVM-based VMM that runs on Linux (KVM), macOS 
+                (Hypervisor.framework), and Windows (Windows Hypervisor Platform). Unlike E2B (lesson 06) or Daytona 
+                (lesson 07), which require a server daemon and API, microsandbox is a <strong>library</strong>: you 
+                call <code>Sandbox.builder("name").image("python:3.12").create().await?</code> and it boots a microVM 
+                directly in your process. No long-running daemon, no network dependency, no gRPC coordination.
+            </p>
+
+            <h3>What Makes microsandbox Different</h3>
+            <p>
+                From the 
+                <a href="https://github.com/superradcompany/microsandbox" target="_blank">microsandbox README</a>:
+            </p>
+            <blockquote>
+                "Microsandbox runs untrusted workloads inside fast, local microVMs: AI agents, user code, plugins, 
+                CI jobs, dev environments, scrapers, and automation. [...] <strong>Embeddable:</strong> Spawn VMs 
+                right within your code. No setup server. No long-running daemon. [...] <strong>Instant Startup:</strong> 
+                Average boot times under 100 milliseconds."
+            </blockquote>
+            <p>
+                <strong>Key claims (vendor-reported):</strong>
+            </p>
+            <ul>
+                <li><strong>100ms cold starts:</strong> From README "Average boot times under 100 milliseconds" 
+                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>). Not 
+                independently verified; actual latency depends on image size, host CPU, and hypervisor.</li>
+                <li><strong>Fork & snapshot:</strong> README states "Fork & Snapshot: Fork live sandboxes. Save 
+                running sandbox state and restore later" (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>).</li>
+                <li><strong>Cross-platform:</strong> Linux (KVM), macOS (Hypervisor.framework), Windows (WHP) 
+                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">README</a>).</li>
+            </ul>
+
+            <h3>Architecture: Single-Process Runtime</h3>
+            <p>
+                microsandbox's architecture changed significantly in a 2024 rewrite 
+                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>). 
+                The previous design had a two-process model (supervisor + VM process) and required a 
+                <code>microsandbox-server</code> daemon. The new design uses a <strong>single-process runtime</strong>:
+            </p>
+            <blockquote>
+                From <a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>: 
+                "Single-process runtime — the supervisor is merged into the VM process. One process per sandbox, 
+                with an integrated agent relay over Unix domain sockets. [...] Embeddable Rust SDK — 
+                <code>Sandbox::builder("name").image("python:3.12").create().await?</code> boots a microVM directly 
+                from your application. No daemon, no server, no network dependency. Just a library call."
+            </blockquote>
+
+            <div class="mermaid">
+graph TB
+    subgraph app["Your Application (Python/TS/Rust/Go)"]
+        SDK[microsandbox SDK<br/>Sandbox.builder...create]
+    end
+    
+    subgraph runtime["Single Process: msb runtime"]
+        VMM[libkrun VMM<br/>KVM/Hypervisor.framework/WHP]
+        RELAY[Agent Relay<br/>Unix socket]
+        NET[smoltcp<br/>user-space TCP/IP stack]
+        FS[Composable Filesystem<br/>PassthroughFs/MemFs/OverlayFs]
+    end
+    
+    subgraph guest["Guest VM (microVM)"]
+        KERNEL[Linux Kernel<br/>from libkrunfw]
+        INIT[Init<br/>PID 1]
+        PROC[User processes]
+    end
+    
+    SDK -->|1. Create sandbox| VMM
+    VMM -->|2. Boot guest| KERNEL
+    KERNEL --> INIT
+    INIT --> PROC
+    SDK -.->|3. Exec/files<br/>via relay| RELAY
+    RELAY -.-> INIT
+    NET -->|4. Network policy<br/>DNS intercept, TLS MITM| PROC
+    FS -->|5. Filesystem<br/>OCI image layers| PROC
+    
+    style SDK fill:#3b82f6,stroke:#f1f5f9
+    style VMM fill:#8b5cf6,stroke:#f1f5f9
+    style PROC fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 1:</strong> microsandbox's single-process architecture. The SDK boots a microVM 
+                directly via libkrun (no daemon), with an agent relay over Unix sockets for exec/file operations, 
+                smoltcp for user-space networking, and composable filesystem backends.
+            </p>
+
+            <h3>How It Works: libkrun, smoltcp, and Composable Filesystems</h3>
+            <p>
+                <strong>libkrun:</strong> A minimal KVM-based VMM forked from 
+                <a href="https://github.com/containers/libkrun" target="_blank">containers/libkrun</a>. microsandbox 
+                maintains a fork with additional patches 
+                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>). 
+                libkrun boots a Linux kernel (bundled as <code>libkrunfw</code>) and virtio devices (net, block, vsock).
+            </p>
+            <p>
+                <strong>smoltcp networking:</strong> From 
+                <a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>: 
+                "smoltcp user-space networking — a pure-Rust in-process TCP/IP stack replaces TSI [the previous 
+                networking backend]. Enables packet-level network policy, DNS interception, TLS MITM for secret 
+                injection, and published ports — all without kernel network bridges."
+            </p>
+            <p>
+                <strong>Composable filesystems:</strong> Four pluggable backends 
+                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>):
+            </p>
+            <ul>
+                <li><strong>PassthroughFs:</strong> Host directory mapped to guest (virtio-fs passthrough).</li>
+                <li><strong>MemFs:</strong> In-memory filesystem.</li>
+                <li><strong>OverlayFs:</strong> N read-only layers + writable upper layer with copy-on-write and 
+                whiteout semantics (similar to Docker overlayfs, lesson 02).</li>
+                <li><strong>DualFs:</strong> Policy-driven dispatch with lifecycle hooks for custom behavior 
+                (e.g., allow writes to <code>/tmp</code>, deny writes elsewhere).</li>
+            </ul>
+
+            <h3>Lifecycle and Snapshot/Fork</h3>
+            <p>
+                <strong>Create:</strong> <code>Sandbox::builder("name").image("python:3.12").create().await?</code> 
+                pulls the OCI image (if not cached), boots the VM via libkrun, and returns a <code>Sandbox</code> handle.
+            </p>
+            <p>
+                <strong>Exec:</strong> <code>sandbox.exec("python", ["-c", "print('hello')"])</code> sends a command 
+                to the guest via the agent relay (Unix socket). The guest's init process spawns the command and 
+                streams stdout/stderr back.
+            </p>
+            <p>
+                <strong>Fork:</strong> From 
+                <a href="https://github.com/superradcompany/microsandbox" target="_blank">README</a>: "Fork & Snapshot: 
+                Fork live sandboxes." Implementation details (memory snapshot mechanism, parent/child coordination) 
+                are not documented in the public README as of October 2026. The fork API is available in the SDK; 
+                consult the SDK documentation for usage.
+            </p>
+            <p>
+                <strong>Snapshot:</strong> README states "Save running sandbox state and restore later" 
+                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>). The snapshot 
+                mechanism (CRIU-like, or custom libkrun checkpoint) is not detailed in the public docs.
+            </p>
+
+            <h3>Relevant Source Code Paths</h3>
+            <p>
+                <strong>Note:</strong> The following paths are from the 
+                <a href="https://github.com/superradcompany/microsandbox" target="_blank">microsandbox repository</a> 
+                main branch as of October 2026. Verify paths against current code.
+            </p>
+            <ul>
+                <li><code>crates/microsandbox/</code>: Core SDK crate (Rust). Builder-pattern API for sandbox 
+                lifecycle, filesystem operations, volume management, network policy.</li>
+                <li><code>crates/runtime/</code>: Single-process VM runtime. Configures libkrun VMM, runs agent 
+                relay on Unix socket, manages heartbeat and exit observers.</li>
+                <li><code>crates/filesystem/</code>: Four composable virtio-fs backends (PassthroughFs, MemFs, 
+                OverlayFs, DualFs).</li>
+                <li><code>crates/cli/</code>: CLI (<code>msb</code>) for <code>run</code>, <code>exec</code>, 
+                <code>shell</code>, <code>image pull</code>, <code>volume create</code>, etc.</li>
+                <li><code>sdk/typescript/</code>, <code>sdk/python/</code>, <code>sdk/go/</code>: Language bindings 
+                that wrap the Rust core.</li>
+                <li><code>vendor/libkrunfw/</code>: Forked libkrun with microsandbox-specific patches 
+                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>).</li>
+            </ul>
+
+            <h3>When to Use microsandbox</h3>
+            <ul>
+                <li><strong>Low-level control:</strong> You want to embed microVM creation directly in your 
+                application without managing a server daemon.</li>
+                <li><strong>Cross-platform:</strong> You need to run sandboxes on macOS or Windows (not just Linux).</li>
+                <li><strong>Small-scale orchestration:</strong> You're running evals on a single node or a small 
+                cluster where you don't need Kubernetes-level orchestration.</li>
+                <li><strong>Fork/snapshot:</strong> You need GRPO-style forking (lesson 05) but don't want to manage 
+                a separate orchestrator like E2B or Daytona.</li>
+            </ul>
+            <p>
+                <strong>Trade-offs:</strong> No built-in warm pools (you implement your own). No distributed 
+                scheduling (no API to allocate sandboxes across nodes). No GPU support documented (as of October 2026). 
+                If you need Kubernetes-native orchestration or GPU sandboxes, consider agent-sandbox or beta9.
+            </p>
+        </section>
+
+        <section id="agent-sandbox" class="content-section">
+            <h2>kubernetes-sigs/agent-sandbox: CRDs for Warm Pools and Templates</h2>
+            <p>
+                <strong>agent-sandbox</strong> 
+                (<a href="https://github.com/kubernetes-sigs/agent-sandbox" target="_blank">github.com/kubernetes-sigs/agent-sandbox</a>) 
+                is a Kubernetes-native platform for managing isolated, stateful, singleton workloads. It's purpose-built 
+                for AI agent runtimes, development environments, and any scenario that demands a long-running container 
+                with a stable identity. Instead of stitching together StatefulSets, Services, and PersistentVolumeClaims 
+                by hand, you describe the sandbox you want with Custom Resource Definitions (CRDs), and let the controller 
+                handle the rest.
+            </p>
+
+            <h3>Why agent-sandbox Exists</h3>
+            <p>
+                From 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/site/content/docs/_index.md" target="_blank">agent-sandbox docs</a>:
+            </p>
+            <blockquote>
+                "Agent Sandbox is a Kubernetes-native platform for managing isolated, stateful, singleton workloads — 
+                purpose-built for AI agent runtimes, development environments, and any scenario that demands a 
+                long-running container with a stable identity. [...] The <code>SandboxWarmPool</code> extension 
+                pre-warms a pool of pods so that when a new sandbox is needed — for a code execution request or a 
+                fresh agent session — it can be assigned in milliseconds rather than waiting for a cold pod to 
+                schedule and start. This dramatically reduces latency for interactive workloads and high-throughput 
+                agent pipelines."
+            </blockquote>
+            <p>
+                <strong>Key claim (vendor-reported):</strong> From 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart README</a>: 
+                "Performance comparison: <strong>With WarmPool:</strong> Sub-2 second allocation (pod already running). 
+                <strong>Without WarmPool:</strong> 10-30 seconds (image pull + container/VM startup)."
+            </p>
+
+            <h3>Architecture: Core CRDs and Extension CRDs</h3>
+            <p>
+                agent-sandbox defines two layers of CRDs:
+            </p>
+            <ul>
+                <li><strong>Core CRD:</strong> <code>Sandbox</code> (under <code>agents.x-k8s.io/v1beta1</code>) — 
+                declarative API for a single, stateful pod with a stable hostname and optional persistent storage.</li>
+                <li><strong>Extension CRDs:</strong> <code>SandboxTemplate</code>, <code>SandboxClaim</code>, 
+                <code>SandboxWarmPool</code> (under <code>extensions.agents.x-k8s.io/v1beta1</code>) — reusable 
+                templates, user-facing claims, and pre-warmed pod pools.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    subgraph user["User (kubectl / SDK)"]
+        CLAIM[kubectl apply<br/>SandboxClaim]
+    end
+    
+    subgraph control["agent-sandbox Controller"]
+        CTRL[Controller<br/>watches SandboxClaim]
+        POOL[WarmPool Manager<br/>watches SandboxWarmPool]
+    end
+    
+    subgraph k8s["Kubernetes API"]
+        TEMPLATE[(SandboxTemplate<br/>runtime, image, resources)]
+        WARMPOOL[(SandboxWarmPool<br/>replicas=N, templateRef)]
+        POD1[Pre-warmed Pod 1<br/>label: pool=warmpool-name]
+        POD2[Pre-warmed Pod 2<br/>label: pool=warmpool-name]
+    end
+    
+    subgraph sandbox["Claimed Sandbox"]
+        SB[Sandbox<br/>label: sandbox-name-hash]
+        SBPOD[Pod<br/>annotation: pod-name]
+    end
+    
+    CLAIM -->|1. Create claim| CTRL
+    CTRL -->|2. Find template| TEMPLATE
+    CTRL -->|3. Claim pod<br/>from warm pool| POD1
+    POOL -->|4. Maintain<br/>replicas| WARMPOOL
+    WARMPOOL -->|5. Pre-warm pods| POD2
+    POD1 -.->|6. Relabel<br/>pool → sandbox-name-hash| SB
+    SB --> SBPOD
+    
+    style CLAIM fill:#3b82f6,stroke:#f1f5f9
+    style CTRL fill:#8b5cf6,stroke:#f1f5f9
+    style SB fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 2:</strong> agent-sandbox's warm pool workflow. SandboxWarmPool pre-warms pods 
+                (labeled <code>agents.x-k8s.io/pool=&lt;name&gt;</code>). When a SandboxClaim is created, the 
+                controller claims a pod from the pool (relabels it to <code>sandbox-name-hash</code>), and the 
+                WarmPool manager creates a replacement pod to maintain replica count.
+            </p>
+
+            <h3>How It Works: Warm Pools and Claims</h3>
+            <p>
+                <strong>Step 1: Define a SandboxTemplate</strong> (admin-owned blueprint):
+            </p>
+            <pre><code class="language-yaml">apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: python-runtime-template
+  namespace: agent-sandbox-demo
+spec:
+  template:
+    spec:
+      runtimeClassName: gvisor  # or kata, or omit for runc
+      containers:
+      - name: sandbox
+        image: python:3.11
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"</code></pre>
+            <p>
+                <strong>Step 2: Create a SandboxWarmPool</strong> (pre-warms N pods):
+            </p>
+            <pre><code class="language-yaml">apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: python-warmpool
+  namespace: agent-sandbox-demo
+spec:
+  replicas: 2  # Pre-warm 2 pods
+  sandboxTemplateRef:
+    name: python-runtime-template</code></pre>
+            <p>
+                The WarmPool controller creates 2 pods with label <code>agents.x-k8s.io/pool=python-warmpool</code>. 
+                These pods are running and ready (image already pulled, container started).
+            </p>
+            <p>
+                <strong>Step 3: Create a SandboxClaim</strong> (user-facing request):
+            </p>
+            <pre><code class="language-yaml">apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: quickstart-test
+  namespace: agent-sandbox-demo
+spec:
+  warmPoolRef:
+    name: python-warmpool</code></pre>
+            <p>
+                The controller claims one pod from the pool, relabels it to 
+                <code>agents.x-k8s.io/sandbox-name-hash=quickstart-test-abc123</code>, and creates a 
+                <code>Sandbox</code> resource. The WarmPool manager automatically creates a replacement pod to 
+                maintain <code>replicas: 2</code>.
+            </p>
+            <p>
+                <strong>Performance:</strong> From 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>: 
+                "Sub-2 second allocation (pod already running)" vs "10-30 seconds (image pull + container/VM startup)" 
+                without a warm pool (vendor claim).
+            </p>
+
+            <h3>Runtime Flexibility: runc, gVisor, Kata</h3>
+            <p>
+                From 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/site/content/docs/_index.md" target="_blank">docs</a>: 
+                "Runtime flexibility: Works with standard containers, gVisor, Kata Containers, and other OCI-compatible 
+                runtimes."
+            </p>
+            <p>
+                Set <code>spec.runtimeClassName: gvisor</code> in the SandboxTemplate to use gVisor (lesson 03 
+                userspace kernel). Set <code>runtimeClassName: kata</code> to use Kata Containers (lesson 03 
+                hardware-virtualized VMs). Omit <code>runtimeClassName</code> to use the default runtime (runc).
+            </p>
+            <p>
+                <strong>Comparison to lessons 06-08:</strong> agent-sandbox doesn't manage VMs directly (like E2B or 
+                Daytona). Instead, it delegates to Kubernetes RuntimeClasses. If you want VM-level isolation, install 
+                Kata Containers on your cluster and reference it in the template. If you want gVisor isolation, install 
+                runsc (gVisor runtime) and reference it. agent-sandbox focuses on <strong>orchestration and warm 
+                pools</strong>, not the isolation mechanism itself.
+            </p>
+
+            <h3>Relevant Source Code Paths</h3>
+            <p>
+                <strong>Note:</strong> The following paths are from the 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox" target="_blank">agent-sandbox repository</a> 
+                main branch as of October 2026. Verify paths against current code.
+            </p>
+            <ul>
+                <li><code>k8s/crds/agents.x-k8s.io_sandboxes.yaml</code>: Core Sandbox CRD definition.</li>
+                <li><code>k8s/crds/extensions.agents.x-k8s.io_sandboxtemplates.yaml</code>: SandboxTemplate CRD.</li>
+                <li><code>k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml</code>: SandboxWarmPool CRD 
+                (includes <code>/scale</code> subresource for <code>kubectl scale</code> support). 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/a53327b0/k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml" target="_blank">Source</a>.</li>
+                <li><code>k8s/crds/extensions.agents.x-k8s.io_sandboxclaims.yaml</code>: SandboxClaim CRD.</li>
+                <li><code>extensions/controllers/sandboxwarmpool_controller.go</code>: WarmPool controller logic 
+                (pre-warms pods, maintains replicas, handles claims).</li>
+                <li><code>extensions/examples/</code>: Reference YAML for templates, warm pools, and claims 
+                (<a href="https://github.com/kubernetes-sigs/agent-sandbox/tree/a53327b0/extensions/examples" target="_blank">examples directory</a>).</li>
+                <li><code>clients/python/agentic-sandbox-client/</code>: Python SDK for programmatic sandbox management.</li>
+                <li><code>clients/go/</code>: Go SDK (client-go style).</li>
+            </ul>
+
+            <h3>When to Use agent-sandbox</h3>
+            <ul>
+                <li><strong>Kubernetes-native:</strong> You're already running Kubernetes and want to reuse its 
+                networking, storage, and RBAC primitives.</li>
+                <li><strong>Warm pools:</strong> You need pre-warmed sandboxes for low-latency allocation (sub-2 
+                seconds vs 10-30 seconds cold start, vendor claim).</li>
+                <li><strong>Runtime flexibility:</strong> You want to choose between runc (fast, shared kernel), 
+                gVisor (userspace kernel, lesson 03), or Kata (hardware VMs, lesson 03) via Kubernetes RuntimeClasses.</li>
+                <li><strong>Multi-tenant orchestration:</strong> You're building a multi-tenant platform where users 
+                claim sandboxes from shared pools, with per-tenant quotas and RBAC.</li>
+            </ul>
+            <p>
+                <strong>Trade-offs:</strong> Requires Kubernetes (no standalone deployment). No pause/resume/fork 
+                built into the CRDs (you'd implement that at the pod level if using Kata with CRIU, or handle it 
+                in your application). No GPU-specific scheduling documented (use Kubernetes device plugins for GPUs). 
+                For serverless autoscaling (0 to N pods), you'd layer Knative or KEDA on top of agent-sandbox, or 
+                use a platform like beta9 (next section).
+            </p>
+        </section>
+
+        <section id="beta9" class="content-section">
+            <h2>beta9 (Beam): Self-Hostable Serverless Runtime (AGPL-3.0)</h2>
+            <p>
+                <strong>beta9</strong> 
+                (<a href="https://github.com/beam-cloud/beta9" target="_blank">github.com/beam-cloud/beta9</a>) 
+                is the open-source engine powering Beam Cloud, a serverless platform for GPU inference, sandboxes, 
+                and background jobs. Unlike Modal (lesson 08, closed-source serverless), beta9 is 
+                <strong>self-hostable</strong> under the GNU AGPL-3.0 license. You can deploy it on your own 
+                Kubernetes cluster (EKS, GKE, or local k3d) with the provided Helm chart and run fast-starting 
+                containers (&lt;1 second cold start, vendor claim) with GPU support, scale-to-zero, and distributed 
+                storage volumes.
+            </p>
+
+            <h3>License and Self-Hosting</h3>
+            <p>
+                From 
+                <a href="https://github.com/beam-cloud/beta9/blob/main/LICENSE" target="_blank">beta9 LICENSE</a>:
+            </p>
+            <blockquote>
+                "GNU AFFERO GENERAL PUBLIC LICENSE Version 3, 19 November 2007 [...] The GNU Affero General Public 
+                License is designed specifically to ensure that, in such cases, the modified source code becomes 
+                available to the community. It requires the operator of a network server to provide the source code 
+                of the modified version running there to the users of that server."
+            </blockquote>
+            <p>
+                <strong>What this means:</strong> You can self-host beta9 for free, but if you modify it and run it 
+                as a network service (e.g., internal API for your team, or public SaaS), you must offer the modified 
+                source code to users. Review AGPL compliance with legal counsel if you're considering proprietary 
+                modifications. The AGPL does not restrict <em>using</em> beta9 as-is; it restricts <em>distributing 
+                modified versions</em> without sharing source.
+            </p>
+
+            <h3>Architecture: Gateway, Worker, and Runner</h3>
+            <p>
+                From 
+                <a href="https://github.com/beam-cloud/beta9" target="_blank">beta9 README</a> and 
+                <a href="https://docs.beam.cloud/v2/self-hosting/local-machine" target="_blank">self-hosting docs</a>:
+            </p>
+            <ul>
+                <li><strong>Gateway:</strong> REST API service (receives function invocations, schedules workloads, 
+                returns results). Written in Go.</li>
+                <li><strong>Worker:</strong> Scheduler and container runtime manager. Pulls images, starts containers, 
+                manages lifecycle. Deployed as a DaemonSet or pool of pods on Kubernetes.</li>
+                <li><strong>Runner:</strong> The actual container process running user code (sandbox). Workers spawn 
+                runners on-demand.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    subgraph client["Client (Python SDK)"]
+        SDK[beam.function<br/>decorator]
+    end
+    
+    LB[Load Balancer]
+    
+    subgraph gateway["Gateway (API)"]
+        API[Gateway Service<br/>REST API, Go]
+    end
+    
+    subgraph worker["Worker Nodes"]
+        SCHED[Scheduler<br/>container runtime manager]
+        CACHE[Image Cache<br/>OCI layers]
+        subgraph runner["Runner (Container)"]
+            PROC[User Code<br/>function execution]
+        end
+    end
+    
+    subgraph storage["State & Storage"]
+        PG[(PostgreSQL<br/>metadata)]
+        REDIS[(Redis<br/>queue, locks)]
+        S3[(Object Storage<br/>volumes)]
+    end
+    
+    SDK -->|1. Invoke function<br/>POST /api/invoke| LB
+    LB --> API
+    API -->|2. Queue job| REDIS
+    API --> PG
+    SCHED -.->|3. Poll queue| REDIS
+    SCHED -->|4. Pull image| CACHE
+    SCHED -->|5. Start runner| PROC
+    PROC -->|6. Return result| API
+    API -->|7. Response| SDK
+    
+    SCHED --> S3
+    
+    style SDK fill:#3b82f6,stroke:#f1f5f9
+    style API fill:#8b5cf6,stroke:#f1f5f9
+    style PROC fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 3:</strong> beta9's serverless architecture. The Gateway receives invocations, queues 
+                jobs in Redis, workers poll the queue, start runners (containers), and return results. Similar to 
+                Modal (lesson 08) but self-hostable and AGPL-3.0.
+            </p>
+
+            <h3>Fast Cold Starts and GPU Support</h3>
+            <p>
+                From 
+                <a href="https://github.com/beam-cloud/beta9" target="_blank">beta9 README</a>:
+            </p>
+            <blockquote>
+                "Fast Cold Starts: Launch containers in under a second using a custom container runtime, scheduler, 
+                and embedded caching."
+            </blockquote>
+            <p>
+                <strong>Vendor claim:</strong> "&lt;1 second" cold starts 
+                (<a href="https://github.com/beam-cloud/beta9" target="_blank">README</a>). Not independently 
+                verified. Actual latency depends on image size, node CPU, and cache state. The "custom container 
+                runtime" and "embedded caching" refer to beta9's worker implementation (not documented in detail in 
+                public docs as of October 2026).
+            </p>
+            <p>
+                <strong>GPU support:</strong> README lists "GPU Support: Run on our cloud (4090s, H100s, and more) 
+                or bring your own GPUs" 
+                (<a href="https://github.com/beam-cloud/beta9" target="_blank">source</a>). Self-hosted beta9 can 
+                schedule workloads onto Kubernetes nodes with GPU device plugins 
+                (e.g., <code>nvidia.com/gpu</code> resources).
+            </p>
+
+            <h3>Deployment: Local k3d or EKS</h3>
+            <p>
+                From 
+                <a href="https://docs.beam.cloud/v2/self-hosting/local-machine" target="_blank">beta9 local dev docs</a>:
+            </p>
+            <pre><code class="language-bash">git clone https://github.com/beam-cloud/beta9.git
+cd beta9
+make setup  # Creates k3d cluster, builds images, applies dev config
+
+kubectl --context k3d-beta9 get pods -n beta9
+kubectl --context k3d-beta9 get services -n beta9</code></pre>
+            <p>
+                For production on AWS EKS, see 
+                <a href="https://docs.beam.cloud/v2/self-hosting/aws" target="_blank">AWS deployment docs</a>: 
+                Set up EKS, CPU/GPU workers, container registry, ingress/TLS, PostgreSQL, Redis, and S3-compatible 
+                storage. Use the Helm chart from the beta9 repo 
+                (<code>deploy/charts/beta9</code>).
+            </p>
+
+            <h3>Relevant Source Code Paths</h3>
+            <p>
+                <strong>Note:</strong> The following paths are from the 
+                <a href="https://github.com/beam-cloud/beta9" target="_blank">beta9 repository</a> main branch as 
+                of October 2026. Verify paths against current code.
+            </p>
+            <ul>
+                <li><code>pkg/gateway/</code>: Gateway REST API service (Go).</li>
+                <li><code>pkg/scheduler/</code>: Scheduler logic (job queue, container allocation).</li>
+                <li><code>pkg/worker/</code>: Worker runtime (container lifecycle, image pulling, runner spawning).</li>
+                <li><code>deploy/charts/beta9/</code>: Helm chart for deploying beta9 on Kubernetes.</li>
+                <li><code>sdk/</code>: Python SDK (<code>beam-client</code>) for defining functions and invoking them.</li>
+                <li><code>bin/setup.sh</code>: Local k3d setup script 
+                (<a href="https://github.com/beam-cloud/beta9/blob/main/CONTRIBUTING.md" target="_blank">CONTRIBUTING.md references it</a>).</li>
+            </ul>
+
+            <h3>When to Use beta9</h3>
+            <ul>
+                <li><strong>Serverless on your cluster:</strong> You want Modal-like serverless autoscaling 
+                (scale-to-zero, fast cold starts) but need to self-host for compliance, cost, or control.</li>
+                <li><strong>GPU workloads:</strong> You're running GPU inference or training and want serverless 
+                scheduling onto your GPU nodes.</li>
+                <li><strong>AGPL-compatible:</strong> You can comply with AGPL-3.0 (offer modified source to users 
+                if you modify beta9 and run it as a network service).</li>
+                <li><strong>Kubernetes foundation:</strong> You're already on Kubernetes and want a serverless 
+                layer without vendor lock-in.</li>
+            </ul>
+            <p>
+                <strong>Trade-offs:</strong> AGPL license (less permissive than Apache-2.0). No pause/resume/fork 
+                built in (you'd implement that yourself if needed). Setup complexity higher than Modal (managed) but 
+                lower than building from scratch. For permissive licensing and lower-level control, consider 
+                agent-sandbox or microsandbox.
+            </p>
+        </section>
+
+        <section id="fly" class="content-section">
+            <h2>Fly Machines: Firecracker VMs on a Hosted Platform (Not OSS)</h2>
+            <p>
+                <strong>Fly Machines</strong> 
+                (<a href="https://fly.io/docs/machines/overview" target="_blank">fly.io/docs/machines/overview</a>) 
+                are Firecracker microVMs on Fly.io's platform. Unlike microsandbox, agent-sandbox, and beta9 
+                (all self-hostable OSS), Fly.io is a <strong>hosted platform</strong>: you cannot self-host Fly's 
+                infrastructure. However, Fly Machines are relevant for this lesson because:
+            </p>
+            <ul>
+                <li>They're built on <strong>Firecracker</strong> (lesson 04, Apache-2.0 OSS), so you can learn from 
+                Fly's architecture and apply those patterns to your own Firecracker-based orchestrator.</li>
+                <li>They demonstrate <strong>sub-second start/stop</strong> (vendor claim) and individual VM lifecycle 
+                control, which are design goals for eval orchestration.</li>
+                <li>They show how to integrate Firecracker VMs with BGP Anycast routing, WireGuard backhaul, and 
+                distributed proxy (fly-proxy), which are lessons for building a production VM fleet.</li>
+            </ul>
+
+            <h3>What Are Fly Machines?</h3>
+            <p>
+                From 
+                <a href="https://fly.io/docs/machines/overview" target="_blank">Fly Machines docs</a>:
+            </p>
+            <blockquote>
+                "Machines are fast-launching VMs with a simple REST API. They're the compute behind the Fly.io 
+                platform. [...] You can create and destroy Machines directly, and you have control over every 
+                Machine's lifecycle, resources, and region placement."
+            </blockquote>
+            <p>
+                From 
+                <a href="https://fly.io/learn/firecracker-vm/" target="_blank">Firecracker VM on Fly.io</a>:
+            </p>
+            <blockquote>
+                "Fly.io runs Firecracker in production. Application code on Fly.io runs inside Firecracker microVMs, 
+                on servers Fly.io operates itself, which is what makes it safe to run workloads from different 
+                customers on shared hardware. Fly Machines are those microVMs: hardware-virtualized, quick to boot, 
+                and addressable individually rather than as a fleet you scale in aggregate. [...] Machines start and 
+                stop at sub-second speeds, so a Machine that runs only when a request arrives is an ordinary deployment 
+                shape rather than an exotic one."
+            </blockquote>
+
+            <h3>Architecture: Firecracker + BGP Anycast + WireGuard</h3>
+            <p>
+                From 
+                <a href="https://fly.io/docs/reference/architecture" target="_blank">Fly.io Architecture</a>:
+            </p>
+            <ul>
+                <li><strong>Compute:</strong> Firecracker microVMs on dedicated servers (8-32 physical cores, 
+                32-256GB RAM per server). Each Firecracker process encapsulates one microVM (lesson 04 design).</li>
+                <li><strong>BGP Anycast:</strong> Fly broadcasts IP ranges in all datacenters. Incoming connections 
+                are matched to a customer application and proxied to the closest available microVM.</li>
+                <li><strong>fly-proxy:</strong> Rust-based proxy on every server. Accepts client connections, applies 
+                TLS termination, and forwards traffic to microVMs over WireGuard tunnels between datacenters.</li>
+                <li><strong>WireGuard backhaul:</strong> If a user is in Dallas and your microVM is in Chicago, 
+                fly-proxy accepts traffic in Dallas, terminates TLS, and connects to the microVM over a WireGuard 
+                tunnel with low additional latency.</li>
+            </ul>
+
+            <div class="mermaid">
+graph TB
+    subgraph client["Client (Internet)"]
+        USER[User<br/>Dallas]
+    end
+    
+    subgraph dallas["Fly Dallas Datacenter"]
+        BGP1[BGP Anycast<br/>accept connection]
+        PROXY1[fly-proxy<br/>TLS termination]
+    end
+    
+    subgraph chicago["Fly Chicago Datacenter"]
+        PROXY2[fly-proxy<br/>route to VM]
+        subgraph vm["Firecracker microVM"]
+            APP[Your App<br/>process]
+        end
+    end
+    
+    USER -->|1. TCP connection<br/>to anycast IP| BGP1
+    BGP1 -->|2. Match to app| PROXY1
+    PROXY1 -->|3. Terminate TLS| PROXY2
+    PROXY1 -.->|4. WireGuard tunnel<br/>Dallas → Chicago| PROXY2
+    PROXY2 -->|5. Forward to VM| APP
+    
+    style USER fill:#3b82f6,stroke:#f1f5f9
+    style PROXY1 fill:#8b5cf6,stroke:#f1f5f9
+    style APP fill:#10b981,stroke:#f1f5f9
+            </div>
+            <p class="diagram-caption">
+                <strong>Figure 4:</strong> Fly.io's Firecracker + BGP Anycast + WireGuard architecture. User 
+                connects to anycast IP (Dallas), fly-proxy terminates TLS and forwards traffic over WireGuard to 
+                the microVM (Chicago).
+            </p>
+
+            <h3>Lifecycle: Start, Stop, and Snapshot/Restore</h3>
+            <p>
+                From 
+                <a href="https://fly.io/learn/firecracker-vm/" target="_blank">Firecracker VM on Fly.io</a>:
+            </p>
+            <blockquote>
+                "Machines start and stop at sub-second speeds, so a Machine that runs only when a request arrives 
+                is an ordinary deployment shape rather than an exotic one. Fly Proxy can stop and start Machines 
+                based on incoming traffic, and while a Machine sits stopped or suspended you aren't paying for its 
+                CPU and RAM. [...] Sprites are the same Firecracker substrate arranged for a different job. A 
+                Machine is the always-on production half. A Sprite is a persistent, reversible environment for 
+                running arbitrary or agent-generated code: a filesystem that survives on its own, checkpoints you 
+                can restore in place, and an opt-in egress allowlist. The snapshot and restore semantics described 
+                earlier are the mechanism underneath."
+            </p>
+            <p>
+                <strong>Vendor claim:</strong> "sub-second" start/stop 
+                (<a href="https://fly.io/learn/firecracker-vm/" target="_blank">source</a>). Not independently 
+                verified. Firecracker boot time (lesson 04) is ~125ms (AWS target), but Fly's "start" includes 
+                network setup, proxy configuration, and snapshot restore (if resuming), so actual user-visible 
+                latency varies.
+            </p>
+
+            <h3>Fly Init: Public Snapshot of Firecracker Guest Init</h3>
+            <p>
+                Fly published a snapshot of their init code at 
+                <a href="https://github.com/superfly/init-snapshot" target="_blank">github.com/superfly/init-snapshot</a>. 
+                From the README:
+            </p>
+            <blockquote>
+                "This is a public snapshot of Fly's init code. It powers every Firecracker microvm we run for our 
+                users. It is Rust-based and we thought making it public (even in this very limited fashion) could 
+                help as a reference for people making Rust-based init programs. [...] our init is tailored for 
+                firecracker microvms. [...] Attach [the init device] as /dev/vda. Attach your rootfs as /dev/vdb. 
+                Attach a vsock virtio device."
+            </blockquote>
+            <p>
+                <strong>Key details:</strong> The init reads <code>/fly/run.json</code> from <code>/dev/vda</code> 
+                (a separate ext2 device) for configuration, mounts the rootfs from <code>/dev/vdb</code>, and 
+                communicates over virtio-vsock for exec and lifecycle commands. This is a reference for building 
+                your own Firecracker guest init (lesson 04 covered host-side Firecracker setup; this is the 
+                guest-side counterpart).
+            </p>
+
+            <h3>Why Fly Machines Are Relevant (Despite Not Being OSS)</h3>
+            <ul>
+                <li><strong>Firecracker best practices:</strong> Fly has run Firecracker in production at scale 
+                since ~2018. Their architecture (BGP Anycast, WireGuard backhaul, individual VM lifecycle) is a 
+                proven design you can study for your own orchestrator.</li>
+                <li><strong>Sub-second lifecycle:</strong> If your eval orchestrator needs fast sandbox allocation 
+                (like Fly's sub-second start), you can apply Firecracker's snapshot/resume (lesson 05) and 
+                pre-warmed VM pools (lesson 06 E2B's template snapshots).</li>
+                <li><strong>Open init code:</strong> The 
+                <a href="https://github.com/superfly/init-snapshot" target="_blank">init-snapshot</a> repo is a 
+                rare public example of production Firecracker guest init in Rust. Compare it to E2B's Go-based 
+                orchestrator (lesson 06) and Daytona's Rust daemon (lesson 07) for alternative designs.</li>
+            </ul>
+            <p>
+                <strong>Trade-offs:</strong> You cannot self-host Fly.io. It's a hosted platform. If you need 
+                self-hosted Firecracker, use E2B's open-source runtime (lesson 06, Apache-2.0), build your own 
+                orchestrator (lessons 04-05), or layer Firecracker on Kubernetes with Kata Containers and 
+                agent-sandbox (this lesson).
+            </p>
+        </section>
+
+        <section id="comparison" class="content-section">
+            <h2>Comparison Table: Which Sandbox for Your Orchestrator?</h2>
+            <p>
+                You've seen four systems: microsandbox (embeddable libkrun), agent-sandbox (K8s CRDs), beta9 
+                (self-hostable serverless), and Fly Machines (hosted Firecracker). Plus the systems from lessons 
+                06-08 (E2B, Daytona, Modal). Here's how they compare:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>microsandbox</th>
+                        <th>agent-sandbox</th>
+                        <th>beta9</th>
+                        <th>Fly Machines</th>
+                        <th>E2B (L06)</th>
+                        <th>Modal (L08)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Isolation mechanism</strong></td>
+                        <td>libkrun microVM (KVM)</td>
+                        <td>runc/gVisor/Kata (K8s RuntimeClass)</td>
+                        <td>Container runtime (custom)</td>
+                        <td>Firecracker microVM</td>
+                        <td>Firecracker microVM</td>
+                        <td>gVisor (default) or VM</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pause / resume</strong></td>
+                        <td>✅ Yes (snapshot/restore)</td>
+                        <td>⚠️ Runtime-dependent (Kata+CRIU: yes; runc: no)</td>
+                        <td>❌ No (not documented)</td>
+                        <td>✅ Yes (Firecracker snapshot)</td>
+                        <td>✅ Yes</td>
+                        <td>❌ No (Sandboxes); ✅ Yes (Functions)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Fork</strong></td>
+                        <td>✅ Yes</td>
+                        <td>⚠️ Runtime-dependent</td>
+                        <td>❌ No</td>
+                        <td>⚠️ Sprites (beta)</td>
+                        <td>✅ Yes (up to 20 children)</td>
+                        <td>❌ No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Warm pools</strong></td>
+                        <td>❌ No (DIY)</td>
+                        <td>✅ Yes (SandboxWarmPool CRD)</td>
+                        <td>✅ Yes (serverless scale-to-zero)</td>
+                        <td>⚠️ Implicit (fast start/stop)</td>
+                        <td>✅ Yes (template snapshots)</td>
+                        <td>✅ Yes (serverless autoscale)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>GPU support</strong></td>
+                        <td>❌ No (not documented)</td>
+                        <td>✅ Yes (K8s device plugins)</td>
+                        <td>✅ Yes (GPU workers)</td>
+                        <td>✅ Yes (GPU Machines)</td>
+                        <td>❌ No</td>
+                        <td>✅ Yes (gVisor nvproxy)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Cold start</strong></td>
+                        <td>~100ms (vendor claim)</td>
+                        <td>Sub-2s with warm pool (vendor claim); 10-30s cold</td>
+                        <td>&lt;1s (vendor claim)</td>
+                        <td>Sub-second (vendor claim)</td>
+                        <td>~80ms template restore (vendor claim)</td>
+                        <td>Sub-second with cache (vendor claim)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Self-hostable</strong></td>
+                        <td>✅ Yes (embeddable library)</td>
+                        <td>✅ Yes (K8s operator)</td>
+                        <td>✅ Yes (AGPL, Helm chart)</td>
+                        <td>❌ No (hosted only)</td>
+                        <td>✅ Yes (Apache-2.0 OSS)</td>
+                        <td>❌ No (managed)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>License</strong></td>
+                        <td>Apache-2.0</td>
+                        <td>Apache-2.0</td>
+                        <td>AGPL-3.0</td>
+                        <td>N/A (proprietary)</td>
+                        <td>Apache-2.0</td>
+                        <td>N/A (proprietary)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Languages / SDKs</strong></td>
+                        <td>Python, TS, Rust, Go, Ruby</td>
+                        <td>Python, Go, kubectl</td>
+                        <td>Python</td>
+                        <td>flyctl CLI, REST API</td>
+                        <td>Python, TS, Go</td>
+                        <td>Python, TS</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Best for</strong></td>
+                        <td>Embeddable microVMs, cross-platform, low-level control</td>
+                        <td>K8s-native warm pools, multi-tenant, runtime flexibility</td>
+                        <td>Self-hosted serverless, GPU workloads, AGPL-compatible</td>
+                        <td>Hosted platform reference, Firecracker best practices</td>
+                        <td>VM-only, pause/resume/fork, Apache-2.0 OSS</td>
+                        <td>Elastic serverless, GPU, gVisor, managed</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Decision Guide for Your Orchestrator</h3>
+            <ol>
+                <li><strong>Do you need pause/resume/fork for GRPO-style RL or branch-and-select?</strong>
+                    <ul>
+                        <li>Yes, and you want self-hosted → <strong>E2B</strong> (lesson 06) or 
+                        <strong>microsandbox</strong> (this lesson).</li>
+                        <li>Yes, and you're okay with hosted → <strong>Fly Sprites</strong> (beta, this lesson) or 
+                        <strong>Modal Functions</strong> (lesson 08, memory snapshots).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Are you building on Kubernetes?</strong>
+                    <ul>
+                        <li>Yes, and you need warm pools → <strong>agent-sandbox</strong> (this lesson).</li>
+                        <li>Yes, and you want serverless autoscaling → <strong>beta9</strong> (this lesson).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need GPU sandboxes?</strong>
+                    <ul>
+                        <li>Yes, self-hosted on K8s → <strong>beta9</strong> or <strong>agent-sandbox</strong> 
+                        (with K8s device plugins).</li>
+                        <li>Yes, hosted → <strong>Modal</strong> (lesson 08, gVisor nvproxy) or 
+                        <strong>Fly Machines</strong> (GPU Machines).</li>
+                        <li>No → Continue.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you want a permissive license (Apache-2.0)?</strong>
+                    <ul>
+                        <li>Yes → <strong>microsandbox</strong>, <strong>agent-sandbox</strong>, or 
+                        <strong>E2B</strong> (lesson 06).</li>
+                        <li>AGPL-3.0 is okay → <strong>beta9</strong>.</li>
+                        <li>Proprietary hosted is okay → <strong>Modal</strong> (lesson 08) or 
+                        <strong>Fly Machines</strong>.</li>
+                    </ul>
+                </li>
+                <li><strong>Do you need embeddable (library, no server)?</strong>
+                    <ul>
+                        <li>Yes → <strong>microsandbox</strong> (no daemon, call from your app).</li>
+                        <li>No, server/orchestrator is fine → Any other option.</li>
+                    </ul>
+                </li>
+            </ol>
+        </section>
+
+        <section id="exercise" class="content-section">
+            <h2>Build It Yourself: agent-sandbox on kind</h2>
+            <p>
+                In this exercise, you'll deploy agent-sandbox on a local kind (Kubernetes in Docker) cluster, create 
+                a SandboxTemplate and SandboxWarmPool, claim a sandbox, and measure allocation latency. This 
+                demonstrates warm-pool fast allocation (sub-2 seconds, vendor claim) vs cold-pod startup (10-30 
+                seconds).
+            </p>
+
+            <div class="info-box warning">
+                <h3>⚠️ Prerequisites</h3>
+                <ul>
+                    <li><strong>Docker:</strong> kind runs Kubernetes nodes as Docker containers.</li>
+                    <li><strong>kubectl:</strong> <code>brew install kubectl</code> or 
+                    <a href="https://kubernetes.io/docs/tasks/tools/" target="_blank">install kubectl</a>.</li>
+                    <li><strong>kind:</strong> <code>brew install kind</code> or 
+                    <a href="https://kind.sigs.k8s.io/docs/user/quick-start/" target="_blank">install kind</a>.</li>
+                    <li><strong>Python 3.10+</strong> (for SDK test, optional).</li>
+                </ul>
+                <p>
+                    <strong>Time estimate:</strong> 15-20 minutes (5 min cluster setup, 10 min agent-sandbox 
+                    install, 5 min testing). If kind image download is slow, add 5-10 minutes for the initial pull.
+                </p>
+                <p>
+                    <strong>Note:</strong> This exercise uses agent-sandbox from 
+                    <a href="https://github.com/kubernetes-sigs/agent-sandbox" target="_blank">kubernetes-sigs/agent-sandbox</a>. 
+                    Follow the 
+                    <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart README</a> 
+                    for up-to-date install commands. The commands below are from the quickstart as of October 2026; 
+                    verify against current docs.
+                </p>
+            </div>
+
+            <h3>Step 1: Create a kind Cluster</h3>
+            <pre><code class="language-bash"># Create a kind cluster named "agent-sandbox-demo"
+kind create cluster --name agent-sandbox-demo
+
+# Verify cluster is running
+kubectl cluster-info --context kind-agent-sandbox-demo
+kubectl get nodes</code></pre>
+
+            <h3>Step 2: Install agent-sandbox Controllers</h3>
+            <p>
+                From the 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>:
+            </p>
+            <pre><code class="language-bash"># Clone the agent-sandbox repository
+git clone https://github.com/kubernetes-sigs/agent-sandbox.git
+cd agent-sandbox
+
+# Apply CRDs and controllers
+kubectl apply --server-side=true -f k8s/crds/
+kubectl apply -f k8s/manager/
+
+# Wait for controllers to be ready
+kubectl wait --for=condition=Available deployment/agent-sandbox-controller-manager \
+  -n agent-sandbox-system --timeout=120s</code></pre>
+
+            <h3>Step 3: Create a SandboxTemplate</h3>
+            <p>
+                Define a template for Python sandboxes with 1 CPU and 2 GiB memory:
+            </p>
+            <pre><code class="language-yaml"># Save as python-template.yaml
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: python-runtime-template
+  namespace: default
+spec:
+  template:
+    spec:
+      # runtimeClassName: gvisor  # Uncomment if gVisor is installed
+      containers:
+      - name: sandbox
+        image: python:3.11-slim
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"</code></pre>
+            <pre><code class="language-bash">kubectl apply -f python-template.yaml
+kubectl get sandboxtemplate</code></pre>
+
+            <h3>Step 4: Create a SandboxWarmPool</h3>
+            <p>
+                Pre-warm 2 sandboxes:
+            </p>
+            <pre><code class="language-yaml"># Save as python-warmpool.yaml
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: python-warmpool
+  namespace: default
+spec:
+  replicas: 2
+  sandboxTemplateRef:
+    name: python-runtime-template</code></pre>
+            <pre><code class="language-bash">kubectl apply -f python-warmpool.yaml
+
+# Wait for warm pool pods to be ready
+kubectl wait --for=condition=Ready pod -l agents.x-k8s.io/pool=python-warmpool --timeout=60s
+
+# Verify pre-warmed pods
+kubectl get pods -l agents.x-k8s.io/pool=python-warmpool</code></pre>
+            <p>
+                <strong>Expected output:</strong> 2 pods with <code>STATUS Running</code> and 
+                <code>READY 1/1</code>.
+            </p>
+
+            <h3>Step 5: Claim a Sandbox from the Warm Pool</h3>
+            <pre><code class="language-yaml"># Save as sandbox-claim.yaml
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: quickstart-test
+  namespace: default
+spec:
+  warmPoolRef:
+    name: python-warmpool</code></pre>
+            <pre><code class="language-bash"># Measure allocation latency
+time kubectl apply -f sandbox-claim.yaml
+
+# Wait for sandbox to be ready
+kubectl wait --for=condition=Ready sandbox/quickstart-test --timeout=60s
+
+# Verify sandbox was claimed
+kubectl get sandbox quickstart-test
+kubectl get pods -l agents.x-k8s.io/pool=python-warmpool  # Should show 2 pods (1 claimed, 1 replacement)</code></pre>
+            <p>
+                <strong>Expected latency:</strong> Sub-2 seconds (vendor claim from 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>) 
+                for the <code>kubectl apply</code> command to return. The sandbox is allocated from the pre-warmed 
+                pool (pod already running), so no image pull or container start is needed. The WarmPool controller 
+                creates a replacement pod automatically to maintain <code>replicas: 2</code>.
+            </p>
+
+            <h3>Step 6: Exec a Command in the Sandbox (Optional)</h3>
+            <pre><code class="language-bash"># Get the pod name for the claimed sandbox
+POD_NAME=$(kubectl get sandbox quickstart-test -o jsonpath='{.metadata.annotations.agents\.x-k8s\.io/pod-name}')
+
+echo "Sandbox pod: $POD_NAME"
+
+# Exec into the sandbox
+kubectl exec -it $POD_NAME -- python3 -c "print('Hello from warm pool sandbox')"</code></pre>
+
+            <h3>Step 7: Measure Cold-Pod Allocation (No Warm Pool)</h3>
+            <p>
+                To compare, create a sandbox <em>without</em> a warm pool:
+            </p>
+            <pre><code class="language-yaml"># Save as cold-sandbox.yaml
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: cold-test
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: sandbox
+        image: python:3.11-slim
+        command: ["sleep", "infinity"]
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"</code></pre>
+            <pre><code class="language-bash"># Measure allocation latency
+time kubectl apply -f cold-sandbox.yaml
+
+kubectl wait --for=condition=Ready sandbox/cold-test --timeout=60s
+kubectl get sandbox cold-test</code></pre>
+            <p>
+                <strong>Expected latency:</strong> 10-30 seconds (vendor claim from 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>) 
+                because the pod must be scheduled, the image must be pulled (if not cached), and the container must 
+                start. On kind with a warm Docker image cache, you might see &lt;10 seconds. Without cache, expect 
+                15-30 seconds for the <code>python:3.11-slim</code> image pull.
+            </p>
+
+            <h3>Step 8: Clean Up</h3>
+            <pre><code class="language-bash"># Delete sandboxes and warm pool
+kubectl delete sandboxclaim quickstart-test
+kubectl delete sandbox cold-test
+kubectl delete sandboxwarmpool python-warmpool
+kubectl delete sandboxtemplate python-runtime-template
+
+# Delete kind cluster
+kind delete cluster --name agent-sandbox-demo</code></pre>
+
+            <h3>What You Learned</h3>
+            <ul>
+                <li>How to deploy agent-sandbox on a local kind cluster with CRDs and controllers</li>
+                <li>How to define a SandboxTemplate (reusable blueprint) and create a SandboxWarmPool (pre-warmed pods)</li>
+                <li>How to claim a sandbox from the warm pool (sub-2 second allocation, vendor claim) vs cold-pod 
+                allocation (10-30 seconds, vendor claim)</li>
+                <li>Why warm pools matter for eval orchestration: pre-warmed pods eliminate image pull and container 
+                start latency, enabling fast sandbox allocation for high-throughput agent pipelines</li>
+                <li>How Kubernetes RuntimeClasses (runc, gVisor, Kata) integrate with agent-sandbox for runtime flexibility</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>Going Further: Python SDK and Router Service</h3>
+                <p>
+                    agent-sandbox includes a Python SDK for programmatic sandbox management. Install it and run 
+                    sandboxes from Python:
+                </p>
+                <pre><code class="language-bash"># Install Python SDK
+pip install agentic-sandbox-client
+
+# Configure endpoint (requires Router Service deployed)
+export SANDBOX_ENDPOINT="http://localhost:8080"</code></pre>
+                <p>
+                    See the 
+                    <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/" target="_blank">Python SDK README</a> 
+                    for usage examples. The Router Service is an HTTP proxy that routes SDK requests to the 
+                    appropriate sandbox pod (deployed via the quickstart).
+                </p>
+            </div>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Test Your Understanding</h2>
+            <div id="quiz-container"></div>
+        </section>
+
+        <section id="go-deeper" class="content-section">
+            <h2>Go Deeper: Primary Sources</h2>
+            <p>
+                Every claim in this lesson is sourced from official documentation, repository READMEs, or labeled 
+                as vendor claims. Here's where to learn more:
+            </p>
+
+            <div class="info-box">
+                <h3>microsandbox Documentation and Source</h3>
+                <ul>
+                    <li><a href="https://github.com/superradcompany/microsandbox" target="_blank">github.com/superradcompany/microsandbox</a> — 
+                    Main repository (Apache-2.0). Verbatim README quote: "Average boot times under 100 milliseconds" 
+                    (vendor claim).</li>
+                    <li><a href="https://docs.microsandbox.dev/sdk/setup" target="_blank">docs.microsandbox.dev/sdk/setup</a> — 
+                    Runtime setup guide for TypeScript, Rust, Python, Go, Ruby SDKs.</li>
+                    <li><a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a> — 
+                    Rewrite announcement. Quote: "Single-process runtime — the supervisor is merged into the VM process. 
+                    One process per sandbox, with an integrated agent relay over Unix domain sockets."</li>
+                    <li><a href="https://docs.rs/msb_krun/latest/msb_krun/" target="_blank">docs.rs/msb_krun</a> — 
+                    Rust API documentation for msb_krun (libkrun wrapper).</li>
+                    <li>Source code paths verified as of October 2026: <code>crates/microsandbox/</code>, 
+                    <code>crates/runtime/</code>, <code>crates/filesystem/</code>, <code>crates/cli/</code>, 
+                    <code>vendor/libkrunfw/</code>.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>kubernetes-sigs/agent-sandbox Documentation and Source</h3>
+                <ul>
+                    <li><a href="https://github.com/kubernetes-sigs/agent-sandbox" target="_blank">github.com/kubernetes-sigs/agent-sandbox</a> — 
+                    Main repository (Apache-2.0). Verbatim docs quote: "Performance comparison: With WarmPool: 
+                    Sub-2 second allocation (pod already running). Without WarmPool: 10-30 seconds (image pull + 
+                    container/VM startup)" 
+                    (<a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart README</a>, 
+                    vendor claim).</li>
+                    <li><a href="https://agent-sandbox.sigs.k8s.io/docs/use-cases/examples/warmpool-quickstart/" target="_blank">Warm Pool Quickstart</a> — 
+                    Reference YAML for SandboxTemplate, SandboxWarmPool, SandboxClaim.</li>
+                    <li>Source code paths verified as of October 2026: 
+                    <code>k8s/crds/agents.x-k8s.io_sandboxes.yaml</code>, 
+                    <code>k8s/crds/extensions.agents.x-k8s.io_sandboxtemplates.yaml</code>, 
+                    <code>k8s/crds/extensions.agents.x-k8s.io_sandboxwarmpools.yaml</code>, 
+                    <code>extensions/controllers/sandboxwarmpool_controller.go</code>, 
+                    <code>extensions/examples/</code>.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>beta9 (Beam) Documentation and Source</h3>
+                <ul>
+                    <li><a href="https://github.com/beam-cloud/beta9" target="_blank">github.com/beam-cloud/beta9</a> — 
+                    Main repository (AGPL-3.0). Verbatim README quote: "Fast Cold Starts: Launch containers in 
+                    under a second using a custom container runtime, scheduler, and embedded caching" (vendor claim).</li>
+                    <li><a href="https://github.com/beam-cloud/beta9/blob/main/LICENSE" target="_blank">LICENSE</a> — 
+                    Full text of GNU AGPL-3.0. Quote: "The GNU Affero General Public License is designed specifically 
+                    to ensure that, in such cases, the modified source code becomes available to the community. It 
+                    requires the operator of a network server to provide the source code of the modified version 
+                    running there to the users of that server."</li>
+                    <li><a href="https://docs.beam.cloud/v2/self-hosting/local-machine" target="_blank">Local Development Cluster</a> — 
+                    k3d setup guide. Commands: <code>make setup</code>, <code>kubectl --context k3d-beta9 get pods -n beta9</code>.</li>
+                    <li><a href="https://docs.beam.cloud/v2/self-hosting/aws" target="_blank">Deploying Beta9 on AWS</a> — 
+                    EKS deployment guide with Helm chart.</li>
+                    <li>Source code paths verified as of October 2026: <code>pkg/gateway/</code>, 
+                    <code>pkg/scheduler/</code>, <code>pkg/worker/</code>, <code>deploy/charts/beta9/</code>, 
+                    <code>sdk/</code>, <code>bin/setup.sh</code>.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Fly Machines Documentation and Source</h3>
+                <ul>
+                    <li><a href="https://fly.io/docs/machines/overview" target="_blank">Fly Machines Overview</a> — 
+                    Introduction to Fly Machines. Verbatim quote: "Machines are fast-launching VMs with a simple 
+                    REST API. They're the compute behind the Fly.io platform."</li>
+                    <li><a href="https://fly.io/learn/firecracker-vm/" target="_blank">What Is a Firecracker microVM?</a> — 
+                    Fly.io's Firecracker architecture. Quote: "Machines start and stop at sub-second speeds, so a 
+                    Machine that runs only when a request arrives is an ordinary deployment shape rather than an 
+                    exotic one" (vendor claim).</li>
+                    <li><a href="https://fly.io/docs/reference/architecture" target="_blank">The Fly.io Architecture</a> — 
+                    BGP Anycast, fly-proxy, WireGuard backhaul. Quote: "MicroVMs provide strong 
+                    hardware-virtualization-based security and workload isolation, this allows us to safely run 
+                    applications from different customers on shared hardware."</li>
+                    <li><a href="https://github.com/superfly/init-snapshot" target="_blank">superfly/init-snapshot</a> — 
+                    Public snapshot of Fly's Firecracker guest init (Rust). Quote: "This is a public snapshot of 
+                    Fly's init code. It powers every Firecracker microvm we run for our users."</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Comparison to Lessons 06-08</h3>
+                <ul>
+                    <li><strong>Lesson 06 (E2B):</strong> 
+                    <a href="https://github.com/e2b-dev/runtime" target="_blank">e2b-dev/runtime</a> — 
+                    Firecracker-based, pause/resume/fork, Apache-2.0. Compare E2B's VM-only model (every sandbox 
+                    is a Firecracker microVM) to agent-sandbox's runtime flexibility (runc/gVisor/Kata).</li>
+                    <li><strong>Lesson 07 (Daytona):</strong> 
+                    <a href="https://www.daytona.io/docs" target="_blank">Daytona Docs</a> — 
+                    Multi-tier isolation (container/VM/GPU), job-based architecture. Compare Daytona's 
+                    container-default + VM opt-in to microsandbox's libkrun-only approach.</li>
+                    <li><strong>Lesson 08 (Modal):</strong> 
+                    <a href="https://modal.com/docs/guide/sandboxes" target="_blank">Modal Sandboxes</a> — 
+                    gVisor-first serverless. Compare Modal's managed serverless model to beta9's self-hostable 
+                    AGPL-3.0 serverless.</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <h3>Next Steps</h3>
+                <p>
+                    In <strong>Lesson 10</strong>, you'll learn Ray Core: tasks, actors, object store, and GCS. 
+                    Ray is the orchestration layer used by verl, OpenRLHF, and SkyRL (lessons 13) for distributed 
+                    RL rollouts. You'll understand how Ray's async actor pools fit eval harnesses, when the object 
+                    store helps vs when it bottlenecks, and how to build a Ray-based sandbox pool manager on top 
+                    of E2B, agent-sandbox, or Firecracker.
+                </p>
+            </div>
+        </section>
+
+        <footer>
+            <p>
+                Part of the <a href="../curriculum.md">Eval Infrastructure Deep Dive</a> series by Ivan Leo.
+            </p>
+            <p>
+                <a href="../08-modal-sandboxes/">← Lesson 08: Modal Sandboxes</a> | 
+                <a href="../">← Back to Curriculum</a>
+            </p>
+        </footer>
+    </div>
+
+    <script src="quiz.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#3b82f6',
+                primaryTextColor: '#f1f5f9',
+                primaryBorderColor: '#1e293b',
+                lineColor: '#8b5cf6',
+                secondaryColor: '#334155',
+                tertiaryColor: '#1e293b',
+                background: '#0f172a',
+                mainBkg: '#1e293b',
+                secondBkg: '#334155',
+                labelTextColor: '#f1f5f9',
+                textColor: '#f1f5f9'
+            }
+        });
+    </script>
+</body>
+</html>

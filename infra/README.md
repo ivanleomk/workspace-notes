@@ -14,6 +14,8 @@ This series teaches you how to build production-grade eval infrastructure from f
 6. **[Lesson 05: Snapshot/Restore and Forking Agent State](05-snapshot-restore-forking/)** — Warm pools, userfaultfd, and GRPO-style forking ✅
 7. **[Lesson 06: E2B's Open-Source Runtime Architecture](06-e2b-runtime/)** — Production snapshot/fork system with control/data plane separation ✅
 8. **[Lesson 07: Daytona Architecture and Container vs VM Classes](07-daytona/)** — Multi-class isolation (container/VM/GPU), job-based architecture, pause/resume/fork ✅
+9. **[Lesson 08: Modal Sandboxes - gVisor, Memory Snapshots, and Elasticity](08-modal-sandboxes/)** — gVisor-first serverless, filesystem and memory snapshots, SWE-bench Modal backend ✅
+10. **[Lesson 09: Other Open-Source Sandboxes](09-open-source-sandboxes/)** — microsandbox (libkrun), agent-sandbox (K8s CRDs), beta9 (AGPL serverless), Fly Machines (Firecracker) ✅
 
 ## Live Lessons
 
@@ -25,12 +27,14 @@ Visit the live interactive lessons at:
 - [Lesson 05: Snapshot/Restore and Forking Agent State](https://ivanleomk.github.io/workspace-notes/infra/05-snapshot-restore-forking/)
 - [Lesson 06: E2B's Open-Source Runtime Architecture](https://ivanleomk.github.io/workspace-notes/infra/06-e2b-runtime/)
 - [Lesson 07: Daytona Architecture and Container vs VM Classes](https://ivanleomk.github.io/workspace-notes/infra/07-daytona/)
+- [Lesson 08: Modal Sandboxes - gVisor, Memory Snapshots, and Elasticity](https://ivanleomk.github.io/workspace-notes/infra/08-modal-sandboxes/)
+- [Lesson 09: Other Open-Source Sandboxes](https://ivanleomk.github.io/workspace-notes/infra/09-open-source-sandboxes/)
 
 ## What You'll Learn
 
 - **Phase 1 (Lessons 01–04):** Linux isolation primitives — namespaces, cgroups, seccomp, overlayfs, runc, gVisor, Kata, Firecracker
 - **Phase 2 (Lessons 05–06):** Snapshot/restore and forking agent state with Firecracker and E2B
-- **Phase 3 (Lessons 07–09):** Hosted sandbox platforms — Daytona, Modal, kubernetes-sigs/agent-sandbox
+- **Phase 3 (Lessons 07–09):** Hosted and open-source sandbox platforms — Daytona, Modal, microsandbox, agent-sandbox, beta9, Fly Machines
 - **Phase 4 (Lessons 10–13):** Ray orchestration for multi-GPU RL — tasks, actors, placement groups, KubeRay, fault tolerance
 - **Phase 5 (Lessons 14–17):** Real eval harnesses — SWE-bench, Inspect AI, OpenHands, warm pools, image caching
 - **Phase 6 (Lessons 18–20):** Production concerns — exec protocols, retries, idempotency, observability, cost control
