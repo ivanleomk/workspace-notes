@@ -1,5 +1,6 @@
 // Chart.js configurations for TruthfulQA visualizations
-// All data are from the paper or clearly marked as approximate when read from figures
+// Scaling data are exact values from Table 4 (Appendix B.2)
+// Other values are marked as approximate when read from figures
 
 // Chart colors
 const colors = {
@@ -40,35 +41,37 @@ const commonOptions = {
 };
 
 // Inverse Scaling Chart (Figure 2, top panel)
-// Values are approximate, read from the chart
+// Values are exact % True from Table 4 (Appendix B.2)
 const inverseScalingCtx = document.getElementById('inverseScalingChart');
 if (inverseScalingCtx) {
     new Chart(inverseScalingCtx, {
         type: 'line',
         data: {
-            labels: ['125M/117M/350M', '1.3B/1.5B', '2.7B/6.7B', '6B/175B'],
+            labels: ['125M/117M/60M/350M', '1.3B/220M/1.5B', '2.7B/770M', '6B/2.8B/6.7B', '175B'],
             datasets: [
                 {
                     label: 'GPT-3',
-                    data: [40, 42, 36, 30],
+                    data: [37.0, 31.9, null, 23.6, 20.4],
                     borderColor: colors.gpt3,
                     backgroundColor: colors.gpt3 + '33',
                     tension: 0.3,
                     pointRadius: 6,
-                    pointHoverRadius: 8
+                    pointHoverRadius: 8,
+                    spanGaps: true
                 },
                 {
                     label: 'GPT-Neo/J',
-                    data: [40, 35, 30, 23],
+                    data: [43.6, 37.9, 40.0, 26.8, null],
                     borderColor: colors.gptNeoJ,
                     backgroundColor: colors.gptNeoJ + '33',
                     tension: 0.3,
                     pointRadius: 6,
-                    pointHoverRadius: 8
+                    pointHoverRadius: 8,
+                    spanGaps: true
                 },
                 {
                     label: 'GPT-2',
-                    data: [38, null, null, 36],
+                    data: [35.4, null, null, null, 29.3],
                     borderColor: colors.gpt2,
                     backgroundColor: colors.gpt2 + '33',
                     tension: 0.3,
@@ -78,7 +81,7 @@ if (inverseScalingCtx) {
                 },
                 {
                     label: 'UnifiedQA',
-                    data: [48, null, 52, null],
+                    data: [58.0, 56.9, 49.7, 54.0, null],
                     borderColor: colors.unifiedQA,
                     backgroundColor: colors.unifiedQA + '33',
                     tension: 0.3,
@@ -101,7 +104,7 @@ if (inverseScalingCtx) {
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return context.dataset.label + ': ' + context.parsed.y + '% true (approximate)';
+                            return context.dataset.label + ': ' + context.parsed.y + '% true (exact, Table 4)';
                         }
                     }
                 }
@@ -112,7 +115,7 @@ if (inverseScalingCtx) {
                     ...commonOptions.scales.y,
                     title: {
                         display: true,
-                        text: '% Truthful (Approximate from Figure 2)',
+                        text: '% Truthful (Exact values from Table 4)',
                         color: colors.text
                     },
                     min: 0,
@@ -272,7 +275,7 @@ if (controlQuestionsCtx) {
     });
 }
 
-// Prompt Effects Chart (Figure 4a - approximate for QA and Harm, exact for Helpful)
+// Prompt Effects Chart (Table 4 - exact values)
 const promptEffectsCtx = document.getElementById('promptEffectsChart');
 if (promptEffectsCtx) {
     new Chart(promptEffectsCtx, {
@@ -282,7 +285,7 @@ if (promptEffectsCtx) {
             datasets: [
                 {
                     label: 'GPT-3-175B % True',
-                    data: [30, 58, 20, 94],
+                    data: [20.4, 58.1, 12.5, 94],
                     backgroundColor: [
                         colors.gpt3 + 'bb',
                         colors.gpt3 + 'bb',
@@ -316,12 +319,9 @@ if (promptEffectsCtx) {
                     callbacks: {
                         label: function(context) {
                             if (context.label === 'Human Baseline') {
-                                return 'Human: ' + context.parsed.y + '% true (exact from Section 4.1)';
+                                return 'Human: ' + context.parsed.y + '% true (exact, Table 4)';
                             }
-                            if (context.label === 'Helpful Prompt') {
-                                return 'GPT-3-175B: ' + context.parsed.y + '% true (exact from Section 4.1)';
-                            }
-                            return 'GPT-3-175B: ~' + context.parsed.y + '% true (approximate from Figure 4a)';
+                            return 'GPT-3-175B: ' + context.parsed.y + '% true (exact, Table 4)';
                         }
                     }
                 }
