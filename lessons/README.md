@@ -271,6 +271,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 10: Tülu 3 - Open Post-Training](https://ivanleomk.github.io/workspace-notes/10-tulu3-open-post-training/)
 - [Lesson 11: IFEval - Instruction-Following Evaluation](https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/)
 - [Lesson 12: DeepSeek-R1 - Reasoning via RL](https://ivanleomk.github.io/workspace-notes/12-deepseek-r1-reasoning-rl/)
+- [Lesson 13: TruthfulQA - Imitative Falsehoods](https://ivanleomk.github.io/workspace-notes/13-truthfulqa-imitation-falsehoods/)
 
 ### 💻 Local Serving (for development)
 ```bash
@@ -295,6 +296,29 @@ Open `lessons/XX-topic-name/index.html` directly in a browser (most features wil
 ## Curriculum Progress
 
 See [`curriculum.md`](curriculum.md) for the full roadmap and completion tracking.
+
+### Lesson 13 - TruthfulQA: Imitative Falsehoods ✅
+- **Track:** A (Foundations)
+- **Paper:** TruthfulQA: Measuring How Models Mimic Human Falsehoods (Lin, Hilton, Evans, ACL 2022)
+- **Path:** [`13-truthfulqa-imitation-falsehoods/`](13-truthfulqa-imitation-falsehoods/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/13-truthfulqa-imitation-falsehoods/](https://ivanleomk.github.io/workspace-notes/13-truthfulqa-imitation-falsehoods/)
+- **Topics:**
+  - Imitative falsehoods: models learn human misconceptions from web text
+  - Benchmark design: 817 questions, 38 categories, adversarially crafted
+  - Generation task vs multiple-choice (MC1/MC2) variants
+  - Metrics: truthfulness, informativeness, true+informative, GPT-judge
+  - Inverse scaling: larger models less truthful (GPT-Neo/J-6B: 23% vs 125M: 40%)
+  - Human baseline (94%) vs best model (GPT-3-175B helpful: 58%)
+  - Why next-token imitation fails at truthfulness
+  - Connection to post-training: RLHF/DPO/CAI as solutions
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Category explorer: 6 categories with real TruthfulQA examples
+  - Inverse scaling chart showing model size vs truthfulness
+  - Human vs model performance comparison
+  - Control questions showing positive scaling returns
+  - Prompt effects visualization
+- **Status:** Complete
 
 ## Contributing
 
