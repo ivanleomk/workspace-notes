@@ -36,9 +36,8 @@
             </p>
             <p>
                 But what if you need <strong>self-hosted control</strong>? Maybe you're running evals on bare metal 
-                for cost efficiency (spot instances at $0.02/hr vs $0.00005/sec), or you need HIPAA compliance and 
-                can't send data to third-party clouds, or you're extending an existing Kubernetes cluster and want 
-                to reuse its networking and storage primitives.
+                for cost efficiency, or you need HIPAA compliance and can't send data to third-party clouds, or 
+                you're extending an existing Kubernetes cluster and want to reuse its networking and storage primitives.
             </p>
             <p>
                 This lesson surveys four sandbox systems that span the spectrum from <strong>embeddable libraries</strong> 
@@ -121,7 +120,8 @@
             </p>
             <ul>
                 <li><strong>100ms cold starts:</strong> From README "Average boot times under 100 milliseconds" 
-                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>). Not 
+                (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>). 
+                README footnote clarifies: "Boot time refers to guest boot on an M1 machine." Not 
                 independently verified; actual latency depends on image size, host CPU, and hypervisor.</li>
                 <li><strong>Fork & snapshot:</strong> README states "Fork & Snapshot: Fork live sandboxes. Save 
                 running sandbox state and restore later" (<a href="https://github.com/superradcompany/microsandbox" target="_blank">source</a>).</li>
@@ -131,7 +131,7 @@
 
             <h3>Architecture: Single-Process Runtime</h3>
             <p>
-                microsandbox's architecture changed significantly in a 2024 rewrite 
+                microsandbox's architecture changed significantly in a March 2026 rewrite 
                 (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>). 
                 The previous design had a two-process model (supervisor + VM process) and required a 
                 <code>microsandbox-server</code> daemon. The new design uses a <strong>single-process runtime</strong>:
@@ -185,10 +185,13 @@ graph TB
             <h3>How It Works: libkrun, smoltcp, and Composable Filesystems</h3>
             <p>
                 <strong>libkrun:</strong> A minimal KVM-based VMM forked from 
-                <a href="https://github.com/containers/libkrun" target="_blank">containers/libkrun</a>. microsandbox 
-                maintains a fork with additional patches 
-                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>). 
-                libkrun boots a Linux kernel (bundled as <code>libkrunfw</code>) and virtio devices (net, block, vsock).
+                <a href="https://github.com/containers/libkrun" target="_blank">containers/libkrun</a>. Per 
+                <a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>, 
+                microsandbox maintains a fork at 
+                <a href="https://github.com/zerocore-ai/libkrun" target="_blank">github.com/zerocore-ai/libkrun</a> 
+                with additional patches for smoltcp networking integration and single-process architecture. 
+                libkrun boots a Linux kernel and virtio devices (net, block, vsock). <code>vendor/libkrunfw/</code> 
+                in the microsandbox repository packages the firmware and kernel images used by libkrun, not the VMM fork itself.
             </p>
             <p>
                 <strong>smoltcp networking:</strong> From 
@@ -240,18 +243,23 @@ graph TB
                 main branch as of October 2026. Verify paths against current code.
             </p>
             <ul>
-                <li><code>crates/microsandbox/</code>: Core SDK crate (Rust). Builder-pattern API for sandbox 
-                lifecycle, filesystem operations, volume management, network policy.</li>
+                <li><code>crates/cli/</code>: CLI (<code>msb</code>) for <code>run</code>, <code>exec</code>, 
+                <code>shell</code>, <code>image pull</code>, <code>volume create</code>, etc.</li>
                 <li><code>crates/runtime/</code>: Single-process VM runtime. Configures libkrun VMM, runs agent 
                 relay on Unix socket, manages heartbeat and exit observers.</li>
                 <li><code>crates/filesystem/</code>: Four composable virtio-fs backends (PassthroughFs, MemFs, 
                 OverlayFs, DualFs).</li>
-                <li><code>crates/cli/</code>: CLI (<code>msb</code>) for <code>run</code>, <code>exec</code>, 
-                <code>shell</code>, <code>image pull</code>, <code>volume create</code>, etc.</li>
-                <li><code>sdk/typescript/</code>, <code>sdk/python/</code>, <code>sdk/go/</code>: Language bindings 
-                that wrap the Rust core.</li>
-                <li><code>vendor/libkrunfw/</code>: Forked libkrun with microsandbox-specific patches 
-                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>).</li>
+                <li><code>crates/agentd/</code>: Guest agent (PID 1 inside microVM).</li>
+                <li><code>crates/image/</code>: OCI image pulling with layer downloads, extraction, and caching.</li>
+                <li><code>crates/network/</code>: smoltcp-based user-space networking stack with DNS interception 
+                and TLS MITM support.</li>
+                <li><code>crates/protocol/</code>: CBOR-over-virtio-console wire protocol between host and guest agent.</li>
+                <li><code>sdk/node-ts/</code>, <code>sdk/python/</code>, <code>sdk/go/</code>, <code>sdk/rust/</code>, 
+                <code>sdk/ruby/</code>: Language SDKs that wrap the Rust core.</li>
+                <li><code>vendor/libkrunfw/</code>: Packages the Linux kernel and firmware used by libkrun 
+                (<a href="https://github.com/superradcompany/microsandbox/pull/455" target="_blank">PR #455</a>). 
+                The libkrun VMM fork itself is at 
+                <a href="https://github.com/zerocore-ai/libkrun" target="_blank">github.com/zerocore-ai/libkrun</a>.</li>
             </ul>
 
             <h3>When to Use microsandbox</h3>
@@ -353,22 +361,23 @@ graph TB
             </div>
             <p class="diagram-caption">
                 <strong>Figure 2:</strong> agent-sandbox's warm pool workflow. SandboxWarmPool pre-warms pods 
-                (labeled <code>agents.x-k8s.io/pool=&lt;name&gt;</code>). When a SandboxClaim is created, the 
-                controller claims a pod from the pool (relabels it to <code>sandbox-name-hash</code>), and the 
-                WarmPool manager creates a replacement pod to maintain replica count.
+                (labeled <code>agents.x-k8s.io/warm-pool-sandbox</code>). When a SandboxClaim is created, the 
+                controller claims a pod from the pool, and the WarmPool manager creates a replacement pod to 
+                maintain replica count.
             </p>
 
             <h3>How It Works: Warm Pools and Claims</h3>
             <p>
                 <strong>Step 1: Define a SandboxTemplate</strong> (admin-owned blueprint):
             </p>
-            <pre><code class="language-yaml">apiVersion: extensions.agents.x-k8s.io/v1beta1
+            <pre><code class="language-yaml"># Save as python-template.yaml
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: python-runtime-template
   namespace: agent-sandbox-demo
 spec:
-  template:
+  podTemplate:
     spec:
       runtimeClassName: gvisor  # or kata, or omit for runc
       containers:
@@ -391,7 +400,7 @@ spec:
   sandboxTemplateRef:
     name: python-runtime-template</code></pre>
             <p>
-                The WarmPool controller creates 2 pods with label <code>agents.x-k8s.io/pool=python-warmpool</code>. 
+                The WarmPool controller creates 2 pods with label <code>agents.x-k8s.io/warm-pool-sandbox</code>. 
                 These pods are running and ready (image already pulled, container started).
             </p>
             <p>
@@ -406,10 +415,8 @@ spec:
   warmPoolRef:
     name: python-warmpool</code></pre>
             <p>
-                The controller claims one pod from the pool, relabels it to 
-                <code>agents.x-k8s.io/sandbox-name-hash=quickstart-test-abc123</code>, and creates a 
-                <code>Sandbox</code> resource. The WarmPool manager automatically creates a replacement pod to 
-                maintain <code>replicas: 2</code>.
+                The controller claims one pod from the pool and creates a <code>Sandbox</code> resource. The 
+                WarmPool manager automatically creates a replacement pod to maintain <code>replicas: 2</code>.
             </p>
             <p>
                 <strong>Performance:</strong> From 
@@ -453,9 +460,10 @@ spec:
                 <li><code>k8s/crds/extensions.agents.x-k8s.io_sandboxclaims.yaml</code>: SandboxClaim CRD.</li>
                 <li><code>extensions/controllers/sandboxwarmpool_controller.go</code>: WarmPool controller logic 
                 (pre-warms pods, maintains replicas, handles claims).</li>
-                <li><code>extensions/examples/</code>: Reference YAML for templates, warm pools, and claims 
-                (<a href="https://github.com/kubernetes-sigs/agent-sandbox/tree/a53327b0/extensions/examples" target="_blank">examples directory</a>).</li>
-                <li><code>clients/python/agentic-sandbox-client/</code>: Python SDK for programmatic sandbox management.</li>
+                <li><code>examples/</code>: Reference YAML for templates, warm pools, and claims 
+                (e.g., <a href="https://github.com/kubernetes-sigs/agent-sandbox/tree/main/examples/warmpool-quickstart" target="_blank">warmpool-quickstart</a>).</li>
+                <li><code>clients/python/agentic-sandbox-client/</code>: Python SDK source directory. Install with 
+                <code>pip install k8s-agent-sandbox</code>.</li>
                 <li><code>clients/go/</code>: Go SDK (client-go style).</li>
             </ul>
 
@@ -471,11 +479,11 @@ spec:
                 claim sandboxes from shared pools, with per-tenant quotas and RBAC.</li>
             </ul>
             <p>
-                <strong>Trade-offs:</strong> Requires Kubernetes (no standalone deployment). No pause/resume/fork 
-                built into the CRDs (you'd implement that at the pod level if using Kata with CRIU, or handle it 
-                in your application). No GPU-specific scheduling documented (use Kubernetes device plugins for GPUs). 
-                For serverless autoscaling (0 to N pods), you'd layer Knative or KEDA on top of agent-sandbox, or 
-                use a platform like beta9 (next section).
+                <strong>Trade-offs:</strong> Requires Kubernetes (no standalone deployment). No fork built into the 
+                CRDs (not documented as a feature). Pause/resume (hibernation with automatic resume on network 
+                activity) is supported as part of the Sandbox lifecycle. No GPU-specific scheduling documented 
+                (use Kubernetes device plugins for GPUs). For serverless autoscaling (0 to N pods), you'd layer 
+                Knative or KEDA on top of agent-sandbox, or use a platform like beta9 (next section).
             </p>
         </section>
 
@@ -825,6 +833,7 @@ graph TB
                         <th>agent-sandbox</th>
                         <th>beta9</th>
                         <th>Fly Machines</th>
+                        <th>Daytona (L07)</th>
                         <th>E2B (L06)</th>
                         <th>Modal (L08)</th>
                     </tr>
@@ -836,24 +845,27 @@ graph TB
                         <td>runc/gVisor/Kata (K8s RuntimeClass)</td>
                         <td>Container runtime (custom)</td>
                         <td>Firecracker microVM</td>
+                        <td>Container (default), VM, or GPU</td>
                         <td>Firecracker microVM</td>
                         <td>gVisor (default) or VM</td>
                     </tr>
                     <tr>
                         <td><strong>Pause / resume</strong></td>
                         <td>✅ Yes (snapshot/restore)</td>
-                        <td>⚠️ Runtime-dependent (Kata+CRIU: yes; runc: no)</td>
+                        <td>✅ Yes (hibernation, automatic resume)</td>
                         <td>❌ No (not documented)</td>
                         <td>✅ Yes (Firecracker snapshot)</td>
+                        <td>⚠️ VM only (not container/GPU)</td>
                         <td>✅ Yes</td>
                         <td>❌ No (Sandboxes); ✅ Yes (Functions)</td>
                     </tr>
                     <tr>
                         <td><strong>Fork</strong></td>
                         <td>✅ Yes</td>
-                        <td>⚠️ Runtime-dependent</td>
+                        <td>❌ No (not documented)</td>
                         <td>❌ No</td>
                         <td>⚠️ Sprites (beta)</td>
+                        <td>⚠️ VM only (not container/GPU)</td>
                         <td>✅ Yes (up to 20 children)</td>
                         <td>❌ No</td>
                     </tr>
@@ -863,6 +875,7 @@ graph TB
                         <td>✅ Yes (SandboxWarmPool CRD)</td>
                         <td>✅ Yes (serverless scale-to-zero)</td>
                         <td>⚠️ Implicit (fast start/stop)</td>
+                        <td>❌ No (not documented)</td>
                         <td>✅ Yes (template snapshots)</td>
                         <td>✅ Yes (serverless autoscale)</td>
                     </tr>
@@ -872,6 +885,7 @@ graph TB
                         <td>✅ Yes (K8s device plugins)</td>
                         <td>✅ Yes (GPU workers)</td>
                         <td>✅ Yes (GPU Machines)</td>
+                        <td>✅ Yes (exclusive allocation)</td>
                         <td>❌ No</td>
                         <td>✅ Yes (gVisor nvproxy)</td>
                     </tr>
@@ -881,6 +895,7 @@ graph TB
                         <td>Sub-2s with warm pool (vendor claim); 10-30s cold</td>
                         <td>&lt;1s (vendor claim)</td>
                         <td>Sub-second (vendor claim)</td>
+                        <td>&lt;90ms container; &lt;1s VM resume (vendor claims)</td>
                         <td>~80ms template restore (vendor claim)</td>
                         <td>Sub-second with cache (vendor claim)</td>
                     </tr>
@@ -890,6 +905,7 @@ graph TB
                         <td>✅ Yes (K8s operator)</td>
                         <td>✅ Yes (AGPL, Helm chart)</td>
                         <td>❌ No (hosted only)</td>
+                        <td>⚠️ OSS archived (v0.190.0, June 2026)</td>
                         <td>✅ Yes (Apache-2.0 OSS)</td>
                         <td>❌ No (managed)</td>
                     </tr>
@@ -899,6 +915,7 @@ graph TB
                         <td>Apache-2.0</td>
                         <td>AGPL-3.0</td>
                         <td>N/A (proprietary)</td>
+                        <td>AGPL-3.0 (archived); now proprietary</td>
                         <td>Apache-2.0</td>
                         <td>N/A (proprietary)</td>
                     </tr>
@@ -908,6 +925,7 @@ graph TB
                         <td>Python, Go, kubectl</td>
                         <td>Python</td>
                         <td>flyctl CLI, REST API</td>
+                        <td>Python, TS</td>
                         <td>Python, TS, Go</td>
                         <td>Python, TS</td>
                     </tr>
@@ -917,6 +935,7 @@ graph TB
                         <td>K8s-native warm pools, multi-tenant, runtime flexibility</td>
                         <td>Self-hosted serverless, GPU workloads, AGPL-compatible</td>
                         <td>Hosted platform reference, Firecracker best practices</td>
+                        <td>Multi-tier isolation (container/VM/GPU)</td>
                         <td>VM-only, pause/resume/fork, Apache-2.0 OSS</td>
                         <td>Elastic serverless, GPU, gVisor, managed</td>
                     </tr>
@@ -969,12 +988,12 @@ graph TB
         </section>
 
         <section id="exercise" class="content-section">
-            <h2>Build It Yourself: agent-sandbox on kind</h2>
+            <h2>Build It Yourself: agent-sandbox on kind with Python SDK</h2>
             <p>
                 In this exercise, you'll deploy agent-sandbox on a local kind (Kubernetes in Docker) cluster, create 
-                a SandboxTemplate and SandboxWarmPool, claim a sandbox, and measure allocation latency. This 
-                demonstrates warm-pool fast allocation (sub-2 seconds, vendor claim) vs cold-pod startup (10-30 
-                seconds).
+                a SandboxTemplate and SandboxWarmPool, measure warm-pool allocation latency using the Python SDK, and 
+                compare it to cold-pod startup. You'll record your own timings to see warm-pool fast allocation vs 
+                cold-pod image pull and container start.
             </p>
 
             <div class="info-box warning">
@@ -985,19 +1004,15 @@ graph TB
                     <a href="https://kubernetes.io/docs/tasks/tools/" target="_blank">install kubectl</a>.</li>
                     <li><strong>kind:</strong> <code>brew install kind</code> or 
                     <a href="https://kind.sigs.k8s.io/docs/user/quick-start/" target="_blank">install kind</a>.</li>
-                    <li><strong>Python 3.10+</strong> (for SDK test, optional).</li>
+                    <li><strong>Python 3.11+</strong> for the SDK (<code>pip install k8s-agent-sandbox</code>).</li>
                 </ul>
                 <p>
-                    <strong>Time estimate:</strong> 15-20 minutes (5 min cluster setup, 10 min agent-sandbox 
-                    install, 5 min testing). If kind image download is slow, add 5-10 minutes for the initial pull.
-                </p>
-                <p>
-                    <strong>Note:</strong> This exercise uses agent-sandbox from 
-                    <a href="https://github.com/kubernetes-sigs/agent-sandbox" target="_blank">kubernetes-sigs/agent-sandbox</a>. 
+                    <strong>Note:</strong> This exercise uses the 
+                    <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/" target="_blank">k8s-agent-sandbox Python client</a>. 
                     Follow the 
                     <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart README</a> 
-                    for up-to-date install commands. The commands below are from the quickstart as of October 2026; 
-                    verify against current docs.
+                    for up-to-date install commands. The commands below are from the quickstart and client README as 
+                    of October 2026; verify against current docs.
                 </p>
             </div>
 
@@ -1012,18 +1027,18 @@ kubectl get nodes</code></pre>
             <h3>Step 2: Install agent-sandbox Controllers</h3>
             <p>
                 From the 
-                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>:
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>, 
+                install using the release YAML or <code>kubectl kustomize k8s/</code>:
             </p>
             <pre><code class="language-bash"># Clone the agent-sandbox repository
 git clone https://github.com/kubernetes-sigs/agent-sandbox.git
 cd agent-sandbox
 
-# Apply CRDs and controllers
-kubectl apply --server-side=true -f k8s/crds/
-kubectl apply -f k8s/manager/
+# Apply CRDs and controllers using kustomize
+kubectl apply -k k8s/
 
-# Wait for controllers to be ready
-kubectl wait --for=condition=Available deployment/agent-sandbox-controller-manager \
+# Wait for controller to be ready
+kubectl wait --for=condition=Available deployment/agent-sandbox-controller \
   -n agent-sandbox-system --timeout=120s</code></pre>
 
             <h3>Step 3: Create a SandboxTemplate</h3>
@@ -1037,7 +1052,7 @@ metadata:
   name: python-runtime-template
   namespace: default
 spec:
-  template:
+  podTemplate:
     spec:
       # runtimeClassName: gvisor  # Uncomment if gVisor is installed
       containers:
@@ -1071,89 +1086,145 @@ spec:
             <pre><code class="language-bash">kubectl apply -f python-warmpool.yaml
 
 # Wait for warm pool pods to be ready
-kubectl wait --for=condition=Ready pod -l agents.x-k8s.io/pool=python-warmpool --timeout=60s
+kubectl wait --for=condition=Ready pod -l agents.x-k8s.io/warm-pool-sandbox --timeout=60s
 
 # Verify pre-warmed pods
-kubectl get pods -l agents.x-k8s.io/pool=python-warmpool</code></pre>
+kubectl get pods -l agents.x-k8s.io/warm-pool-sandbox</code></pre>
             <p>
-                <strong>Expected output:</strong> 2 pods with <code>STATUS Running</code> and 
-                <code>READY 1/1</code>.
+                You should see 2 pods with <code>STATUS Running</code> and <code>READY 1/1</code>.
             </p>
 
-            <h3>Step 5: Claim a Sandbox from the Warm Pool</h3>
-            <pre><code class="language-yaml"># Save as sandbox-claim.yaml
-apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxClaim
-metadata:
-  name: quickstart-test
-  namespace: default
-spec:
-  warmPoolRef:
-    name: python-warmpool</code></pre>
-            <pre><code class="language-bash"># Measure allocation latency
-time kubectl apply -f sandbox-claim.yaml
-
-# Wait for sandbox to be ready
-kubectl wait --for=condition=Ready sandbox/quickstart-test --timeout=60s
-
-# Verify sandbox was claimed
-kubectl get sandbox quickstart-test
-kubectl get pods -l agents.x-k8s.io/pool=python-warmpool  # Should show 2 pods (1 claimed, 1 replacement)</code></pre>
+            <h3>Step 5: Install the Python SDK and Deploy Router (Untested)</h3>
             <p>
-                <strong>Expected latency:</strong> Sub-2 seconds (vendor claim from 
-                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>) 
-                for the <code>kubectl apply</code> command to return. The sandbox is allocated from the pre-warmed 
-                pool (pod already running), so no image pull or container start is needed. The WarmPool controller 
-                creates a replacement pod automatically to maintain <code>replicas: 2</code>.
+                <strong>Note:</strong> This step and the following Python code are <strong>untested</strong> and 
+                based on the 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/README.md" target="_blank">client README</a> 
+                and 
+                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/test_client.py" target="_blank">test_client.py</a>. 
+                Verify against current documentation and report any issues.
+            </p>
+            <pre><code class="language-bash"># Create a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install the k8s-agent-sandbox client
+pip install k8s-agent-sandbox
+
+# Deploy the sandbox-router (required for SDK connectivity)
+# Follow https://github.com/kubernetes-sigs/agent-sandbox/tree/main/sandbox-router/deploy
+kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/agent-sandbox/main/sandbox-router/deploy/router.yaml</code></pre>
+
+            <h3>Step 6: Measure Warm-Pool Allocation Latency (Python SDK, Untested)</h3>
+            <p>
+                Create a Python script to claim a sandbox from the warm pool and measure allocation time through to 
+                Ready. Save as <code>test_warmpool_timing.py</code>:
+            </p>
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""Measure warm-pool allocation latency using k8s-agent-sandbox Python client."""
+import time
+from k8s_agent_sandbox import SandboxClient
+from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
+
+# Connect to agent-sandbox via local tunnel (kubectl port-forward)
+client = SandboxClient(
+    connection_config=SandboxLocalTunnelConnectionConfig(
+        router_namespace="agent-sandbox-system",  # Where sandbox-router is deployed
+        kubeconfig_path=None  # Uses default ~/.kube/config
+    )
+)
+
+print("=== Warm-Pool Allocation Test ===")
+print("Creating sandbox from warm pool...")
+
+start_time = time.time()
+
+# create_sandbox claims a pod from the warm pool
+# The SDK waits for the sandbox to be Ready before returning
+sandbox = client.create_sandbox(warmpool="python-warmpool", namespace="default")
+
+allocation_time = time.time() - start_time
+
+print(f"Sandbox ready: {sandbox.name}")
+print(f"Allocation time: {allocation_time:.2f} seconds")
+print(f"This includes: API call, warm pod claim, and SDK wait for Ready condition.")
+print("\nRecord your timing here: ___________ seconds\n")
+
+# Test the sandbox is working
+result = sandbox.commands.run("python3 -c 'print(\"Hello from warm pool\")'")
+print(f"Test output: {result.stdout.strip()}")
+
+# Clean up
+sandbox.terminate()
+client.close()
+
+print("\n=== Test Complete ===")
+</code></pre>
+            <pre><code class="language-bash">python3 test_warmpool_timing.py</code></pre>
+            <p>
+                <strong>Record your timing:</strong> Write down the allocation time reported by the script. With a 
+                warm pool, the pod is already running (image pulled, container started), so allocation should be fast 
+                (sub-2 seconds per the quickstart vendor claim, but your results may vary based on local kind 
+                performance).
             </p>
 
-            <h3>Step 6: Exec a Command in the Sandbox (Optional)</h3>
-            <pre><code class="language-bash"># Get the pod name for the claimed sandbox
-POD_NAME=$(kubectl get sandbox quickstart-test -o jsonpath='{.metadata.annotations.agents\.x-k8s\.io/pod-name}')
-
-echo "Sandbox pod: $POD_NAME"
-
-# Exec into the sandbox
-kubectl exec -it $POD_NAME -- python3 -c "print('Hello from warm pool sandbox')"</code></pre>
-
-            <h3>Step 7: Measure Cold-Pod Allocation (No Warm Pool)</h3>
+            <h3>Step 7: Measure Cold-Pod Allocation Latency (Python SDK, Untested)</h3>
             <p>
-                To compare, create a sandbox <em>without</em> a warm pool:
+                Now measure allocation time <em>without</em> a warm pool. Create a second script 
+                <code>test_cold_timing.py</code>:
             </p>
-            <pre><code class="language-yaml"># Save as cold-sandbox.yaml
-apiVersion: agents.x-k8s.io/v1beta1
-kind: Sandbox
-metadata:
-  name: cold-test
-  namespace: default
-spec:
-  template:
-    spec:
-      containers:
-      - name: sandbox
-        image: python:3.11-slim
-        command: ["sleep", "infinity"]
-        resources:
-          requests:
-            cpu: "1"
-            memory: "2Gi"</code></pre>
-            <pre><code class="language-bash"># Measure allocation latency
-time kubectl apply -f cold-sandbox.yaml
+            <pre><code class="language-python">#!/usr/bin/env python3
+"""Measure cold-pod allocation latency (no warm pool)."""
+import time
+from k8s_agent_sandbox import SandboxClient
+from k8s_agent_sandbox.models import SandboxLocalTunnelConnectionConfig
 
-kubectl wait --for=condition=Ready sandbox/cold-test --timeout=60s
-kubectl get sandbox cold-test</code></pre>
+client = SandboxClient(
+    connection_config=SandboxLocalTunnelConnectionConfig(
+        router_namespace="agent-sandbox-system",
+        kubeconfig_path=None
+    )
+)
+
+print("=== Cold-Pod Allocation Test ===")
+print("Creating sandbox without warm pool...")
+print("This will schedule a new pod, pull the image (if not cached), and start the container.\n")
+
+start_time = time.time()
+
+# Create sandbox directly from template (no warm pool)
+# The SDK creates a Sandbox CRD and waits for pod to be Ready
+sandbox = client.create_sandbox(template="python-runtime-template", namespace="default")
+
+allocation_time = time.time() - start_time
+
+print(f"Sandbox ready: {sandbox.name}")
+print(f"Allocation time: {allocation_time:.2f} seconds")
+print(f"This includes: API call, pod scheduling, image pull (if not cached), container start, and SDK wait for Ready.")
+print("\nRecord your timing here: ___________ seconds\n")
+
+# Test the sandbox
+result = sandbox.commands.run("python3 -c 'print(\"Hello from cold pod\")'")
+print(f"Test output: {result.stdout.strip()}")
+
+# Clean up
+sandbox.terminate()
+client.close()
+
+print("\n=== Test Complete ===")
+print("\nCompare your two timings:")
+print("Warm-pool allocation: ___________ seconds")
+print("Cold-pod allocation: ___________ seconds")
+print("\nThe warm pool should be significantly faster (image already pulled, pod already running).")
+</code></pre>
+            <pre><code class="language-bash">python3 test_cold_timing.py</code></pre>
             <p>
-                <strong>Expected latency:</strong> 10-30 seconds (vendor claim from 
-                <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/examples/quickstart/README.md" target="_blank">quickstart</a>) 
-                because the pod must be scheduled, the image must be pulled (if not cached), and the container must 
-                start. On kind with a warm Docker image cache, you might see &lt;10 seconds. Without cache, expect 
-                15-30 seconds for the <code>python:3.11-slim</code> image pull.
+                <strong>Record your timing:</strong> Write down the allocation time. On kind with a warm Docker image 
+                cache, you might see 5-15 seconds. Without cache (first pull of <code>python:3.11-slim</code>), 
+                expect 15-30+ seconds depending on network speed.
             </p>
 
             <h3>Step 8: Clean Up</h3>
-            <pre><code class="language-bash"># Delete sandboxes and warm pool
-kubectl delete sandboxclaim quickstart-test
-kubectl delete sandbox cold-test
+            <pre><code class="language-bash"># Delete warm pool and template
 kubectl delete sandboxwarmpool python-warmpool
 kubectl delete sandboxtemplate python-runtime-template
 
@@ -1164,30 +1235,30 @@ kind delete cluster --name agent-sandbox-demo</code></pre>
             <ul>
                 <li>How to deploy agent-sandbox on a local kind cluster with CRDs and controllers</li>
                 <li>How to define a SandboxTemplate (reusable blueprint) and create a SandboxWarmPool (pre-warmed pods)</li>
-                <li>How to claim a sandbox from the warm pool (sub-2 second allocation, vendor claim) vs cold-pod 
-                allocation (10-30 seconds, vendor claim)</li>
+                <li>How to use the <code>k8s-agent-sandbox</code> Python SDK to create sandboxes programmatically</li>
+                <li>How to measure warm-pool allocation (fast: pod already running) vs cold-pod allocation (slower: 
+                image pull + container start)</li>
                 <li>Why warm pools matter for eval orchestration: pre-warmed pods eliminate image pull and container 
                 start latency, enabling fast sandbox allocation for high-throughput agent pipelines</li>
-                <li>How Kubernetes RuntimeClasses (runc, gVisor, Kata) integrate with agent-sandbox for runtime flexibility</li>
+                <li>How the Python SDK (<code>SandboxClient</code>) abstracts CRD creation and waits for sandboxes 
+                to become Ready</li>
             </ul>
 
             <div class="info-box">
-                <h3>Going Further: Python SDK and Router Service</h3>
+                <h3>Troubleshooting</h3>
                 <p>
-                    agent-sandbox includes a Python SDK for programmatic sandbox management. Install it and run 
-                    sandboxes from Python:
+                    If the Python scripts fail:
                 </p>
-                <pre><code class="language-bash"># Install Python SDK
-pip install agentic-sandbox-client
-
-# Configure endpoint (requires Router Service deployed)
-export SANDBOX_ENDPOINT="http://localhost:8080"</code></pre>
-                <p>
-                    See the 
-                    <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/" target="_blank">Python SDK README</a> 
-                    for usage examples. The Router Service is an HTTP proxy that routes SDK requests to the 
-                    appropriate sandbox pod (deployed via the quickstart).
-                </p>
+                <ul>
+                    <li>Verify the sandbox-router is deployed and running: 
+                    <code>kubectl get pods -n agent-sandbox-system</code></li>
+                    <li>Check the agent-sandbox controller logs: 
+                    <code>kubectl logs -n agent-sandbox-system deployment/agent-sandbox-controller</code></li>
+                    <li>Verify warm-pool pods are Ready: 
+                    <code>kubectl get pods -l agents.x-k8s.io/warm-pool-sandbox</code></li>
+                    <li>Check the client README for updated connection config options: 
+                    <a href="https://github.com/kubernetes-sigs/agent-sandbox/blob/main/clients/python/agentic-sandbox-client/README.md" target="_blank">README.md</a></li>
+                </ul>
             </div>
         </section>
 
