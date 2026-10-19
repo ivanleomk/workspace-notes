@@ -71,7 +71,7 @@ if (inverseScalingCtx) {
                 },
                 {
                     label: 'GPT-2',
-                    data: [35.4, null, null, null, 29.3],
+                    data: [35.4, 29.3, null, null, null],
                     borderColor: colors.gpt2,
                     backgroundColor: colors.gpt2 + '33',
                     tension: 0.3,
@@ -244,8 +244,10 @@ if (controlQuestionsCtx) {
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            const suffix = context.dataset.label.includes('TruthfulQA') ? ' (baseline)' : '';
-                            return context.dataset.label + ': ' + context.parsed.y + '% true (approximate)' + suffix;
+                            if (context.dataset.label.includes('TruthfulQA')) {
+                                return context.dataset.label + ': ' + context.parsed.y + '% true (exact, Table 4)';
+                            }
+                            return context.dataset.label + ': ' + context.parsed.y + '% true (approximate)';
                         }
                     }
                 }

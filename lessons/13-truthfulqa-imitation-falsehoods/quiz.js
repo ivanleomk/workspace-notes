@@ -85,7 +85,7 @@ const quizQuestions = [
             "A GPT-2 ensemble trained on TruthfulQA reference answers; 88% accuracy on generation tasks"
         ],
         correct: 1,
-        explanation: "GPT-judge is a GPT-3-6.7B model fine-tuned to classify answers to TruthfulQA questions as true or false (Section 3.2, Section 4.4). It was trained on ~22k examples: 6.9k reference answers and 15.5k model-generated answers labeled by humans. It achieved 90-96% accuracy at predicting human evaluations on held-out models, providing a fast, reproducible alternative to manual evaluation."
+        explanation: "GPT-judge is a GPT-3-6.7B model fine-tuned to classify answers to TruthfulQA questions as true or false (Section 3.2, Section 4.4). It was trained on ≈22.4k examples (6.9k + 15.5k): 6.9k reference answers and ≈15.5k model-generated answers labeled by humans. It achieved 90-96% accuracy at predicting human evaluations on held-out models, providing a fast, reproducible alternative to manual evaluation."
     },
     {
         question: "How did the paper demonstrate that inverse scaling is due to imitative falsehoods, not syntax artifacts?",
