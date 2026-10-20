@@ -272,6 +272,7 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 11: IFEval - Instruction-Following Evaluation](https://ivanleomk.github.io/workspace-notes/11-ifeval-instruction-following/)
 - [Lesson 12: DeepSeek-R1 - Reasoning via RL](https://ivanleomk.github.io/workspace-notes/12-deepseek-r1-reasoning-rl/)
 - [Lesson 13: TruthfulQA - Imitative Falsehoods](https://ivanleomk.github.io/workspace-notes/13-truthfulqa-imitation-falsehoods/)
+- [Lesson 14: SimPO - Simple Preference Optimization](https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/)
 
 ### 💻 Local Serving (for development)
 ```bash
@@ -318,6 +319,30 @@ See [`curriculum.md`](curriculum.md) for the full roadmap and completion trackin
   - Human vs model performance comparison
   - Control questions showing positive scaling returns
   - Prompt effects visualization
+- **Status:** Complete
+
+### Lesson 14 - SimPO: Simple Preference Optimization ✅
+- **Track:** B (SOTA)
+- **Paper:** SimPO: Simple Preference Optimization with a Reference-Free Reward (Meng, Xia, Chen, NeurIPS 2024)
+- **Path:** [`14-simpo-reference-free-preference-optimization/`](14-simpo-reference-free-preference-optimization/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/](https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/)
+- **Topics:**
+  - Reference-free reward: eliminates DPO's reference model requirement
+  - Length-normalized average log-probability: (β/|y|) log π_θ(y|x)
+  - Target reward margin γ for improved generalization
+  - Length normalization prevents verbosity exploitation
+  - SimPO vs DPO: up to 6.4 points improvement on AlpacaEval 2
+  - State-of-the-art: Gemma-2-9B-it-SimPO (72.4% LC AlpacaEval 2, 59.1% Arena-Hard)
+  - Memory efficiency: ~50% reduction (no reference model)
+  - Hyperparameters: β ∈ [2.0, 2.5], γ ∈ [0.5, 1.5]
+  - Bridge to DPO (Lesson 04), RLHF (Lesson 02), LLM-as-Judge (Lesson 05)
+- **Interactive Elements:**
+  - 12-question quiz with detailed feedback
+  - Reward margin explorer: interactive toy with β, γ, avg log-prob sliders
+  - SimPO vs DPO comparison charts (AlpacaEval 2, Arena-Hard)
+  - Length normalization impact visualization
+  - Gemma-2-9B-it results across Base/DPO/SimPO
+  - Baselines comparison (8 methods on Llama-3-Instruct)
 - **Status:** Complete
 
 ## Contributing

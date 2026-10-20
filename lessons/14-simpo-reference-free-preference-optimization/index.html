@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 14: SimPO - Simple Preference Optimization with Reference-Free Reward</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 14: SimPO - Simple Preference Optimization</h1>
+            <p class="subtitle">Track B: SOTA | Paper: Meng, Xia, Chen (NeurIPS 2024)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#dpo-problem">The DPO Problem</a>
+            <a href="#simpo-design">SimPO Design</a>
+            <a href="#length-normalization">Length Normalization</a>
+            <a href="#target-margin">Target Reward Margin</a>
+            <a href="#results">Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#toy">Reward Margin Toy</a>
+            <a href="#charts">Charts & Data</a>
+            <a href="#bridge">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Introduction: Simplifying Preference Optimization Further</h2>
+            
+            <p>
+                In Lesson 04, you learned how <strong>Direct Preference Optimization (DPO)</strong> simplified 
+                RLHF by eliminating the reward model and PPO complexity. DPO achieved this by directly optimizing 
+                on preference data using a clever mathematical reparameterization. But even DPO has overhead:
+            </p>
+
+            <ul>
+                <li><strong>Reference model required:</strong> DPO needs to keep the SFT model in memory to compute log-probability ratios</li>
+                <li><strong>2× memory cost:</strong> Both policy and reference models loaded during training</li>
+                <li><strong>Reward-generation mismatch:</strong> DPO's reward uses log-ratios, but generation uses average log-likelihood</li>
+            </ul>
+
+            <div class="info-box">
+                <h3>SimPO: Even Simpler</h3>
+                <p>
+                    <a href="https://arxiv.org/abs/2405.14734" target="_blank">SimPO (Meng, Xia, Chen, NeurIPS 2024)</a> 
+                    asks: what if we could eliminate the reference model entirely and align the reward directly with how models generate?
+                </p>
+                <p><strong>Key innovations:</strong></p>
+                <ul>
+                    <li><strong>Reference-free reward:</strong> Uses average log-probability \( \frac{1}{|y|} \log \pi_\theta(y|x) \) instead of log-ratios</li>
+                    <li><strong>Length-normalized:</strong> Prevents length exploitation by normalizing over response length</li>
+                    <li><strong>Target reward margin \(\gamma\):</strong> Encourages larger separation between chosen and rejected responses</li>
+                </ul>
+                <p><strong>Results:</strong> SimPO outperforms DPO by up to <strong>6.4 points on AlpacaEval 2</strong> and 
+                <strong>7.5 points on Arena-Hard</strong>, while being more memory-efficient and simpler to implement.</p>
+            </div>
+
+            <h3>What You'll Learn</h3>
+            <ul>
+                <li>Why DPO's reward formulation creates a mismatch with generation</li>
+                <li>How SimPO's length-normalized reward aligns training with inference</li>
+                <li>The role of target reward margin \(\gamma\) in improving generalization</li>
+                <li>Why length normalization prevents verbosity exploitation</li>
+                <li>SimPO vs DPO results on AlpacaEval 2, Arena-Hard, and MT-Bench</li>
+                <li>How SimPO achieves comparable KL divergence without explicit regularization</li>
+                <li>State-of-the-art results: Gemma-2-9B-it-SimPO (72.4% LC on AlpacaEval 2)</li>
+                <li>Connection to DPO (Lesson 04) and broader post-training curriculum</li>
+            </ul>
+        </section>
+
+        <section id="dpo-problem" class="content-section">
+            <h2>The DPO Problem: Reward-Generation Mismatch</h2>
+
+            <h3>Recap: DPO's Reward Formulation</h3>
+            <p>
+                From Lesson 04, recall that DPO reparameterizes the reward function using log-probability ratios:
+            </p>
+            <div class="math-block">
+                $$
+                r_{\text{DPO}}(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)
+                $$
+            </div>
+            <p>
+                This reward compares the policy model's probability to the reference model's probability. For preference 
+                pairs, the \(\log Z(x)\) term cancels, giving:
+            </p>
+            <div class="math-block">
+                $$
+                r_{\text{DPO}}(x, y_w) - r_{\text{DPO}}(x, y_l) = \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}
+                $$
+            </div>
+
+            <h3>Problem 1: Reference Model Overhead</h3>
+            <p>
+                DPO requires keeping \(\pi_{\text{ref}}\) (typically the SFT model) in memory during training. This means:
+            </p>
+            <ul>
+                <li><strong>2× memory usage:</strong> Both \(\pi_\theta\) and \(\pi_{\text{ref}}\) loaded</li>
+                <li><strong>Extra forward passes:</strong> Must compute \(\pi_{\text{ref}}(y|x)\) for every batch</li>
+                <li><strong>Implementation complexity:</strong> Managing two models during optimization</li>
+            </ul>
+
+            <h3>Problem 2: Reward-Generation Mismatch</h3>
+            <p>
+                During <strong>generation</strong> (inference), models typically rank candidates by <strong>average log-likelihood</strong>:
+            </p>
+            <div class="math-block">
+                $$
+                p_\theta(y|x) = \frac{1}{|y|} \log \pi_\theta(y|x) = \frac{1}{|y|} \sum_{i=1}^{|y|} \log \pi_\theta(y_i|x, y_{<i})
+                $$
+            </div>
+            <p>
+                This metric is used in beam search, multiple-choice tasks, and scoring candidate responses. But DPO's 
+                reward uses log-ratios, not average log-likelihood. This creates a <strong>train-test mismatch</strong>:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>DPO Training Reward</h4>
+                    <p>\( r_{\text{DPO}}(x, y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)} \)</p>
+                    <p>Depends on reference model probabilities</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Generation Metric</h4>
+                    <p>\( p_\theta(y|x) = \frac{1}{|y|} \log \pi_\theta(y|x) \)</p>
+                    <p>Independent of reference model</p>
+                </div>
+            </div>
+
+            <p>
+                The paper reports that when training with DPO, only <strong>~50%</strong> of preference triples \((x, y_w, y_l)\) 
+                satisfy the condition that the average log-likelihood ranking matches the reward ranking (Section 2.2, citing 
+                concurrent work). This means DPO's reward can prefer \(y_w\) over \(y_l\) even when the policy's generation 
+                metric ranks \(y_l\) higher.
+            </p>
+
+            <h3>The SimPO Hypothesis</h3>
+            <div class="info-box">
+                <p>
+                    <strong>What if we used the average log-likelihood directly as the reward?</strong>
+                </p>
+                <p>
+                    This would eliminate the reference model, align training with generation, and simplify the optimization. 
+                    The challenge: how to prevent length bias and ensure the model learns meaningful preferences without 
+                    a reference model's implicit regularization?
+                </p>
+            </div>
+        </section>
+
+        <section id="simpo-design" class="content-section">
+            <h2>SimPO Design: Reference-Free, Length-Normalized Reward</h2>
+
+            <h3>SimPO's Reward Formulation</h3>
+            <p>
+                SimPO replaces DPO's log-ratio reward with a <strong>length-normalized average log-probability</strong>:
+            </p>
+            <div class="math-block">
+                $$
+                r_{\text{SimPO}}(x, y) = \frac{\beta}{|y|} \log \pi_\theta(y|x) = \frac{\beta}{|y|} \sum_{i=1}^{|y|} \log \pi_\theta(y_i|x, y_{<i})
+                $$
+            </div>
+            <p>Where:</p>
+            <ul>
+                <li>\(|y|\) = length of response \(y\) (number of tokens)</li>
+                <li>\(\beta\) = temperature parameter controlling reward scale (typically 2.0-2.5)</li>
+                <li>No reference model \(\pi_{\text{ref}}\) appears in the formula</li>
+            </ul>
+
+            <h3>Why Length Normalization?</h3>
+            <p>
+                Without normalization, using summed log-probability \(\beta \log \pi_\theta(y|x)\) as the reward would 
+                suffer from <strong>length bias</strong>: longer sequences have more terms in the sum, so they naturally 
+                have more negative (or less positive) summed log-probabilities. This would force the model to artificially 
+                inflate token probabilities for longer sequences, risking degeneration.
+            </p>
+            <p>
+                By normalizing with \(\frac{1}{|y|}\), SimPO makes the reward <strong>length-invariant</strong> and directly 
+                comparable across responses of different lengths. This is the same metric used for ranking in beam search and 
+                multiple-choice evaluation.
+            </p>
+
+            <h3>SimPO Objective with Bradley-Terry Model</h3>
+            <p>
+                SimPO incorporates a <strong>target reward margin \(\gamma\)</strong> into the Bradley-Terry preference model:
+            </p>
+            <div class="math-block">
+                $$
+                p(y_w \succ y_l | x) = \sigma\left( r_{\text{SimPO}}(x, y_w) - r_{\text{SimPO}}(x, y_l) - \gamma \right)
+                $$
+            </div>
+            <p>
+                This margin term \(\gamma > 0\) encourages the model to separate chosen and rejected responses by at least \(\gamma\), 
+                improving generalization (similar to margin-based classifiers in machine learning). The full SimPO loss is:
+            </p>
+            <div class="math-block">
+                $$
+                \mathcal{L}_{\text{SimPO}}(\pi_\theta) = -\mathbb{E}_{(x, y_w, y_l) \sim \mathcal{D}} \left[ \log \sigma\left( \frac{\beta}{|y_w|} \log \pi_\theta(y_w|x) - \frac{\beta}{|y_l|} \log \pi_\theta(y_l|x) - \gamma \right) \right]
+                $$
+            </div>
+
+            <h3>Comparison: DPO vs SimPO Objectives</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>DPO Loss</h4>
+                    <div class="math-block">
+                        $$
+                        -\log \sigma\left( \beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)} \right)
+                        $$
+                    </div>
+                    <p><strong>Requires:</strong> Reference model \(\pi_{\text{ref}}\)</p>
+                    <p><strong>Reward:</strong> Log-ratio with reference</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>SimPO Loss</h4>
+                    <div class="math-block">
+                        $$
+                        -\log \sigma\left( \frac{\beta}{|y_w|} \log \pi_\theta(y_w|x) - \frac{\beta}{|y_l|} \log \pi_\theta(y_l|x) - \gamma \right)
+                        $$
+                    </div>
+                    <p><strong>Requires:</strong> Only policy model \(\pi_\theta\)</p>
+                    <p><strong>Reward:</strong> Length-normalized average log-prob + margin</p>
+                </div>
+            </div>
+
+            <h3>Hyperparameters</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">\(\beta\): 2.0-2.5</div>
+                    <div class="stat-label">Temperature Parameter</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">\(\gamma\): 0.5-1.5</div>
+                    <div class="stat-label">Target Reward Margin</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">1×</div>
+                    <div class="stat-label">Memory vs DPO (no ref model)</div>
+                </div>
+            </div>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>Typical values from Paper Section 3 and Appendix B</em>
+            </p>
+        </section>
+
+        <section id="length-normalization" class="content-section">
+            <h2>Length Normalization: Preventing Length Exploitation</h2>
+
+            <h3>The Length Exploitation Problem</h3>
+            <p>
+                A common failure mode in preference optimization is <strong>length exploitation</strong>: models learn 
+                that humans often prefer longer, more detailed responses, so they generate excessively verbose outputs 
+                to maximize reward—even when verbosity doesn't improve quality.
+            </p>
+            <p>
+                This happens when the reward function implicitly favors longer responses. In DPO, despite the log-ratio 
+                formulation, length bias can still emerge from the training data distribution.
+            </p>
+
+            <h3>How SimPO Addresses Length Bias</h3>
+            <p>
+                By normalizing the reward with response length \(|y|\), SimPO makes the reward <strong>independent of length</strong> 
+                in the sense that adding more tokens doesn't automatically increase the reward—only tokens with high probability 
+                matter. This aligns with the generation metric and reduces the incentive to pad responses.
+            </p>
+
+            <h3>Experimental Evidence</h3>
+            <p>
+                The paper demonstrates length normalization's effectiveness in Section 4.2 and Appendix E:
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>SimPO with Length Normalization</h4>
+                    <p><strong>AlpacaEval 2 (Mistral-Base):</strong></p>
+                    <ul>
+                        <li>LC Win Rate: 21.5%</li>
+                        <li>Average Length: 1,868 tokens</li>
+                    </ul>
+                    <p><strong>Arena-Hard (Mistral-Base):</strong></p>
+                    <ul>
+                        <li>Win Rate: 16.6%</li>
+                        <li>Average Length: 699 tokens</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>SimPO without Length Normalization</h4>
+                    <p><strong>AlpacaEval 2 (Mistral-Base):</strong></p>
+                    <ul>
+                        <li>LC Win Rate: 11.9% (↓9.6 pts)</li>
+                        <li>Average Length: 2,345 tokens (↑25%)</li>
+                    </ul>
+                    <p><strong>Arena-Hard (Mistral-Base):</strong></p>
+                    <ul>
+                        <li>Win Rate: 9.4% (↓7.2 pts)</li>
+                        <li>Average Length: 851 tokens (↑22%)</li>
+                    </ul>
+                </div>
+            </div>
+            <p class="chart-caption"><em>Exact values from Paper Table 11 (Appendix E)</em></p>
+
+            <p>
+                Removing length normalization causes responses to become 22-25% longer on average while performance <strong>drops 
+                dramatically</strong> (down 9.6 points LC on AlpacaEval 2). This shows that without normalization, the model 
+                exploits length but produces lower-quality outputs.
+            </p>
+
+            <h3>LC vs Raw Win Rate</h3>
+            <p>
+                AlpacaEval 2 reports both:
+            </p>
+            <ul>
+                <li><strong>Raw Win Rate (WR):</strong> Direct preference rate against baseline (can be gamed by verbosity)</li>
+                <li><strong>Length-Controlled Win Rate (LC):</strong> Adjusts for length to penalize exploitation</li>
+            </ul>
+            <p>
+                SimPO consistently achieves <strong>higher LC than raw WR</strong>, indicating minimal length exploitation. 
+                For example, Gemma-2-9B-it-SimPO: 72.4% LC vs 65.9% raw WR (Table 1 from paper).
+            </p>
+        </section>
+
+        <section id="target-margin" class="content-section">
+            <h2>Target Reward Margin \(\gamma\): Improving Generalization</h2>
+
+            <h3>What is the Target Reward Margin?</h3>
+            <p>
+                The margin term \(\gamma\) in SimPO's loss encourages the reward difference between chosen and rejected 
+                responses to exceed \(\gamma\):
+            </p>
+            <div class="math-block">
+                $$
+                r_{\text{SimPO}}(x, y_w) - r_{\text{SimPO}}(x, y_l) \geq \gamma
+                $$
+            </div>
+            <p>
+                This is analogous to margin-based classifiers like SVMs: requiring a larger separation between classes 
+                improves generalization by reducing overfitting to noisy labels. In preference optimization, labels can 
+                be noisy (human annotators disagree, or AI-generated labels are imperfect), so a margin helps.
+            </p>
+
+            <h3>Impact of \(\gamma\) on Performance</h3>
+            <p>
+                Section 4.3 of the paper analyzes the effect of \(\gamma\) on AlpacaEval 2 LC win rate. The authors 
+                tested \(\gamma \in \{0.0, 0.5, 1.0, 1.5, 2.0\}\) while holding \(\beta = 2.0\):
+            </p>
+
+            <div class="info-box">
+                <h4>Key Findings (Section 4.3):</h4>
+                <ul>
+                    <li><strong>\(\gamma = 0\):</strong> No margin (like DPO). Lower win rate.</li>
+                    <li><strong>\(\gamma = 0.5\) to \(\gamma = 1.5\):</strong> Best performance. Win rate improves with margin.</li>
+                    <li><strong>\(\gamma = 2.0\):</strong> Too large—performance degrades (margin too strict, model can't satisfy preferences).</li>
+                </ul>
+                <p>
+                    The paper states: "Generation quality initially improves with an increasing target margin but degrades 
+                    when the margin becomes too large" (Section 4.3).
+                </p>
+            </div>
+
+            <h3>Reward Accuracy on Validation Set</h3>
+            <p>
+                The paper measures <strong>reward accuracy</strong>: the percentage of validation preference pairs where 
+                \(r(x, y_w) > r(x, y_l)\) (Section 4.3). Higher \(\gamma\) increases reward accuracy, meaning the learned 
+                reward better ranks chosen vs rejected responses on held-out data.
+            </p>
+
+            <h3>Recommended \(\gamma\) Values</h3>
+            <p>
+                From the paper's experiments (Section 3 and Appendix B):
+            </p>
+            <ul>
+                <li><strong>General recommendation:</strong> \(\gamma \in [0.5, 1.5]\)</li>
+                <li><strong>With strong SFT models:</strong> Use higher \(\gamma\) (e.g., 1.0-1.5)</li>
+                <li><strong>With weaker SFT models:</strong> Use moderate \(\gamma\) (e.g., 0.5-1.0)</li>
+            </ul>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: SimPO vs DPO and Baselines</h2>
+
+            <h3>Main Results Across Four Setups</h3>
+            <p>
+                The paper evaluates SimPO against DPO and other baselines (RRHF, SLiC-HF, IPO, CPO, KTO, ORPO, R-DPO) 
+                across four training setups:
+            </p>
+            <ul>
+                <li><strong>Mistral-Base (7B):</strong> Train SFT from base on UltraChat, then preference opt on UltraFeedback</li>
+                <li><strong>Mistral-Instruct (7B):</strong> Start from Mistral-7B-Instruct-v0.2, regenerate preference data</li>
+                <li><strong>Llama-3-Base (8B):</strong> Train SFT from base on UltraChat, then preference opt on UltraFeedback</li>
+                <li><strong>Llama-3-Instruct (8B):</strong> Start from Llama-3-8B-Instruct, regenerate preference data</li>
+            </ul>
+
+            <h3>AlpacaEval 2 and Arena-Hard Results</h3>
+            <p>
+                Table 4 from the paper shows SimPO consistently outperforms all baselines:
+            </p>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">32.1% LC</div>
+                    <div class="stat-label">Mistral-Instruct SimPO<br>(AlpacaEval 2)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">26.8% LC</div>
+                    <div class="stat-label">Mistral-Instruct DPO<br>(5.3 pt gap)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">44.7% LC</div>
+                    <div class="stat-label">Llama-3-Instruct SimPO<br>(AlpacaEval 2)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">40.3% LC</div>
+                    <div class="stat-label">Llama-3-Instruct DPO<br>(4.4 pt gap)</div>
+                </div>
+            </div>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>Exact values from Paper Table 4</em>
+            </p>
+
+            <h3>State-of-the-Art: Gemma-2-9B-it-SimPO</h3>
+            <p>
+                The paper's strongest model uses Gemma-2-9B-it as the base (Section 3, Appendix J, and Table 1):
+            </p>
+
+            <div class="info-box">
+                <h4>Gemma-2-9B-it-SimPO Results</h4>
+                <ul>
+                    <li><strong>AlpacaEval 2:</strong> 72.4% LC, 65.9% raw WR (length: 1,833 tokens)</li>
+                    <li><strong>Arena-Hard:</strong> 59.1% win rate</li>
+                    <li><strong>Chatbot Arena (real user votes):</strong> Ranked 25th overall, 1st among models < 10B (as of Sept 16, 2024)</li>
+                </ul>
+                <p><strong>Comparison to baselines:</strong></p>
+                <ul>
+                    <li>Gemma-2-9B-it (base): 51.1% LC AlpacaEval 2, 40.8% Arena-Hard (Table 17)</li>
+                    <li>Gemma-2-9B-DPO: 67.8% LC AlpacaEval 2, 58.9% Arena-Hard (Table 17)</li>
+                    <li>SimPO improves over DPO by <strong>4.6 points LC on AlpacaEval 2</strong></li>
+                </ul>
+                <p class="chart-caption"><em>Exact values from Paper Table 1 and Table 17 (Appendix J)</em></p>
+            </div>
+
+            <h3>MT-Bench Results</h3>
+            <p>
+                MT-Bench scores (average rating 1-10) are comparable across methods, with SimPO performing on par or 
+                slightly better than DPO (Table 4 from paper):
+            </p>
+            <ul>
+                <li><strong>Llama-3-Instruct SimPO:</strong> 7.0 (GPT-4 Turbo judge), 8.0 (GPT-4 judge)</li>
+                <li><strong>Llama-3-Instruct DPO:</strong> 7.0 (GPT-4 Turbo judge), 8.0 (GPT-4 judge)</li>
+            </ul>
+
+            <h3>Training Efficiency</h3>
+            <p>
+                SimPO is more memory and compute-efficient than DPO because it doesn't require the reference model (Section 4.4):
+            </p>
+            <ul>
+                <li><strong>Memory:</strong> ~50% reduction (only one model loaded, not two)</li>
+                <li><strong>Compute:</strong> Fewer forward passes per batch (no reference model evaluations)</li>
+            </ul>
+
+            <h3>KL Divergence Without Explicit Regularization</h3>
+            <p>
+                Although SimPO has no KL regularization term, the paper shows (Section 4.4) that KL divergence from 
+                the reference model remains comparable to DPO. The authors attribute this to:
+            </p>
+            <ol>
+                <li>Small learning rate</li>
+                <li>Diverse preference dataset covering many domains</li>
+                <li>Intrinsic robustness of LLMs to learn new data without catastrophic forgetting</li>
+            </ol>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of SimPO, length normalization, and reference-free optimization:</p>
+            <div id="quiz-container" class="quiz-container"></div>
+            <div class="quiz-summary" id="quiz-summary" style="display: none;">
+                <h3>Quiz Complete!</h3>
+                <div class="quiz-score" id="quiz-score"></div>
+                <button class="btn" onclick="location.reload()">Retake Quiz</button>
+            </div>
+        </section>
+
+        <section id="toy" class="content-section">
+            <h2>Interactive: Reward Margin Explorer</h2>
+            <p>
+                Explore how the SimPO reward and loss change with different token probabilities, lengths, and margin \(\gamma\).
+            </p>
+
+            <div class="explorer-controls">
+                <div class="control-group">
+                    <label for="beta-slider">Beta (\(\beta\)): <span id="beta-value">2.0</span></label>
+                    <input type="range" id="beta-slider" min="0.5" max="5.0" step="0.1" value="2.0">
+                </div>
+                <div class="control-group">
+                    <label for="gamma-slider">Target Margin (\(\gamma\)): <span id="gamma-value">1.0</span></label>
+                    <input type="range" id="gamma-slider" min="0.0" max="3.0" step="0.1" value="1.0">
+                </div>
+                <div class="control-group">
+                    <label for="avg-logprob-w-slider">Avg Log-Prob (chosen): <span id="avg-logprob-w-value">-0.5</span></label>
+                    <input type="range" id="avg-logprob-w-slider" min="-3.0" max="0.0" step="0.1" value="-0.5">
+                    <p class="slider-caption">Average log π<sub>θ</sub>(y<sub>w</sub>|x) per token</p>
+                </div>
+                <div class="control-group">
+                    <label for="length-w-slider">Length (chosen): <span id="length-w-value">50</span> tokens</label>
+                    <input type="range" id="length-w-slider" min="10" max="200" step="5" value="50">
+                </div>
+                <div class="control-group">
+                    <label for="avg-logprob-l-slider">Avg Log-Prob (rejected): <span id="avg-logprob-l-value">-1.0</span></label>
+                    <input type="range" id="avg-logprob-l-slider" min="-3.0" max="0.0" step="0.1" value="-1.0">
+                    <p class="slider-caption">Average log π<sub>θ</sub>(y<sub>l</sub>|x) per token</p>
+                </div>
+                <div class="control-group">
+                    <label for="length-l-slider">Length (rejected): <span id="length-l-value">100</span> tokens</label>
+                    <input type="range" id="length-l-slider" min="10" max="200" step="5" value="100">
+                </div>
+            </div>
+
+            <div id="reward-display" class="info-box">
+                <!-- Dynamically filled by JavaScript -->
+            </div>
+
+            <h3>Explanation</h3>
+            <p>
+                The SimPO reward for a response is \( r(x, y) = \frac{\beta}{|y|} \log \pi_\theta(y|x) = \beta \times \text{(avg log-prob)} \). 
+                Because it's length-normalized, longer responses don't automatically get higher rewards—only token-level probability matters.
+            </p>
+            <p>
+                The loss is \( -\log \sigma(r(x, y_w) - r(x, y_l) - \gamma) \). When \( r(x, y_w) - r(x, y_l) > \gamma \), 
+                the model correctly ranks the chosen response higher by at least the margin, and loss is low. When the margin 
+                isn't met (or ranking is wrong), loss is high.
+            </p>
+        </section>
+
+        <section id="charts" class="content-section">
+            <h2>Charts & Visualizations</h2>
+
+            <h3>SimPO vs DPO: AlpacaEval 2 LC Win Rates</h3>
+            <div class="chart-container">
+                <canvas id="simpo-vs-dpo-chart"></canvas>
+                <p class="chart-caption">
+                    Exact LC win rate values from Paper Table 4. SimPO outperforms DPO by 4.4-5.3 points across 
+                    Mistral and Llama-3 Instruct setups. Larger gaps in Base setups (6.4 pts for Mistral-Base).
+                </p>
+            </div>
+
+            <h3>Gemma-2-9B-it: SimPO vs DPO vs Base Model</h3>
+            <div class="chart-container">
+                <canvas id="gemma-results-chart"></canvas>
+                <p class="chart-caption">
+                    Exact values from Paper Table 17 (Appendix J). SimPO on Gemma-2-9B-it achieves 72.4% LC on 
+                    AlpacaEval 2 and 59.1% on Arena-Hard, significantly outperforming both DPO and the base model.
+                </p>
+            </div>
+
+            <h3>Length Normalization Impact</h3>
+            <div class="chart-container">
+                <canvas id="length-norm-chart"></canvas>
+                <p class="chart-caption">
+                    Exact values from Paper Table 11 (Appendix E). Removing length normalization from SimPO increases 
+                    response length by 22-25% but drastically reduces win rates, showing length exploitation hurts quality.
+                </p>
+            </div>
+
+            <h3>SimPO vs All Baselines (Llama-3-Instruct)</h3>
+            <p>
+                The paper compares SimPO against 7 other preference optimization methods on Llama-3-Instruct (Table 4):
+            </p>
+            <div class="chart-container">
+                <canvas id="baselines-chart"></canvas>
+                <p class="chart-caption">
+                    AlpacaEval 2 LC win rates from Paper Table 4. SimPO achieves 44.7% LC, outperforming DPO (40.3%), 
+                    R-DPO (41.1%), IPO (35.6%), and all other baselines.
+                </p>
+            </div>
+        </section>
+
+        <section id="bridge" class="content-section">
+            <h2>Bridge to the Curriculum</h2>
+
+            <h3>How SimPO Connects to Previous Lessons</h3>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Lesson 04: Direct Preference Optimization (DPO)</h4>
+                    <p>
+                        SimPO is a direct evolution of DPO. It keeps DPO's core insight (optimize preferences directly 
+                        without a separate reward model and PPO) but eliminates the reference model by using length-normalized 
+                        average log-probability. SimPO demonstrates that even DPO's simplifications can be improved.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 05: LLM-as-Judge & MT-Bench</h4>
+                    <p>
+                        SimPO is evaluated using GPT-4 as a judge on AlpacaEval 2 and Arena-Hard—benchmarks that rely on 
+                        pairwise comparisons scored by LLM judges. The paper also evaluates on MT-Bench with GPT-4 scoring. 
+                        Length-controlled win rate (LC) addresses verbosity bias that LLM judges can exhibit.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 02: InstructGPT & RLHF</h4>
+                    <p>
+                        SimPO, like DPO, is an offline alternative to RLHF's PPO stage. Both DPO and SimPO eliminate the 
+                        need for RL sampling and value functions. SimPO further simplifies by removing the reference model, 
+                        making it even more memory-efficient than DPO.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 13: TruthfulQA - Imitative Falsehoods</h4>
+                    <p>
+                        TruthfulQA showed that larger models trained with pure imitation are less truthful due to learning 
+                        human misconceptions. SimPO (and DPO) address this by learning from preference data that can encode 
+                        truthfulness judgments. Length normalization also prevents the model from exploiting verbosity to 
+                        seem more knowledgeable.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 11: IFEval - Instruction-Following</h4>
+                    <p>
+                        SimPO improves instruction-following capabilities through preference optimization. The paper doesn't 
+                        evaluate on IFEval, but the technique of using verifiable constraints (from IFEval) could be combined 
+                        with SimPO's reward formulation for instruction-following tasks.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 10: Tülu 3 - Open Post-Training</h4>
+                    <p>
+                        Tülu 3 uses on-policy DPO with length-normalized loss—a similar idea to SimPO's length normalization. 
+                        SimPO could be integrated into Tülu 3's post-training pipeline as a replacement for DPO, potentially 
+                        improving efficiency and performance.
+                    </p>
+                </div>
+            </div>
+
+            <h3>The Bigger Picture: Simplifying Post-Training</h3>
+
+            <div class="info-box">
+                <h4>Progression of Simplification</h4>
+                <ol>
+                    <li><strong>Classical RLHF (Lesson 02):</strong> SFT → Reward Model → PPO (3 stages, 2 models, RL complexity)</li>
+                    <li><strong>DPO (Lesson 04):</strong> SFT → DPO (2 stages, 2 models during training, no RL)</li>
+                    <li><strong>SimPO (Lesson 14):</strong> SFT → SimPO (2 stages, 1 model during training, no RL, no reference model)</li>
+                </ol>
+                <p>
+                    Each step eliminates complexity while maintaining (or improving) performance. SimPO represents the 
+                    current frontier of simplicity in offline preference optimization.
+                </p>
+            </div>
+
+            <h3>When to Use SimPO vs DPO</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Use SimPO when:</h4>
+                    <ul>
+                        <li>Memory is constrained (e.g., training large models)</li>
+                        <li>You want simpler implementation (no reference model management)</li>
+                        <li>You prioritize generation likelihood alignment</li>
+                        <li>Length exploitation is a concern</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>Use DPO when:</h4>
+                    <ul>
+                        <li>You have existing DPO pipelines and infrastructure</li>
+                        <li>You want KL divergence controlled explicitly by the reference model</li>
+                        <li>Your SFT model is very different from the desired policy (large distribution shift)</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 SimPO Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2405.14734" target="_blank">arXiv:2405.14734</a></p>
+                    <p>Meng, Xia, Chen, "SimPO: Simple Preference Optimization with a Reference-Free Reward" (NeurIPS 2024)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>💻 Official Code</h3>
+                    <p><a href="https://github.com/princeton-nlp/SimPO" target="_blank">GitHub: princeton-nlp/SimPO</a></p>
+                    <p>Official implementation with training scripts for Llama-3, Mistral, and Gemma-2</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🤗 Models on Hugging Face</h3>
+                    <p><a href="https://huggingface.co/princeton-nlp/Llama-3-8B-SimPO" target="_blank">Llama-3-8B-SimPO</a></p>
+                    <p><a href="https://huggingface.co/princeton-nlp/gemma-2-9b-it-SimPO" target="_blank">Gemma-2-9B-it-SimPO</a></p>
+                    <p>Pre-trained SimPO models ready to use</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 Datasets</h3>
+                    <p><strong>UltraFeedback:</strong> <a href="https://huggingface.co/datasets/openbmb/UltraFeedback" target="_blank">HuggingFace</a></p>
+                    <p><strong>UltraChat:</strong> <a href="https://huggingface.co/datasets/stingning/ultrachat" target="_blank">HuggingFace</a></p>
+                    <p>Datasets used for SFT and preference optimization in the paper</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 AlpacaEval 2 Leaderboard</h3>
+                    <p><a href="https://tatsu-lab.github.io/alpaca_eval/" target="_blank">AlpacaEval Leaderboard</a></p>
+                    <p>See Gemma-2-9B-it-SimPO ranked at 72.4% LC (top among <10B models)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🏟️ Chatbot Arena</h3>
+                    <p><a href="https://chat.lmsys.org/?leaderboard" target="_blank">LMSYS Chatbot Arena</a></p>
+                    <p>Real user votes: Gemma-2-9B-it-SimPO ranked 1st among <10B models (as of Sept 2024)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Related Papers</h3>
+                    <p><strong>DPO:</strong> <a href="https://arxiv.org/abs/2305.18290" target="_blank">Rafailov et al. (2023)</a></p>
+                    <p><strong>ORPO:</strong> <a href="https://arxiv.org/abs/2403.07691" target="_blank">Hong et al. (2024)</a></p>
+                    <p><strong>KTO:</strong> <a href="https://arxiv.org/abs/2402.01306" target="_blank">Ethayarajh et al. (2024)</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Previous Curriculum Lessons</h3>
+                    <p><a href="../04-dpo-direct-preference-optimization/">Lesson 04: DPO</a></p>
+                    <p><a href="../02-instructgpt-rlhf-reward-modeling/">Lesson 02: InstructGPT/RLHF</a></p>
+                    <p><a href="../05-llm-as-judge-mt-bench/">Lesson 05: LLM-as-Judge</a></p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>Lesson 14: SimPO - Simple Preference Optimization with Reference-Free Reward</p>
+        <p>Part of Ivan's Alternating Paper Curriculum | Track B: SOTA</p>
+        <p><a href="../curriculum.html">View Full Curriculum</a> | <a href="https://arxiv.org/abs/2405.14734" target="_blank">Read the Paper</a></p>
+    </footer>
+
+    <script>
+        // Render KaTeX math after DOM loads
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>

@@ -26,7 +26,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 11 | A | ✅ Complete | IFEval: Verifiable Instruction-Following | Zhou et al. (Google Research, 2023) |
 | 12 | B | ✅ Complete | DeepSeek-R1: Reasoning via RL | DeepSeek-AI (2025) |
 | 13 | A | ✅ Complete | TruthfulQA: Imitative Falsehoods | Lin, Hilton, Evans (ACL 2022) |
-| 14 | B | 📝 Next | ORPO/SimPO: Alignment without Reward Models | Hong et al. / Meng et al. (2024) |
+| 14 | B | ✅ Complete | SimPO: Simple Preference Optimization | Meng, Xia, Chen (NeurIPS 2024) |
+| 15 | A | 📝 Next | BIG-bench or HellaSwag or ARC | Foundational benchmark classic |
 
 ## Learning Objectives by Track
 
@@ -70,12 +71,14 @@ Each lesson includes:
 - ✅ Lesson 11 (Track A): IFEval - Verifiable Instruction-Following Evaluation (Zhou et al., Google Research, 2023)
 - ✅ Lesson 12 (Track B): DeepSeek-R1 - Reasoning via Reinforcement Learning (DeepSeek-AI, 2025)
 - ✅ Lesson 13 (Track A): TruthfulQA - Imitative Falsehoods (Lin, Hilton, Evans, ACL 2022)
+- ✅ Lesson 14 (Track B): SimPO - Simple Preference Optimization with Reference-Free Reward (Meng, Xia, Chen, NeurIPS 2024)
 
 **Next Up:**
-Lesson 14 (Track B): Modern preference optimization without reward models. Strong candidates:
-- **ORPO (Odds Ratio Preference Optimization):** Hong et al. (2024) - Combines SFT and preference learning in one stage, eliminating the reward model and separate RL phase
-- **SimPO (Simple Preference Optimization):** Meng et al. (2024) - Further simplifies DPO by using length-normalized rewards and removing the reference model
-- **KTO (Kahneman-Tversky Optimization):** Ethayarajh et al. (2024) - Uses only binary "good/bad" labels instead of pairwise preferences
+Lesson 15 (Track A): Foundational benchmark classic not yet covered. Strong candidates:
+- **BIG-bench:** Diverse collection of challenging tasks requiring generalization
+- **HellaSwag:** Commonsense reasoning through sentence completion
+- **ARC (AI2 Reasoning Challenge):** Science exam questions requiring reasoning
+- **Chatbot Arena:** Crowdsourced evaluation with ELO rankings (partial coverage in Lesson 05)
 
 ## How to Request a Lesson
 
