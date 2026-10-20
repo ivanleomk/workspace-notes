@@ -52,82 +52,85 @@ This document lists every numeric claim, table/figure citation, and quote in Les
 12. **Claim:** β typically 2.0-2.5, γ typically 0.5-1.5
     - **Source:** Paper Section 3: "Generally, for SimPO, setting β between 2.0 and 2.5 and γ between 0.5 and 1.5 leads to good performance across all setups."
 
+13. **Claim:** Per-setting Table 8 values: Mistral-Base (γ=1.6), Mistral-Instruct (γ=0.3), Llama-3-Base (γ=1.0), Llama-3-Instruct (γ=1.4)
+    - **Source:** Paper Appendix B, Table 8, exact values
+
 ### Gemma-2-9B Results (Appendix J, Table 17)
 
-13. **Claim:** Gemma-2-9B-it base: 51.1% LC AlpacaEval 2, 40.8% Arena-Hard
+14. **Claim:** Gemma-2-9B-it base: 51.1% LC AlpacaEval 2, 40.8% Arena-Hard
     - **Source:** Paper Table 17, exact values
 
-14. **Claim:** Gemma-2-9B-DPO: 67.8% LC AlpacaEval 2, 58.9% Arena-Hard
+15. **Claim:** Gemma-2-9B-DPO: 67.8% LC AlpacaEval 2, 58.9% Arena-Hard
     - **Source:** Paper Table 17, exact values
 
-15. **Claim:** Gemma-2-9B-SimPO: 72.4% LC AlpacaEval 2, 59.1% Arena-Hard
+16. **Claim:** Gemma-2-9B-SimPO: 72.4% LC AlpacaEval 2, 59.1% Arena-Hard
     - **Source:** Paper Table 17, exact values (also Table 1)
 
-16. **Claim:** SimPO improves over DPO by 4.6 points LC on AlpacaEval 2 (Gemma-2)
+17. **Claim:** SimPO improves over DPO by 4.6 points LC on AlpacaEval 2 (Gemma-2)
     - **Source:** Calculated from Table 17: 72.4 - 67.8 = 4.6 points
 
 ### Chatbot Arena
 
-17. **Claim:** Gemma-2-9B-it-SimPO ranks 1st among <10B models on Chatbot Arena (as of Sept 16, 2024)
+18. **Claim:** Gemma-2-9B-it-SimPO ranks 1st among <10B models on Chatbot Arena (as of Sept 16, 2024)
     - **Source:** Paper Appendix J: "significantly improved upon the initial Gemma-2-9B-it model, advancing from 36th to 25th place and ranking first among all < 10B models on the leaderboard" and footnote "As of September 16th, 2024."
 
 ### Baselines Comparison (Table 4)
 
-18. **Claim:** All baseline LC values for Llama-3-Instruct AlpacaEval 2
+19. **Claim:** All baseline LC values for Llama-3-Instruct AlpacaEval 2
     - RRHF: 31.3%, SLiC-HF: 26.9%, IPO: 35.6%, CPO: 28.9%, KTO: 33.1%, ORPO: 28.5%, R-DPO: 41.1%
     - **Source:** Paper Table 4, exact values
 
 ### MT-Bench
 
-19. **Claim:** Llama-3-Instruct SimPO: 7.0 (GPT-4 Turbo), 8.0 (GPT-4)
+20. **Claim:** Llama-3-Instruct SimPO: 7.0 (GPT-4 Turbo), 8.0 (GPT-4)
     - **Source:** Paper Table 4, exact values
 
 ### Memory and Efficiency
 
-20. **Claim:** SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10%
+21. **Claim:** SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10%
     - **Source:** Paper Section 4.4 and Figure 5c, exact quote: "SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10%" (73→60 min, 77→69 GB on Llama-3-Base with 8×H100 GPUs). Footnote 12 notes DPO can be as memory-efficient if implemented differently.
 
 ### Train-Test Mismatch
 
-21. **Claim:** Only ~50% of DPO training triples satisfy likelihood ranking matching reward ranking
+22. **Claim:** Only ~50% of DPO training triples satisfy likelihood ranking matching reward ranking
    - **Source:** Paper Section 2.2 and Figure 4(b): "In our experiments, we observed that only ∼50% of the triples from the training set satisfy this condition when trained with DPO (Figure 4(b))." The observation aligns with concurrent work [14].
 
 ### LC vs WR Comparison
 
-22. **Claim:** SimPO usually achieves higher LC than raw WR (with Mistral-Instruct exception)
+23. **Claim:** SimPO usually achieves higher LC than raw WR (with Mistral-Instruct exception)
     - **Source:** Paper Table 1 (Gemma: 72.4% LC vs 65.9% WR) and Table 4 (Mistral-Instruct: 32.1% LC vs 34.8% WR, the exception)
 
 ### Gamma Sweep
 
-23. **Claim:** Figure 3a tests γ ∈ {0.0, 0.8, 1.6, 2.4} on Mistral-Base; Section 4.3 states no fixed β
+24. **Claim:** Figure 3a tests γ ∈ {0.0, 0.8, 1.6, 2.4} on Mistral-Base; Section 4.3 does not state the β used
     - **Source:** Paper Section 4.3 and Figure 3
 
 ### Baseline Comparisons
 
-24. **Claim:** SimPO achieves highest AlpacaEval 2 LC in all four setups; CPO beats it on Arena-Hard Mistral-Instruct (22.6 vs 21.0)
+25. **Claim:** SimPO achieves highest AlpacaEval 2 LC in all four setups; CPO beats it on Arena-Hard Mistral-Instruct (22.6 vs 21.0)
     - **Source:** Paper Table 4, exact values
 
-25. **Claim:** 8 other baselines: RRHF, SLiC-HF, IPO, CPO, KTO, ORPO, DPO, R-DPO
+26. **Claim:** 8 other baselines: RRHF, SLiC-HF, IPO, CPO, KTO, ORPO, DPO, R-DPO
     - **Source:** Paper Table 4
 
 ### DPO β Range
 
-26. **Claim:** DPO β search range is 0.01-0.1
+27. **Claim:** DPO β search range is 0.01-0.1
     - **Source:** Paper Table 7, exact range
 
 ### Judge Model
 
-27. **Claim:** Judge is GPT-4 Turbo (GPT-4-Preview-1106)
+28. **Claim:** Judge is GPT-4 Turbo (GPT-4-Preview-1106)
     - **Source:** Paper Table 2
 
 ### Per-setup Gaps
 
-28. **Claim:** SimPO-DPO gaps: +6.4 (Mistral-Base), +5.3 (Mistral-Instruct), +3.8 (Llama-3-Base), +4.4 (Llama-3-Instruct)
+29. **Claim:** SimPO-DPO gaps: +6.4 (Mistral-Base), +5.3 (Mistral-Instruct), +3.8 (Llama-3-Base), +4.4 (Llama-3-Instruct)
     - **Source:** Paper Table 4, calculated from exact LC values
 
 ### Gemma Results Detail
 
-29. **Claim:** Gemma SimPO beats DPO by 4.6 LC on AlpacaEval 2 and by only 0.2 on Arena-Hard (59.1 vs 58.9)
+30. **Claim:** Gemma SimPO beats DPO by 4.6 LC on AlpacaEval 2 and by only 0.2 on Arena-Hard (59.1 vs 58.9)
     - **Source:** Paper Table 17, exact values
 
 ## Quotes (Must Be Verbatim)

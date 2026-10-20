@@ -76,10 +76,10 @@ const quizQuestions = [
         id: 7,
         question: "What are typical values for the β parameter in SimPO?",
         options: [
-            "β = 0.1 to 0.5 (like DPO)",
+            "β = 0.01 to 0.1 (like DPO)",
             "β = 2.0 to 2.5",
             "β = 10 to 20",
-            "β = 0.01 to 0.1"
+            "β = 0.5 to 1.0"
         ],
         correct: 1,
         explanation: "SimPO typically uses β between 2.0 and 2.5, which is higher than DPO's typical β values (0.01-0.1, Table 7). This is because SimPO's reward is length-normalized, so the scale is different. β controls the reward scale and influences gradient magnitudes."
