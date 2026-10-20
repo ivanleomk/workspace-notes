@@ -69,15 +69,14 @@
             <div class="info-box warning">
                 <h3>⚠️ Version and Sources</h3>
                 <p>
-                    <strong>Ray version tested:</strong> 2.40.0 (released October 2024). All code examples in this 
-                    lesson were tested with <code>pip install 'ray[default]==2.40.0'</code>.
+                    <strong>Ray version tested:</strong> 2.40.0 (released 3 Dec 2024, per <a href="https://pypi.org/project/ray/2.40.0/" target="_blank">PyPI</a>).
                 </p>
                 <p>
                     <strong>Primary sources:</strong>
                 </p>
                 <ul>
                     <li><a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a> 
-                    (Anyscale, 2022) — cluster architecture, GCS, raylet, object store, scheduling</li>
+                    (Ray Team, October 2022) — cluster architecture, GCS, raylet, object store, scheduling</li>
                     <li><a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">Ownership: 
                     A Distributed Futures System for Fine-Grained Tasks</a> (Wang et al., NSDI 2021) — ownership model, 
                     distributed reference counting, lineage reconstruction</li>
@@ -169,9 +168,10 @@ graph TB
         W6[Worker N]
     end
     
-    DRIVER -->|1. Submit task/actor| GCS
-    GCS -->|2. Coordinate placement| RAYLET1
-    GCS -->|2. Coordinate placement| RAYLET2
+    DRIVER -->|1. Submit task to local raylet| RAYLET1
+    DRIVER -->|1. Create actor via GCS| GCS
+    GCS -->|2. Actor placement| RAYLET1
+    GCS -->|2. Actor placement| RAYLET2
     RAYLET1 --> W1
     RAYLET1 --> W2
     RAYLET1 --> W3
@@ -241,17 +241,18 @@ print(results)  # [0, 1, 4, 9, 16]</code></pre>
 
             <h3>Task Lifecycle</h3>
             <p>
-                From <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/doc/source/ray-core/internals/task-lifecycle.rst" target="_blank"><code>doc/source/ray-core/internals/task-lifecycle.rst</code></a> 
-                in the Ray repository:
+                From <a href="https://docs.ray.io/en/latest/ray-core/internals/task-lifecycle.html" target="_blank">Ray docs: Task Lifecycle</a> 
+                (written for a newer Ray; Ray 2.40.0 uses the same basic flow):
             </p>
             <ol>
                 <li><strong>Submission:</strong> Driver calls <code>task.remote(...)</code>. CoreWorker creates a 
-                task spec, assigns an ObjectRef for the return value, and sends a <code>SubmitTask</code> RPC to 
-                the local raylet.</li>
-                <li><strong>Scheduling:</strong> The raylet's scheduler picks a worker (local or remote) based on 
+                task spec, assigns an ObjectRef for the return value, and sends a <code>RequestWorkerLease</code> RPC to 
+                a raylet (local or remote based on locality).</li>
+                <li><strong>Scheduling:</strong> The raylet's scheduler picks a worker based on 
                 resource availability (CPU, GPU, memory, custom resources). If the task needs objects not present 
                 locally, the raylet fetches them from other nodes' object stores.</li>
-                <li><strong>Execution:</strong> The worker deserializes the task spec, runs the function, serializes 
+                <li><strong>Execution:</strong> The owner sends a <code>PushTask</code> RPC directly to the leased worker. 
+                The worker deserializes the task spec, runs the function, serializes 
                 the return value, and stores it in the object store (or inlines it if small).</li>
                 <li><strong>Completion:</strong> The worker notifies the owner (the worker that created the ObjectRef) 
                 that the object is ready. The owner updates its ownership table with the object's location.</li>
@@ -264,21 +265,23 @@ sequenceDiagram
     participant Worker
     participant ObjectStore
     
-    Driver->>Raylet: 1. SubmitTask(square, args=[5])
+    Driver->>Raylet: 1. RequestWorkerLease(square, resources)
     Note over Driver: Returns ObjectRef immediately
     
     Raylet->>Raylet: 2. Schedule task<br/>(pick worker, check resources)
-    Raylet->>Worker: 3. AssignTask(square, args=[5])
+    Raylet->>Driver: 3. Worker lease granted
+    Driver->>Worker: 4. PushTask(square, args=[5])
     
-    Worker->>Worker: 4. Execute square(5)
-    Worker->>ObjectStore: 5. Put result (25) in object store<br/>(or inline if small)
-    Worker->>Driver: 6. Notify owner: ObjectRef ready
+    Worker->>Worker: 5. Execute square(5)
+    Worker->>ObjectStore: 6. Put result (25) in object store<br/>(or inline if small)
+    Worker->>Driver: 7. Notify owner: ObjectRef ready
     
-    Driver->>ObjectStore: 7. ray.get(ObjectRef)
-    ObjectStore-->>Driver: 8. Return 25
+    Driver->>ObjectStore: 8. ray.get(ObjectRef)
+    ObjectStore-->>Driver: 9. Return 25
             </div>
             <p class="diagram-caption">
-                <strong>Figure 2:</strong> Task lifecycle. Driver submits task, raylet schedules it to a worker, 
+                <strong>Figure 2:</strong> Task lifecycle. Driver requests worker lease from raylet, raylet schedules it, 
+                driver sends PushTask directly to leased worker, 
                 worker executes and stores result in object store, owner (driver) is notified and can <code>ray.get</code> 
                 the result.
             </p>
@@ -286,14 +289,16 @@ sequenceDiagram
             <h3>ObjectRefs and ray.get / ray.wait</h3>
             <p>
                 An <strong>ObjectRef</strong> is a reference to a Ray object (task return value or <code>ray.put</code> 
-                object). It encodes a 20-byte object ID and the owner's address. From 
+                object). It encodes a 28-byte object ID (per the <a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">whitepaper</a>: 
+                "A unique 28-byte identifier ... The address of the object's owner"). From 
                 <a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">Ownership paper (NSDI 2021)</a>:
             </p>
             <blockquote>
-                "A distributed future (DFut) is a reference to a value that may be stored on a remote node. The owner 
-                is the worker that invoked the task that created the DFut. The owner stores metadata (locations, 
-                reference counts) and coordinates scheduling and garbage collection."
+                "a distributed future is a reference whose eventual value may be stored on a remote node"
             </blockquote>
+            <p>
+                and "the caller of a task is the owner of the returned future and all related metadata."
+            </p>
             <p>
                 <strong><code>ray.get(object_refs)</code>:</strong> Blocks until objects are available, then returns 
                 their values. If an object is not on the local node, Ray fetches it from the owning node. Source: 
@@ -303,7 +308,7 @@ sequenceDiagram
             <p>
                 <strong><code>ray.wait(object_refs, num_returns=1, timeout=None)</code>:</strong> Returns 
                 <code>(ready, remaining)</code> tuples. Non-blocking if <code>timeout=0</code>. Use this to stream 
-                results as tasks complete:
+                results as tasks complete (pseudocode; <code>slow_task</code> is not defined):
             </p>
             <pre><code class="language-python">pending = [slow_task.remote(i) for i in range(100)]
 
@@ -365,16 +370,23 @@ print(final)  # 15</code></pre>
             <p>
                 From <a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a>:
             </p>
+            <p>
+                From the whitepaper, the actor creation process:
+            </p>
             <blockquote>
-                "When an actor is created, the GCS selects a node for the actor (based on resource requirements and 
-                scheduling policies), registers the actor in its directory, and notifies the chosen raylet. The raylet 
-                leases a worker, initializes the actor (runs <code>__init__</code>), and registers the worker with GCS. 
-                The actor's handle (an ActorID and address) is returned to the caller."
+                "When an actor is created in Python, the creating worker builds a special task known as an actor creation 
+                task ... the creating worker asynchronously registers the actor with the GCS. The GCS then creates the 
+                actor by scheduling the actor creation task."
             </blockquote>
+            <p>
+                and "the Python call to create the actor immediately returns an 'actor handle'". The handle returns 
+                immediately, before the actor creation completes on a worker node.
+            </p>
             <p>
                 Actor methods are submitted to the actor's mailbox (a queue on the actor worker). By default, methods 
                 execute sequentially (one at a time). If the actor dies, Ray can restart it (up to <code>max_restarts</code> 
-                times) and replay pending methods.
+                times) and replay pending methods (replaying also requires <code>max_task_retries</code> to be set; 
+                default is 0).
             </p>
 
             <div class="mermaid">
@@ -384,12 +396,12 @@ sequenceDiagram
     participant Raylet
     participant Worker
     
-    Driver->>GCS: 1. CreateActor(Counter, resources={cpu: 1})
-    GCS->>GCS: 2. Select node (scheduling)
-    GCS->>Raylet: 3. CreateActor request
-    Raylet->>Worker: 4. Lease worker, initialize Counter.__init__
-    Worker->>GCS: 5. Register actor ready
-    GCS->>Driver: 6. Return ActorHandle
+    Driver->>Driver: 1. Counter.remote() returns ActorHandle immediately
+    Driver->>GCS: 2. Async: register actor with GCS
+    GCS->>GCS: 3. Schedule actor creation task
+    GCS->>Raylet: 4. CreateActor request (scheduling)
+    Raylet->>Worker: 5. Lease worker, initialize Counter.__init__
+    Worker->>GCS: 6. Register actor ready
     
     Driver->>Worker: 7. counter.increment.remote()
     Worker->>Worker: 8. Execute increment, update self.value
@@ -424,16 +436,17 @@ pool = AsyncSandboxPool.options(max_concurrency=10).remote()
 futures = [pool.exec_sandbox.remote(i) for i in range(100)]
 results = ray.get(futures)</code></pre>
             <p>
-                From <a href="https://docs.ray.io/en/latest/ray-core/actors/async_api.html" target="_blank">Ray docs: AsyncIO / Concurrency for Actors</a>:
+                From <a href="https://docs.ray.io/en/latest/ray-core/actors/async_api.html" target="_blank">Ray docs: AsyncIO / Concurrency for Actors</a>, 
+                for async actors: "By default, 1000 tasks can be running concurrently." 
+                From <a href="https://docs.ray.io/en/latest/ray-core/actors/concurrency_group_api.html" target="_blank">Concurrency Groups</a>:
             </p>
             <blockquote>
-                "The <code>max_concurrency</code> actor option controls the maximum number of concurrent executions 
-                allowed for an actor. [...] For AsyncIO actors, the default is 1000. For threaded actors, the default is 1."
+                "there is always a default concurrency group for actors, which has a default concurrency of 1000 AsyncIO actors and 1 otherwise."
             </blockquote>
             <p>
-                <strong>Source:</strong> 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/core_worker/actor_manager.cc" target="_blank"><code>src/ray/core_worker/actor_manager.cc</code></a> 
-                (actor task scheduling with concurrency limits).
+                <strong>Source:</strong> Actor task scheduling and concurrency logic live in 
+                <a href="https://github.com/ray-project/ray/tree/ray-2.40.0/src/ray/core_worker/transport" target="_blank"><code>src/ray/core_worker/transport/</code></a> 
+                (actor scheduling queues, concurrency group manager).
             </p>
 
             <h3>Concurrency Groups</h3>
@@ -482,12 +495,11 @@ actor = EvalActor.options(max_concurrency=10).remote()  # Sets default group to 
 
             <h3>Small vs Large Objects</h3>
             <p>
-                From <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/common/ray_config_def.h" target="_blank"><code>src/ray/common/ray_config_def.h</code></a>, 
-                line 381-384:
+                From <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/common/ray_config_def.h#L197-L199" target="_blank"><code>src/ray/common/ray_config_def.h</code></a>, 
+                lines 197-199:
             </p>
-            <pre><code class="language-cpp">/// Maximum size in bytes of a task return value that may be returned inline
-/// in the task reply (and stored in the owner's in-memory store). Return
-/// values larger than this are stored in plasma instead.
+            <pre><code class="language-cpp">// The max allowed size in bytes of a return object from direct actor calls.
+// Objects larger than this size will be spilled/promoted to plasma.
 RAY_CONFIG(int64_t, max_direct_call_object_size, 100 * 1024)</code></pre>
             <p>
                 <strong>100 KB threshold:</strong> Objects ≤100 KB are inlined (stored in the owner's in-process store). 
@@ -502,16 +514,17 @@ RAY_CONFIG(int64_t, max_direct_call_object_size, 100 * 1024)</code></pre>
 
             <h3>Shared-Memory Store (Plasma)</h3>
             <p>
-                From <a href="https://docs.ray.io/en/latest/ray-core/internals/object-spilling.html" target="_blank">Ray docs: Object Spilling</a>:
+                From <a href="https://docs.ray.io/en/latest/ray-core/scheduling/memory-management.html" target="_blank">Ray docs: Memory Management</a>:
             </p>
             <blockquote>
-                "Ray stores task outputs and <code>ray.put()</code> values as objects in the Plasma object store, a 
-                shared-memory region on each node. [...] By default, when starting an instance, Ray reserves 30% of 
-                available memory [for the object store]. Control the size with <code>--object-store-memory</code>."
+                "By default, when starting an instance, Ray reserves 30% of available memory. The size of the object 
+                store can be controlled by --object-store-memory."
             </blockquote>
             <p>
                 On Linux, Ray allocates Plasma in <code>/dev/shm</code>. On macOS, it uses <code>/tmp</code> (on disk, 
-                slower). Default object store size: 30% of total RAM, capped at 2 GB on macOS (to avoid disk thrashing).
+                slower). Default object store size: 30% of total RAM, capped at 2 GB on macOS (per 
+                <code>ray_constants.py</code>: "Mac with 16GB memory has degraded performance when the object store 
+                size is greater than 2GB").
             </p>
             <p>
                 <strong>Source:</strong> 
@@ -523,33 +536,37 @@ RAY_CONFIG(int64_t, max_direct_call_object_size, 100 * 1024)</code></pre>
             <p>
                 When the Plasma store is full, Ray <strong>automatically spills</strong> objects to external storage 
                 (local disk by default, or S3). From 
-                <a href="https://docs.ray.io/en/latest/ray-core/internals/object-spilling.html" target="_blank">Ray docs: Object Spilling</a>:
+                <a href="https://docs.ray.io/en/latest/ray-core/internals/object-spilling.html" target="_blank">Ray docs: Object Spilling</a> 
+                (this page targets a newer Ray than 2.40.0; the mechanism is the same):
             </p>
             <blockquote>
-                "When memory pressure is detected, pinned objects are automatically spilled from shared memory to 
+                "When memory pressure is detected, when pinned objects are automatically spilled from shared memory to 
                 external storage (local disk or S3). When a spilled object is needed again, it is transparently 
                 restored back into Plasma. [...] Object spilling is fully abstracted away to user applications. 
                 No application-level code changes are needed."
             </blockquote>
             <p>
-                Configure spill directory:
+                Configure spill directory (per <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/objects/object-spilling.html" target="_blank">Ray 2.40.0 docs</a>):
             </p>
-            <pre><code class="language-python">ray.init(object_spilling_directory="/path/to/spill/dir")</code></pre>
-            <p>
-                Or via CLI:
-            </p>
-            <pre><code class="language-bash">ray start --object-spilling-directory=/path/to/spill/dir</code></pre>
+            <pre><code class="language-python">import json
+ray.init(_system_config={
+    "object_spilling_config": json.dumps({
+        "type": "filesystem",
+        "params": {"directory_path": "/tmp/spill"}
+    })
+})</code></pre>
             <p>
                 <strong>When does spilling happen?</strong> The raylet's <code>LocalObjectManager</code> triggers 
                 spilling when Plasma allocation fails. It identifies spillable objects (objects with ref count == 1, 
                 meaning only the owner holds a reference), writes them to disk, and frees Plasma memory. Source: 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/object_manager/local_object_manager.cc" target="_blank"><code>src/ray/object_manager/local_object_manager.cc</code></a>.
+                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/raylet/local_object_manager.cc" target="_blank"><code>src/ray/raylet/local_object_manager.cc</code></a>.
             </p>
 
             <h3>Broadcast Pattern: ray.put Once, Share Everywhere</h3>
             <p>
                 For eval orchestration, you often have large shared inputs (test datasets, reference data, model weights). 
-                Use <code>ray.put</code> to store the object once, then pass the ObjectRef to all tasks:
+                Use <code>ray.put</code> to store the object once, then pass the ObjectRef to all tasks 
+                (pseudocode; helpers not defined):
             </p>
             <pre><code class="language-python"># Put once
 dataset = load_test_cases()  # 1 GB
@@ -624,11 +641,13 @@ graph LR
             <p>
                 From <a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">Ownership: A Distributed Futures System for Fine-Grained Tasks (NSDI 2021)</a>:
             </p>
+            <p>
+                Each object has an owner (the caller of the task that created it) and borrowers (other workers that hold references). 
+                The owner stores metadata and coordinates scheduling and garbage collection. From the paper:
+            </p>
             <blockquote>
-                "Each object has an <strong>owner</strong>: the worker that invoked the task that created the object. 
-                The owner stores metadata (locations, reference counts) and coordinates scheduling and garbage collection. 
-                Other workers that hold references are <strong>borrowers</strong>. Borrowers maintain local reference 
-                counts and report zero counts to the owner. The owner reclaims the object when no references remain."
+                "Each borrower stores a local reference count for the DFut on behalf of the owner (Table 2) and notifies 
+                the owner when the local reference count reaches zero. The owner decides when the object is safe to reclaim."
             </blockquote>
 
             <h3>Hierarchical Reference Counting</h3>
@@ -640,8 +659,8 @@ graph LR
                 ObjectRef is referenced in its process (e.g., stored in a list, passed to another task).</li>
                 <li><strong>Owner ref count:</strong> The owner tracks how many borrowers have nonzero local counts, 
                 plus its own local references.</li>
-                <li><strong>Notify on zero:</strong> When a borrower's local count reaches zero, it sends a 
-                <code>DeleteObjectRef</code> RPC to the owner. The owner decrements its borrower count.</li>
+                <li><strong>Notify on zero:</strong> When a borrower's local count reaches zero, it reports to the owner 
+                via <code>WaitForRefRemoved</code> / <code>WORKER_REF_REMOVED_CHANNEL</code> pub/sub. The owner decrements its borrower count.</li>
                 <li><strong>Reclaim when no refs:</strong> When the owner's local count and borrower count are both zero, 
                 and no pending tasks depend on the object, the owner tells the raylet to delete the object from Plasma.</li>
             </ol>
@@ -666,12 +685,12 @@ sequenceDiagram
     
     Note over Borrower1: Task completes, ObjectRef out of scope
     Borrower1->>Borrower1: Local ref count = 0
-    Borrower1->>Owner: DeleteObjectRef RPC
+    Borrower1->>Owner: WaitForRefRemoved (pub/sub)
     Owner->>Owner: Borrower count: 2 → 1
     
     Note over Borrower2: Task completes, ObjectRef out of scope
     Borrower2->>Borrower2: Local ref count = 0
-    Borrower2->>Owner: DeleteObjectRef RPC
+    Borrower2->>Owner: WaitForRefRemoved (pub/sub)
     Owner->>Owner: Borrower count: 1 → 0
     
     Note over Owner: Owner's local count = 0, borrower count = 0
@@ -694,9 +713,9 @@ sequenceDiagram
                 From <a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">Ownership paper (NSDI 2021)</a>:
             </p>
             <blockquote>
-                "We choose a minimal approach that guarantees progress: fate-share the object and any reference holders 
-                with the owner, then use lineage reconstruction to recover the object and any of the owner's fate-shared 
-                children tasks."
+                "We choose a minimal approach that guarantees progress, at the potential cost of additional re-execution 
+                on a failure: we fate share the object and any reference holders with the owner, then use lineage 
+                reconstruction to recover the object and any of the owner's fate-shared children tasks (Section 4.3)."
             </blockquote>
             <p>
                 <strong>Fate-sharing:</strong> If the owner dies, all objects it owns and all borrowers are lost. Ray 
@@ -705,8 +724,8 @@ sequenceDiagram
             </p>
             <p>
                 <strong>Lineage limit:</strong> From 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/common/ray_config_def.h" target="_blank"><code>src/ray/common/ray_config_def.h</code></a>, 
-                line 376-380:
+                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/common/ray_config_def.h#L145-L151" target="_blank"><code>src/ray/common/ray_config_def.h</code></a>, 
+                lines 145-151:
             </p>
             <pre><code class="language-cpp">/// Maximum amount of lineage to keep in bytes. [...] If we reach this limit,
 /// 50% of the current lineage will be evicted and objects that are still in
@@ -730,7 +749,7 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
                 From <a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a>:
             </p>
             <blockquote>
-                "The GCS manages cluster-level metadata, such as the locations of actors, stored as key-value pairs 
+                "The GCS is a server that manages cluster-level metadata, such as the locations of actors, stored as key-value pairs 
                 that may be cached locally by workers. The GCS also manages a handful of cluster-level operations, 
                 including scheduling for placement groups and actors and determining cluster node membership. In general, 
                 the GCS manages metadata that is less frequently accessed but likely to be used by most or all workers 
@@ -746,7 +765,7 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
                 and their raylet addresses.</li>
                 <li><strong>Placement groups:</strong> Reservations of resources across multiple nodes (used for 
                 gang-scheduling, e.g., multi-GPU training). Covered in Lesson 11.</li>
-                <li><strong>Job table:</strong> Active jobs, their drivers, and resource quotas.</li>
+                <li><strong>Job table:</strong> Active jobs and their drivers.</li>
             </ul>
             <p>
                 <strong>What the GCS does NOT store:</strong> Task metadata (stored by task owners), object locations 
@@ -769,9 +788,8 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
                 of the default storage."
             </blockquote>
             <p>
-                Without GCS FT (default for <code>ray.init()</code> local clusters), if the head node fails, the 
-                cluster is lost. With GCS FT (enabled with <code>ray start --head --num-redis-shards=1</code> and 
-                Redis persistence), GCS can restart on another node and reload its state from Redis.
+                Without GCS FT (default for <code>ray.init()</code> local clusters), GCS failure means the entire 
+                cluster fails (see below). With GCS FT enabled, GCS can recover and reload its state from Redis.
             </p>
             <p>
                 <strong>Lesson 12</strong> (KubeRay, Autoscaling, and GCS Fault Tolerance) covers GCS HA setup and 
@@ -780,21 +798,29 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
 
             <h3>What Happens When GCS Fails (Without FT)</h3>
             <p>
-                If the GCS process crashes or the head node fails (without GCS FT enabled):
+                From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">Ray 2.40.0 docs: GCS Fault Tolerance</a>:
             </p>
-            <ol>
-                <li><strong>New actors cannot be created:</strong> Actor creation requests go to GCS for placement. 
-                If GCS is down, <code>Actor.remote()</code> hangs or fails.</li>
-                <li><strong>Actor calls fail:</strong> Actor method calls require GCS lookups to find the actor's 
-                address. If GCS is unavailable, calls fail.</li>
-                <li><strong>Tasks can continue:</strong> Running tasks don't need GCS (they already know their 
-                dependencies' locations). But new tasks that depend on actors or cross-node object transfers may fail.</li>
-                <li><strong>Cluster is unrecoverable:</strong> Without GCS FT, you must restart the entire cluster 
-                (all nodes, all jobs).</li>
-            </ol>
+            <blockquote>
+                "By default, the GCS is not fault tolerant ... its failure means that the entire Ray cluster fails."
+            </blockquote>
             <p>
-                <strong>Mitigation:</strong> Enable GCS FT in production (Lesson 12). For eval orchestration, consider 
-                checkpoint-and-resume strategies (save progress to durable storage, restart jobs after GCS recovery).
+                Raylets exit after 60 seconds (<code>gcs_rpc_server_reconnect_timeout_s</code>) when they cannot reach the GCS. 
+                The cluster is unrecoverable without GCS FT: you must restart all nodes and all jobs.
+            </p>
+            <p>
+                <strong>With GCS FT enabled</strong> (Redis-backed persistence), during GCS recovery:
+            </p>
+            <ul>
+                <li><strong>Available:</strong> "running Ray tasks and actors remain alive and any existing objects will 
+                continue to be available" (docs).</li>
+                <li><strong>Unavailable:</strong> Actor creation/deletion/reconstruction, placement group operations, 
+                resource management, node registration, worker process creation.</li>
+            </ul>
+            <p>
+                <strong>GCS FT setup:</strong> Not supported in local <code>ray.init()</code> clusters. 
+                Per <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">docs</a>, 
+                enable with <code>RAY_REDIS_ADDRESS=redis_ip:port ray start --head --redis-password PASSWORD</code>. 
+                Officially supported only on KubeRay.
             </p>
         </section>
 
@@ -826,9 +852,9 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
             <ul>
                 <li><strong>Single machine:</strong> If you're running 200 evals on one laptop or a single beefy VM, 
                 asyncio (or a simple process pool) is simpler. Ray's overhead (GCS, raylet, object store) adds 
-                latency (~10-50ms per task) and memory (~200 MB for Ray runtime).</li>
-                <li><strong>Tiny tasks:</strong> Tasks that run <1ms. Ray's task submission overhead (~1ms per task, 
-                from <a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">NSDI 2021 paper</a>) 
+                latency and memory for the runtime.</li>
+                <li><strong>Tiny tasks:</strong> Tasks that run <1ms. Ray's ~1 ms latency per task 
+                (from <a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">NSDI 2021 paper</a>) 
                 dominates. For millions of 100µs tasks, use a lower-level runtime (Dask, native multiprocessing).</li>
                 <li><strong>No shared data:</strong> If every task has unique inputs and outputs, and you're not 
                 reusing data, Ray's object store is wasted. Just spawn tasks and collect results.</li>
@@ -843,11 +869,10 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
             <ul>
                 <li><strong>verl (Volcengine RL):</strong> HybridFlow architecture: vLLM actors for generation 
                 (GPU-heavy), Megatron actors for training (multi-GPU), CPU actors for reward computation. Ray 
-                placement groups reserve 8×H100 for training, ~100 CPUs for rollout.</li>
-                <li><strong>OpenRLHF:</strong> 80% of training time is generation (LLM sampling), 20% is policy/value 
-                training. Ray schedules generation on vLLM actors (GPU), training on DeepSpeed actors (multi-GPU), 
-                and syncs weights via object store.</li>
-                <li><strong>SkyRL-OpenHands:</strong> 80–100 Docker containers per 16 CPUs, coordinated by Ray actors. 
+                placement groups reserve multi-GPU resources for training.</li>
+                <li><strong>OpenRLHF:</strong> Ray schedules generation on vLLM actors (GPU), training on DeepSpeed 
+                actors (multi-GPU), and syncs weights via object store.</li>
+                <li><strong>SkyRL-OpenHands:</strong> Ray actors coordinate many Docker containers. 
                 Each actor holds N sandbox clients (aiodocker), fans out code-editing tasks, uses <code>ray.wait</code> 
                 to stream results.</li>
             </ul>
@@ -860,7 +885,8 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
             <h3>Async Actors vs Tasks for Sandbox Exec</h3>
             <p>
                 For I/O-bound eval workloads (each eval = 30 seconds of LLM API calls + sandbox exec), use 
-                <strong>async actors with <code>max_concurrency</code></strong>:
+                <strong>async actors with <code>max_concurrency</code></strong> 
+                (pseudocode; <code>SandboxClient</code> and <code>save_results</code> not defined):
             </p>
             <pre><code class="language-python">@ray.remote
 class SandboxPoolActor:
@@ -897,14 +923,14 @@ while futures:
                 bottleneck if:
             </p>
             <ul>
-                <li><strong>Many small objects:</strong> Creating 1 million 1 KB objects fills Plasma metadata (each 
-                object has ~200 bytes of metadata). Plasma was designed for large objects (>1 MB). For small results, 
-                return them inline (they'll be ≤100 KB and stored in-process).</li>
+                <li><strong>Many small objects:</strong> Creating 1 million 1 KB objects fills Plasma metadata. 
+                For small results, return them inline (they'll be ≤100 KB and stored in-process).</li>
                 <li><strong>Head node hotspot:</strong> If all tasks return results to the driver (head node), and 
                 you're returning 1 TB of data, the driver's object store and network become a bottleneck. Instead, 
                 write results directly to S3 or a database from workers.</li>
                 <li><strong>Object store full:</strong> If your working set exceeds object store size (30% of RAM by 
-                default), Ray spills to disk. Spilling adds latency (~100 MB/s vs ~10 GB/s for shared memory). 
+                default), Ray spills to disk. From <a href="https://docs.ray.io/en/latest/ray-core/internals/object-spilling.html" target="_blank">Ray docs</a>, 
+                spilling comes "at the cost of I/O latency" (docs recommend SSD over HDD). 
                 Either increase object store size (<code>ray.init(object_store_memory=...)</code>) or reduce working 
                 set (process results in smaller batches, delete ObjectRefs sooner).</li>
             </ul>
@@ -1173,7 +1199,14 @@ if __name__ == "__main__":
             <h3>Run the Exercise</h3>
             <pre><code class="language-bash">python3 eval_orchestrator.py</code></pre>
 
-            <h3>Expected Output</h3>
+            <h3>Example Output</h3>
+            <p>
+                Example run on one VM (your numbers will differ; <code>random.seed(42)</code> in the driver doesn't 
+                seed actor processes). Record your own total time and throughput:
+            </p>
+            <p>
+                <strong>Your results:</strong> Total time: ______ s, Throughput: ______ items/s
+            </p>
             <pre><code>Starting eval orchestrator:
   Items: 200
   Pools: 4
@@ -1271,11 +1304,11 @@ would serialize the dataset for each task, wasting memory and bandwidth.
             <h3>Papers</h3>
             <ul>
                 <li><strong><a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a></strong> 
-                (Anyscale, 2022) — Comprehensive overview of Ray's cluster architecture, GCS, raylet, object store, 
+                (Ray Team, October 2022) — Comprehensive overview of Ray's cluster architecture, GCS, raylet, object store, 
                 scheduling, and fault tolerance. Start here.</li>
                 <li><strong><a href="https://www.usenix.org/conference/nsdi21/presentation/cheng" target="_blank">Ownership: A Distributed Futures System for Fine-Grained Tasks</a></strong> 
                 (Wang et al., NSDI 2021) — The paper that introduced Ray's ownership model: distributed reference 
-                counting, lineage reconstruction, and sub-millisecond task latency. PDF: 
+                counting, lineage reconstruction, and 1ms latency per task (abstract). PDF: 
                 <a href="https://www.usenix.org/system/files/nsdi21-wang.pdf" target="_blank">usenix.org/system/files/nsdi21-wang.pdf</a>.</li>
                 <li><strong><a href="https://www.usenix.org/conference/osdi18/presentation/moritz" target="_blank">Ray: A Distributed Framework for Emerging AI Applications</a></strong> 
                 (Moritz et al., OSDI 2018) — The original Ray paper. Covers the motivation (RL workloads), dynamic 
@@ -1304,14 +1337,16 @@ would serialize the dataset for each task, wasting memory and bandwidth.
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/core_worker/core_worker.h" target="_blank"><code>src/ray/core_worker/core_worker.h</code></a></strong> 
                 — CoreWorker header: task submission, object store operations, ownership table.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/core_worker/reference_count.cc" target="_blank"><code>src/ray/core_worker/reference_count.cc</code></a></strong> 
-                — Distributed reference counting: local ref count, owner ref count, DeleteObjectRef RPCs.</li>
+                — Distributed reference counting: local ref count, owner ref count, WaitForRefRemoved / WORKER_REF_REMOVED_CHANNEL pub/sub.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/tree/ray-2.40.0/src/ray/raylet" target="_blank"><code>src/ray/raylet/</code></a></strong> 
-                — Raylet: scheduler (<code>node_manager.cc</code>), object manager (<code>object_manager.cc</code>).</li>
+                — Raylet: scheduler (<code>node_manager.cc</code>); see also 
+                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/object_manager/object_manager.cc" target="_blank"><code>src/ray/object_manager/object_manager.cc</code></a> 
+                for object transfers.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/tree/ray-2.40.0/src/ray/gcs/gcs_server" target="_blank"><code>src/ray/gcs/gcs_server/</code></a></strong> 
                 — GCS server: actor manager, node manager, placement group manager, job manager.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/object_manager/plasma/store.cc" target="_blank"><code>src/ray/object_manager/plasma/store.cc</code></a></strong> 
                 — Plasma object store: shared-memory allocation, eviction, sealing.</li>
-                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/object_manager/local_object_manager.cc" target="_blank"><code>src/ray/object_manager/local_object_manager.cc</code></a></strong> 
+                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/raylet/local_object_manager.cc" target="_blank"><code>src/ray/raylet/local_object_manager.cc</code></a></strong> 
                 — Object spilling: when to spill, what objects are spillable, writing to disk, restoring from disk.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/common/ray_config_def.h" target="_blank"><code>src/ray/common/ray_config_def.h</code></a></strong> 
                 — Ray config defaults: <code>max_direct_call_object_size</code> (100 KB), <code>max_lineage_bytes</code> 

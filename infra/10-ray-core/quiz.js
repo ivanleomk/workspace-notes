@@ -34,26 +34,26 @@ const quizQuestions = [
         explanation: "For I/O-bound work (e.g., calling a sandbox API), async actors with max_concurrency allow N concurrent method calls within a single stateful worker. If you create an actor with a SandboxClient in __init__, that client persists across 10,000 exec calls, avoiding repeated authentication/setup. Async actors use asyncio for concurrency: 10 concurrent await calls in the actor's event loop. Compare to tasks: each task is stateless, so you'd create and tear down the SandboxClient for each of 10,000 tasks, wasting setup time. Option A is wrong: task overhead is ~1ms (NSDI 2021), actor method overhead is similar. Option C is wrong: both tasks and actors can request GPUs (num_gpus=1). Option D is wrong: actors don't have inherently higher priority; scheduling depends on resources and placement."
     },
     {
-        question: "What happens to running tasks if the GCS (Global Control Service) crashes on the head node (without GCS fault tolerance enabled)?",
+        question: "What happens if the GCS (Global Control Service) crashes on the head node (without GCS fault tolerance enabled)?",
         options: [
-            "All running tasks immediately fail because they lose connection to GCS",
-            "Running tasks continue to completion (they don't need GCS), but new actor creations and actor method calls fail because they require GCS lookups",
+            "The entire Ray cluster fails; raylets exit after 60 seconds (gcs_rpc_server_reconnect_timeout_s) and the cluster is unrecoverable",
+            "Running tasks and actors continue normally, but new actor creations fail",
             "Ray automatically elects a new head node and restarts the GCS without data loss",
             "Running tasks pause until the GCS restarts"
         ],
-        correctAnswer: 1,
-        explanation: "GCS manages cluster-level metadata (actor directory, node membership, placement groups), but does NOT manage task execution or object locations. Running tasks already know their dependencies' locations (stored in workers' ownership tables), so they continue to completion. However: (1) New actors cannot be created (actor creation goes through GCS for placement). (2) Actor method calls fail (require GCS actor-directory lookup to find the actor's address). (3) New tasks that depend on actors or cross-node coordination may fail. Without GCS FT, the cluster is unrecoverable: you must restart all nodes. Option C is wrong: no automatic election without GCS FT (enabled with Redis-backed persistence, covered in Lesson 12). Option A and D are wrong: running tasks don't depend on GCS."
+        correctAnswer: 0,
+        explanation: "From Ray 2.40.0 docs: 'By default, the GCS is not fault tolerant ... its failure means that the entire Ray cluster fails.' Raylets exit after 60 seconds (gcs_rpc_server_reconnect_timeout_s) when they cannot reach the GCS. The cluster is unrecoverable without GCS FT: you must restart all nodes and all jobs. With GCS FT enabled (Redis-backed persistence), during recovery: running tasks and actors remain alive and existing objects continue to be available, but actor creation/deletion/reconstruction, placement group ops, resource management, node registration, and worker process creation are unavailable. Option C is wrong: no automatic election without GCS FT (officially supported only on KubeRay). Option B and D are wrong: without GCS FT, the entire cluster fails."
     },
     {
         question: "Why does Ray's object store spill objects to disk when Plasma shared memory is full, and what is the performance impact?",
         options: [
-            "Spilling prevents OutOfMemory errors; it writes pinned objects to local disk (or S3) at ~100 MB/s, vs ~10 GB/s for Plasma shared memory (100× slower)",
+            "Spilling prevents OutOfMemory errors; Ray docs say spilling comes 'at the cost of I/O latency' (docs recommend SSD over HDD)",
             "Spilling is disabled by default because it would cause data corruption",
             "Spilling only affects objects larger than 1 GB; smaller objects are deleted instead of spilled",
             "Spilling uses network transfers to move objects to remote nodes with available memory"
         ],
         correctAnswer: 0,
-        explanation: "Object spilling (Ray docs: Object Spilling) automatically writes pinned objects from Plasma to external storage (local disk by default, configurable to S3) when Plasma is full. Ray selects spillable objects: those with ref count == 1 (only the owner holds a reference, no running task is using it). Performance impact: disk I/O is ~100 MB/s (SATA SSD) vs ~10 GB/s for Plasma shared memory (zero-copy mmap), so accessing spilled objects is 100× slower. Spilling is transparent: no app changes needed. Configure with ray.init(object_spilling_directory='/path'). Option B is wrong: spilling is enabled by default, no corruption. Option C is wrong: all object sizes can be spilled. Option D is wrong: spilling writes to disk/S3, not to remote nodes (though remote object transfers also happen via raylet object manager)."
+        explanation: "Object spilling (Ray docs: Object Spilling) automatically writes pinned objects from Plasma to external storage (local disk by default, configurable to S3) when Plasma is full. Ray selects spillable objects: those with ref count == 1 (only the owner holds a reference, no running task is using it). Performance impact: per Ray docs, spilling comes 'at the cost of I/O latency', and docs recommend SSD over HDD. Spilling is transparent: no app changes needed. Configure with ray.init(_system_config={'object_spilling_config': json.dumps({'type':'filesystem','params':{'directory_path':'/tmp/spill'}})}). Option B is wrong: spilling is enabled by default, no corruption. Option C is wrong: all object sizes can be spilled. Option D is wrong: spilling writes to disk/S3, not to remote nodes (though remote object transfers also happen via raylet object manager)."
     }
 ];
 
