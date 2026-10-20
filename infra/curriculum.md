@@ -62,8 +62,8 @@ Survey microsandbox (libkrun microVMs, embeddable), kubernetes-sigs/agent-sandbo
 
 ### Phase 4: Ray for Orchestration (Lessons 10–13)
 
-**10. Ray Core: Tasks, Actors, Object Store, and GCS** 📝 *Planned*  
-Understand Ray's execution model. Build async actor pools for I/O-bound sandbox orchestration. Learn when Ray's object store (Plasma) helps vs when it becomes a bottleneck.
+**10. Ray Core: Tasks, Actors, Object Store, and GCS** ✅ *Complete*  
+<a href="10-ray-core/" target="_blank">Lesson 10</a> | <a href="https://ivanleomk.github.io/workspace-notes/infra/10-ray-core/" target="_blank">Live</a> — Understand Ray's execution model. Build async actor pools for I/O-bound sandbox orchestration. Learn when Ray's object store (Plasma) helps vs when it becomes a bottleneck.
 
 **11. Ray Scheduling, Placement Groups, and Resource Management** 📝 *Planned*  
 Master Ray's resource-based scheduler. Use placement groups to gang-schedule GPU workers. Understand DEFAULT vs SPREAD vs PACK strategies and soft vs hard node affinity.
