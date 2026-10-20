@@ -5,12 +5,12 @@ const quizQuestions = [
         question: "What is the main advantage of SimPO over DPO?",
         options: [
             "SimPO trains faster by using a smaller model",
-            "SimPO eliminates the reference model, reducing memory usage by ~50%",
+            "SimPO eliminates the reference model, improving efficiency",
             "SimPO requires less preference data than DPO",
             "SimPO can train without any supervised fine-tuning"
         ],
         correct: 1,
-        explanation: "SimPO eliminates the reference model (π_ref) that DPO requires, reducing memory usage by approximately 50% since only the policy model needs to be loaded during training. This also simplifies implementation and reduces computational cost."
+        explanation: "SimPO eliminates the reference model (π_ref) that DPO requires. Section 4.4 shows SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10% (73→60 min, 77→69 GB). This also simplifies implementation and reduces computational cost."
     },
     {
         id: 2,
@@ -34,7 +34,7 @@ const quizQuestions = [
             "To improve compatibility with the reference model"
         ],
         correct: 1,
-        explanation: "Length normalization (dividing by |y|) prevents length exploitation. Without it, longer sequences would have lower summed log-probabilities, forcing the model to artificially inflate probabilities for longer sequences, leading to verbose, lower-quality outputs. The paper shows removing length normalization increases response length by 22-25% while performance drops dramatically."
+        explanation: "Length normalization (dividing by |y|) prevents length exploitation. Without it, longer sequences would have lower summed log-probabilities, forcing the model to artificially inflate probabilities for longer sequences, leading to verbose, lower-quality outputs. The paper shows removing length normalization increases response length up to ~25% in most cases (Table 11) while performance drops dramatically (Table 5: down 9.6 points LC on AlpacaEval 2)."
     },
     {
         id: 4,
@@ -70,7 +70,7 @@ const quizQuestions = [
             "SimPO outperforms DPO by 15 percentage points"
         ],
         correct: 1,
-        explanation: "On Llama-3-Instruct, SimPO achieves 44.7% LC win rate on AlpacaEval 2, while DPO achieves 40.3%, a 4.4 percentage point improvement. Across all setups, SimPO consistently outperforms DPO by 4-6 points."
+        explanation: "On Llama-3-Instruct, SimPO achieves 44.7% LC win rate on AlpacaEval 2, while DPO achieves 40.3%, a 4.4 percentage point improvement. Across all setups, SimPO outperforms DPO by 3.8-6.4 points on AlpacaEval 2 LC (Table 4)."
     },
     {
         id: 7,
@@ -82,11 +82,11 @@ const quizQuestions = [
             "β = 0.01 to 0.1"
         ],
         correct: 1,
-        explanation: "SimPO typically uses β between 2.0 and 2.5, which is higher than DPO's typical β values (0.1-0.5). This is because SimPO's reward is length-normalized, so the scale is different. β controls the reward scale and influences gradient magnitudes."
+        explanation: "SimPO typically uses β between 2.0 and 2.5, which is higher than DPO's typical β values (0.01-0.1, Table 7). This is because SimPO's reward is length-normalized, so the scale is different. β controls the reward scale and influences gradient magnitudes."
     },
     {
         id: 8,
-        question: "How does SimPO achieve comparable KL divergence to DPO without explicit KL regularization?",
+        question: "How does SimPO achieve reasonably small KL divergence without explicit KL regularization?",
         options: [
             "SimPO secretly includes a hidden KL term in the loss",
             "SimPO uses a small learning rate, diverse preference data, and relies on LLMs' intrinsic robustness to new data",
@@ -94,7 +94,7 @@ const quizQuestions = [
             "SimPO uses a different optimizer that enforces KL constraints"
         ],
         correct: 1,
-        explanation: "The paper attributes SimPO's comparable KL divergence to three factors: (1) small learning rate, (2) diverse preference dataset covering many domains, and (3) intrinsic robustness of LLMs to learn from new data without catastrophic forgetting. These practical factors provide implicit regularization."
+        explanation: "Section 4.4 states SimPO's KL divergence is reasonably small (Figure 5a). The paper attributes this to three factors from Section 2.3: (1) small learning rate, (2) diverse preference dataset covering many domains, and (3) intrinsic robustness of LLMs to learn from new data without catastrophic forgetting."
     },
     {
         id: 9,
@@ -113,12 +113,12 @@ const quizQuestions = [
         question: "What happens when length normalization is removed from SimPO?",
         options: [
             "Performance improves slightly",
-            "Response length increases by 22-25% while LC win rate drops dramatically (e.g., from 21.5% to 11.9%)",
+            "Response length increases up to ~25% in most cases while LC win rate drops dramatically (e.g., from 21.5% to 11.9%)",
             "Nothing—length normalization has no effect",
             "Training becomes unstable"
         ],
         correct: 1,
-        explanation: "The paper's ablation (Table 11) shows that removing length normalization causes responses to become 22-25% longer while LC win rate drops dramatically. For Mistral-Base on AlpacaEval 2, LC drops from 21.5% to 11.9%, showing that length exploitation hurts quality."
+        explanation: "The paper's ablation (Table 5 and Table 11) shows that removing length normalization causes responses to become up to ~25% longer in most cases (Mistral-Instruct AlpacaEval 2 is an exception where it gets shorter) while LC win rate drops dramatically. For Mistral-Base on AlpacaEval 2, LC drops from 21.5% to 11.9%, showing that length exploitation hurts quality."
     },
     {
         id: 11,
@@ -126,11 +126,11 @@ const quizQuestions = [
         options: [
             "SimPO performs worse than all of them",
             "SimPO performs comparably to ORPO but worse than KTO",
-            "SimPO consistently outperforms all of them across multiple setups",
+            "SimPO achieves the highest AlpacaEval 2 LC in all four setups and best overall performance",
             "The paper doesn't compare to these baselines"
         ],
         correct: 2,
-        explanation: "Table 4 in the paper shows SimPO consistently outperforms ORPO, KTO, IPO, CPO, RRHF, SLiC-HF, and R-DPO across all four training setups (Mistral/Llama-3 × Base/Instruct). SimPO achieves the highest LC win rates on AlpacaEval 2 in every configuration."
+        explanation: "Table 4 shows SimPO achieves the highest AlpacaEval 2 LC win rate in all four setups (Mistral/Llama-3 × Base/Instruct) and best overall performance. However, CPO beats SimPO on Arena-Hard in Mistral-Instruct (22.6 vs 21.0), and IPO/KTO beat it on MT-Bench GPT-4 in Llama-3-Instruct."
     },
     {
         id: 12,

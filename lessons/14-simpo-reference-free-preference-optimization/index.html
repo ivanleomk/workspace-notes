@@ -42,7 +42,7 @@
 
             <ul>
                 <li><strong>Reference model required:</strong> DPO needs to keep the SFT model in memory to compute log-probability ratios</li>
-                <li><strong>2× memory cost:</strong> Both policy and reference models loaded during training</li>
+                <li><strong>Memory and compute overhead:</strong> Both policy and reference models loaded during training</li>
                 <li><strong>Reward-generation mismatch:</strong> DPO's reward uses log-ratios, but generation uses average log-likelihood</li>
             </ul>
 
@@ -69,7 +69,7 @@
                 <li>The role of target reward margin \(\gamma\) in improving generalization</li>
                 <li>Why length normalization prevents verbosity exploitation</li>
                 <li>SimPO vs DPO results on AlpacaEval 2, Arena-Hard, and MT-Bench</li>
-                <li>How SimPO achieves comparable KL divergence without explicit regularization</li>
+                <li>How SimPO achieves reasonably small KL divergence without explicit regularization</li>
                 <li>State-of-the-art results: Gemma-2-9B-it-SimPO (72.4% LC on AlpacaEval 2)</li>
                 <li>Connection to DPO (Lesson 04) and broader post-training curriculum</li>
             </ul>
@@ -102,7 +102,7 @@
                 DPO requires keeping \(\pi_{\text{ref}}\) (typically the SFT model) in memory during training. This means:
             </p>
             <ul>
-                <li><strong>2× memory usage:</strong> Both \(\pi_\theta\) and \(\pi_{\text{ref}}\) loaded</li>
+                <li><strong>Memory and compute overhead:</strong> Both \(\pi_\theta\) and \(\pi_{\text{ref}}\) loaded, with extra forward passes</li>
                 <li><strong>Extra forward passes:</strong> Must compute \(\pi_{\text{ref}}(y|x)\) for every batch</li>
                 <li><strong>Implementation complexity:</strong> Managing two models during optimization</li>
             </ul>
@@ -136,9 +136,9 @@
 
             <p>
                 The paper reports that when training with DPO, only <strong>~50%</strong> of preference triples \((x, y_w, y_l)\) 
-                satisfy the condition that the average log-likelihood ranking matches the reward ranking (Section 2.2, citing 
-                concurrent work). This means DPO's reward can prefer \(y_w\) over \(y_l\) even when the policy's generation 
-                metric ranks \(y_l\) higher.
+                satisfy the condition that the average log-likelihood ranking matches the reward ranking (Section 2.2, Figure 4b). 
+                This observation aligns with concurrent work [14]. This means DPO's reward can prefer \(y_w\) over \(y_l\) even 
+                when the policy's generation metric ranks \(y_l\) higher.
             </p>
 
             <h3>The SimPO Hypothesis</h3>
@@ -239,10 +239,6 @@
                     <div class="stat-number">\(\gamma\): 0.5-1.5</div>
                     <div class="stat-label">Target Reward Margin</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-number">1×</div>
-                    <div class="stat-label">Memory vs DPO (no ref model)</div>
-                </div>
             </div>
             <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
                 <em>Typical values from Paper Section 3 and Appendix B</em>
@@ -272,7 +268,7 @@
 
             <h3>Experimental Evidence</h3>
             <p>
-                The paper demonstrates length normalization's effectiveness in Section 4.2 and Appendix E:
+                The paper demonstrates length normalization's effectiveness in Table 5 (Section 4.1) and Appendix E:
             </p>
 
             <div class="comparison-grid">
@@ -294,7 +290,7 @@
                     <p><strong>AlpacaEval 2 (Mistral-Base):</strong></p>
                     <ul>
                         <li>LC Win Rate: 11.9% (↓9.6 pts)</li>
-                        <li>Average Length: 2,345 tokens (↑25%)</li>
+                        <li>Average Length: 2,345 tokens (↑26%)</li>
                     </ul>
                     <p><strong>Arena-Hard (Mistral-Base):</strong></p>
                     <ul>
@@ -303,11 +299,12 @@
                     </ul>
                 </div>
             </div>
-            <p class="chart-caption"><em>Exact values from Paper Table 11 (Appendix E)</em></p>
+            <p class="chart-caption"><em>Exact values from Paper Table 5 and Table 11 (Appendix E)</em></p>
 
             <p>
-                Removing length normalization causes responses to become 22-25% longer on average while performance <strong>drops 
-                dramatically</strong> (down 9.6 points LC on AlpacaEval 2). This shows that without normalization, the model 
+                Removing length normalization causes responses to become up to ~25% longer in most cases while performance <strong>drops 
+                dramatically</strong> (down 9.6 points LC on AlpacaEval 2, Table 5). Mistral-Instruct on AlpacaEval 2 is an exception 
+                where responses actually get shorter (2067 vs 2193 tokens). This shows that without normalization, the model 
                 exploits length but produces lower-quality outputs.
             </p>
 
@@ -320,8 +317,9 @@
                 <li><strong>Length-Controlled Win Rate (LC):</strong> Adjusts for length to penalize exploitation</li>
             </ul>
             <p>
-                SimPO consistently achieves <strong>higher LC than raw WR</strong>, indicating minimal length exploitation. 
-                For example, Gemma-2-9B-it-SimPO: 72.4% LC vs 65.9% raw WR (Table 1 from paper).
+                SimPO usually achieves <strong>higher LC than raw WR</strong>, indicating minimal length exploitation. 
+                For example, Gemma-2-9B-it-SimPO: 72.4% LC vs 65.9% raw WR (Table 1 from paper). Mistral-Instruct is 
+                an exception: 32.1% LC vs 34.8% WR (Table 4).
             </p>
         </section>
 
@@ -346,20 +344,21 @@
 
             <h3>Impact of \(\gamma\) on Performance</h3>
             <p>
-                Section 4.3 of the paper analyzes the effect of \(\gamma\) on AlpacaEval 2 LC win rate. The authors 
-                tested \(\gamma \in \{0.0, 0.5, 1.0, 1.5, 2.0\}\) while holding \(\beta = 2.0\):
+                Section 4.3 of the paper analyzes the effect of \(\gamma\) on AlpacaEval 2 LC win rate. Figure 3a shows 
+                results with \(\gamma \in \{0.0, 0.8, 1.6, 2.4\}\) on Mistral-Base, where LC win rate first rises then falls. 
+                The paper states that no fixed \(\beta\) value is used (Section 4.3).
             </p>
 
             <div class="info-box">
                 <h4>Key Findings (Section 4.3):</h4>
                 <ul>
-                    <li><strong>\(\gamma = 0\):</strong> No margin (like DPO). Lower win rate.</li>
-                    <li><strong>\(\gamma = 0.5\) to \(\gamma = 1.5\):</strong> Best performance. Win rate improves with margin.</li>
-                    <li><strong>\(\gamma = 2.0\):</strong> Too large—performance degrades (margin too strict, model can't satisfy preferences).</li>
+                    <li><strong>\(\gamma = 0\):</strong> No margin. Lower win rate.</li>
+                    <li><strong>Intermediate \(\gamma\):</strong> Best performance. Win rate improves with margin.</li>
+                    <li><strong>Large \(\gamma\):</strong> Performance degrades (margin too strict).</li>
                 </ul>
                 <p>
                     The paper states: "Generation quality initially improves with an increasing target margin but degrades 
-                    when the margin becomes too large" (Section 4.3).
+                    when the margin becomes too large" (Section 2.3).
                 </p>
             </div>
 
@@ -376,8 +375,7 @@
             </p>
             <ul>
                 <li><strong>General recommendation:</strong> \(\gamma \in [0.5, 1.5]\)</li>
-                <li><strong>With strong SFT models:</strong> Use higher \(\gamma\) (e.g., 1.0-1.5)</li>
-                <li><strong>With weaker SFT models:</strong> Use moderate \(\gamma\) (e.g., 0.5-1.0)</li>
+                <li><strong>Per-setting values used (Table 8):</strong> Mistral-Base (\(\gamma=1.0\)), Mistral-Instruct (\(\gamma=0.5\)), Llama-3-Base (\(\gamma=1.6\)), Llama-3-Instruct (\(\gamma=1.4\))</li>
             </ul>
         </section>
 
@@ -398,7 +396,9 @@
 
             <h3>AlpacaEval 2 and Arena-Hard Results</h3>
             <p>
-                Table 4 from the paper shows SimPO consistently outperforms all baselines:
+                Table 4 from the paper shows SimPO achieves the highest AlpacaEval 2 LC win rate in all four setups and 
+                best overall performance, though CPO beats it on Arena-Hard in Mistral-Instruct (22.6 vs 21.0), and IPO/KTO 
+                beat it on MT-Bench GPT-4 in Llama-3-Instruct:
             </p>
 
             <div class="stats-grid">
@@ -456,17 +456,16 @@
 
             <h3>Training Efficiency</h3>
             <p>
-                SimPO is more memory and compute-efficient than DPO because it doesn't require the reference model (Section 4.4):
+                SimPO is more memory and compute-efficient than DPO because it doesn't require the reference model. 
+                Section 4.4 and Figure 5c show that SimPO cuts run time by roughly 20% and reduces GPU memory usage by 
+                about 10% compared to a vanilla DPO implementation (73→60 min, 77→69 GB on Llama-3-Base with 8×H100 GPUs). 
+                Footnote 12 notes DPO can be as memory-efficient as SimPO with a non-standard implementation.
             </p>
-            <ul>
-                <li><strong>Memory:</strong> ~50% reduction (only one model loaded, not two)</li>
-                <li><strong>Compute:</strong> Fewer forward passes per batch (no reference model evaluations)</li>
-            </ul>
 
             <h3>KL Divergence Without Explicit Regularization</h3>
             <p>
-                Although SimPO has no KL regularization term, the paper shows (Section 4.4) that KL divergence from 
-                the reference model remains comparable to DPO. The authors attribute this to:
+                Although SimPO has no KL regularization term, the paper shows (Section 4.4, Figure 5a) that KL divergence 
+                from the reference model is reasonably small. The authors attribute this to three factors (Section 2.3):
             </p>
             <ol>
                 <li>Small learning rate</li>
@@ -544,8 +543,8 @@
             <div class="chart-container">
                 <canvas id="simpo-vs-dpo-chart"></canvas>
                 <p class="chart-caption">
-                    Exact LC win rate values from Paper Table 4. SimPO outperforms DPO by 4.4-5.3 points across 
-                    Mistral and Llama-3 Instruct setups. Larger gaps in Base setups (6.4 pts for Mistral-Base).
+                    Exact LC win rate values from Paper Table 4. SimPO outperforms DPO by +6.4 (Mistral-Base), 
+                    +5.3 (Mistral-Instruct), +3.8 (Llama-3-Base), +4.4 (Llama-3-Instruct) on AlpacaEval 2 LC.
                 </p>
             </div>
 
@@ -554,7 +553,8 @@
                 <canvas id="gemma-results-chart"></canvas>
                 <p class="chart-caption">
                     Exact values from Paper Table 17 (Appendix J). SimPO on Gemma-2-9B-it achieves 72.4% LC on 
-                    AlpacaEval 2 and 59.1% on Arena-Hard, significantly outperforming both DPO and the base model.
+                    AlpacaEval 2 and 59.1% on Arena-Hard, outperforming DPO by 4.6 LC points on AlpacaEval 2 and 
+                    by only 0.2 on Arena-Hard (59.1 vs 58.9).
                 </p>
             </div>
 
@@ -569,7 +569,7 @@
 
             <h3>SimPO vs All Baselines (Llama-3-Instruct)</h3>
             <p>
-                The paper compares SimPO against 7 other preference optimization methods on Llama-3-Instruct (Table 4):
+                The paper compares SimPO against 8 other preference optimization methods on Llama-3-Instruct (Table 4):
             </p>
             <div class="chart-container">
                 <canvas id="baselines-chart"></canvas>
@@ -598,9 +598,10 @@
                 <div class="comparison-card">
                     <h4>Lesson 05: LLM-as-Judge & MT-Bench</h4>
                     <p>
-                        SimPO is evaluated using GPT-4 as a judge on AlpacaEval 2 and Arena-Hard—benchmarks that rely on 
-                        pairwise comparisons scored by LLM judges. The paper also evaluates on MT-Bench with GPT-4 scoring. 
-                        Length-controlled win rate (LC) addresses verbosity bias that LLM judges can exhibit.
+                        SimPO is evaluated using GPT-4 Turbo (GPT-4-Preview-1106, Table 2) as a judge on AlpacaEval 2 and 
+                        Arena-Hard—benchmarks that rely on pairwise comparisons scored by LLM judges. The paper also evaluates 
+                        on MT-Bench with GPT-4 Turbo and GPT-4 scoring. Length-controlled win rate (LC) addresses verbosity 
+                        bias that LLM judges can exhibit.
                     </p>
                 </div>
 
@@ -673,7 +674,6 @@
                     <ul>
                         <li>You have existing DPO pipelines and infrastructure</li>
                         <li>You want KL divergence controlled explicitly by the reference model</li>
-                        <li>Your SFT model is very different from the desired policy (large distribution shift)</li>
                     </ul>
                 </div>
             </div>

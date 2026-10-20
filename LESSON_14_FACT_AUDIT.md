@@ -34,18 +34,18 @@ This document lists every numeric claim, table/figure citation, and quote in Les
 
 ### Length Normalization Ablation
 
-9. **Claim:** Removing length normalization increases response length by 22-25%
-   - **Source:** Paper Appendix E, calculated from Table 11:
-     - Mistral-Base: 2,345 vs 1,868 = 25.5% increase
-     - Mistral-Instruct: 2,067 vs 2,193 = -5.7% (decrease, but overall trend is increase)
-     - Mistral-Base Arena-Hard: 851 vs 699 = 21.7% increase
-     - Mistral-Instruct Arena-Hard: 679 vs 539 = 26.0% increase
+9. **Claim:** Removing length normalization increases response length up to ~25% in most cases
+   - **Source:** Paper Appendix E states "up to 25%... in most cases", calculated from Table 11:
+     - Mistral-Base AlpacaEval 2: 2,345 vs 1,868 = 26% increase
+     - Mistral-Instruct AlpacaEval 2: 2,067 vs 2,193 = -5.7% (exception: actually shorter)
+     - Mistral-Base Arena-Hard: 851 vs 699 = 22% increase
+     - Mistral-Instruct Arena-Hard: 679 vs 539 = 26% increase
 
 10. **Claim:** Mistral-Base without LN: 11.9% LC, with LN: 21.5% LC (9.6 pt drop)
-    - **Source:** Paper Table 11, exact values
+    - **Source:** Paper Table 5 (Section 4.1), exact values
 
 11. **Claim:** Mistral-Base Arena-Hard without LN: 9.4% WR, with LN: 16.6% WR (7.2 pt drop)
-    - **Source:** Paper Table 11, exact values
+    - **Source:** Paper Table 5, exact values
 
 ### Hyperparameters
 
@@ -84,13 +84,51 @@ This document lists every numeric claim, table/figure citation, and quote in Les
 
 ### Memory and Efficiency
 
-20. **Claim:** ~50% memory reduction (no reference model)
-    - **Source:** Paper Section 4.4: "SimPO is more memory and compute-efficient than DPO" - the ~50% is inferred from needing only one model instead of two, not an exact quote but reasonable characterization
+20. **Claim:** SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10%
+    - **Source:** Paper Section 4.4 and Figure 5c, exact quote: "SimPO cuts run time by roughly 20% and reduces GPU memory usage by about 10%" (73→60 min, 77→69 GB on Llama-3-Base with 8×H100 GPUs). Footnote 12 notes DPO can be as memory-efficient if implemented differently.
 
 ### Train-Test Mismatch
 
 21. **Claim:** Only ~50% of DPO training triples satisfy likelihood ranking matching reward ranking
-    - **Source:** Paper Section 2.2: "In our experiments, we observed that only ∼50% of the triples from the training set satisfy this condition when trained with DPO (Figure 4(b))."
+   - **Source:** Paper Section 2.2 and Figure 4(b): "In our experiments, we observed that only ∼50% of the triples from the training set satisfy this condition when trained with DPO (Figure 4(b))." The observation aligns with concurrent work [14].
+
+### LC vs WR Comparison
+
+22. **Claim:** SimPO usually achieves higher LC than raw WR (with Mistral-Instruct exception)
+    - **Source:** Paper Table 1 (Gemma: 72.4% LC vs 65.9% WR) and Table 4 (Mistral-Instruct: 32.1% LC vs 34.8% WR, the exception)
+
+### Gamma Sweep
+
+23. **Claim:** Figure 3a tests γ ∈ {0.0, 0.8, 1.6, 2.4} on Mistral-Base; Section 4.3 states no fixed β
+    - **Source:** Paper Section 4.3 and Figure 3
+
+### Baseline Comparisons
+
+24. **Claim:** SimPO achieves highest AlpacaEval 2 LC in all four setups; CPO beats it on Arena-Hard Mistral-Instruct (22.6 vs 21.0)
+    - **Source:** Paper Table 4, exact values
+
+25. **Claim:** 8 other baselines: RRHF, SLiC-HF, IPO, CPO, KTO, ORPO, DPO, R-DPO
+    - **Source:** Paper Table 4
+
+### DPO β Range
+
+26. **Claim:** DPO β search range is 0.01-0.1
+    - **Source:** Paper Table 7, exact range
+
+### Judge Model
+
+27. **Claim:** Judge is GPT-4 Turbo (GPT-4-Preview-1106)
+    - **Source:** Paper Table 2
+
+### Per-setup Gaps
+
+28. **Claim:** SimPO-DPO gaps: +6.4 (Mistral-Base), +5.3 (Mistral-Instruct), +3.8 (Llama-3-Base), +4.4 (Llama-3-Instruct)
+    - **Source:** Paper Table 4, calculated from exact LC values
+
+### Gemma Results Detail
+
+29. **Claim:** Gemma SimPO beats DPO by 4.6 LC on AlpacaEval 2 and by only 0.2 on Arena-Hard (59.1 vs 58.9)
+    - **Source:** Paper Table 17, exact values
 
 ## Quotes (Must Be Verbatim)
 
@@ -101,7 +139,10 @@ This document lists every numeric claim, table/figure citation, and quote in Les
    - **Source:** Paper Section 3, verbatim
 
 3. **Quote:** "Generation quality initially improves with an increasing target margin but degrades when the margin becomes too large"
-   - **Source:** Paper Section 4.3, verbatim
+   - **Source:** Paper Section 2.3 (with forward reference to § 4.3), exact match in Section 2.3
+
+4. **Quote:** "KL divergence... is reasonably small"
+   - **Source:** Paper Section 4.4, Figure 5a caption
 
 ## Table and Figure Citations
 
