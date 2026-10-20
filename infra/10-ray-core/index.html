@@ -168,10 +168,11 @@ graph TB
         W6[Worker N]
     end
     
-    DRIVER -->|1. Submit task to local raylet| RAYLET1
-    DRIVER -->|1. Create actor via GCS| GCS
-    GCS -->|2. Actor placement| RAYLET1
-    GCS -->|2. Actor placement| RAYLET2
+    DRIVER -->|1. RequestWorkerLease| RAYLET1
+    DRIVER -->|2. PushTask| W1
+    DRIVER -->|3. Create actor via GCS| GCS
+    GCS -->|4. Actor placement| RAYLET1
+    GCS -->|4. Actor placement| RAYLET2
     RAYLET1 --> W1
     RAYLET1 --> W2
     RAYLET1 --> W3
@@ -181,7 +182,7 @@ graph TB
     W1 -.->|read/write objects| STORE1
     W2 -.->|read/write objects| STORE1
     W4 -.->|read/write objects| STORE2
-    RAYLET1 -.->|3. Transfer objects| RAYLET2
+    RAYLET1 -.->|5. Transfer objects| RAYLET2
     
     style GCS fill:#3b82f6,stroke:#f1f5f9
     style DRIVER fill:#8b5cf6,stroke:#f1f5f9
@@ -320,7 +321,7 @@ while pending:
 
             <h3>Task Options</h3>
             <p>
-                Tasks can specify resource requirements:
+                Tasks can specify resource requirements (pseudocode; <code>process</code> and <code>large_data</code> not defined):
             </p>
             <pre><code class="language-python">@ray.remote(num_cpus=2, num_gpus=0.5, memory=4*1024*1024*1024)  # 4 GiB
 def heavy_task(data):
@@ -540,7 +541,7 @@ RAY_CONFIG(int64_t, max_direct_call_object_size, 100 * 1024)</code></pre>
                 (this page targets a newer Ray than 2.40.0; the mechanism is the same):
             </p>
             <blockquote>
-                "When memory pressure is detected, when pinned objects are automatically spilled from shared memory to 
+                "when memory pressure is detected, pinned objects are automatically spilled from shared memory to 
                 external storage (local disk or S3). When a spilled object is needed again, it is transparently 
                 restored back into Plasma. [...] Object spilling is fully abstracted away to user applications. 
                 No application-level code changes are needed."
@@ -817,10 +818,9 @@ RAY_CONFIG(int64_t, max_lineage_bytes, 1024 * 1024 * 1024)  // 1 GiB</code></pre
                 resource management, node registration, worker process creation.</li>
             </ul>
             <p>
-                <strong>GCS FT setup:</strong> Not supported in local <code>ray.init()</code> clusters. 
-                Per <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">docs</a>, 
+                <strong>GCS FT setup:</strong> Per <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">docs</a>, 
                 enable with <code>RAY_REDIS_ADDRESS=redis_ip:port ray start --head --redis-password PASSWORD</code>. 
-                Officially supported only on KubeRay.
+                GCS FT is "officially supported ONLY if you are using KubeRay for Ray serve fault tolerance."
             </p>
         </section>
 
@@ -923,8 +923,9 @@ while futures:
                 bottleneck if:
             </p>
             <ul>
-                <li><strong>Many small objects:</strong> Creating 1 million 1 KB objects fills Plasma metadata. 
-                For small results, return them inline (they'll be ≤100 KB and stored in-process).</li>
+                <li><strong>Many small objects:</strong> Creating many small objects with <code>ray.put</code> adds 
+                per-object metadata and overhead in the object store. For small task results, return them normally 
+                (they'll be ≤100 KB and inlined in-process, not stored in Plasma).</li>
                 <li><strong>Head node hotspot:</strong> If all tasks return results to the driver (head node), and 
                 you're returning 1 TB of data, the driver's object store and network become a bottleneck. Instead, 
                 write results directly to S3 or a database from workers.</li>
@@ -1364,8 +1365,8 @@ would serialize the dataset for each task, wasting memory and bandwidth.
                 with the RayCluster CRD, enable GCS HA with Redis, size head nodes, and handle failure modes (head-node 
                 bottleneck, object store full, actor death).</li>
                 <li><strong>Lesson 13: Ray in Production RL: verl, OpenRLHF, SkyRL</strong> — How real RL systems use 
-                Ray for rollouts: verl's HybridFlow, OpenRLHF's hybrid engine (80% time on generation), and 
-                SkyRL-OpenHands' 80–100 containers per 16 CPUs.</li>
+                Ray for rollouts: verl's HybridFlow, OpenRLHF's hybrid engine, and 
+                SkyRL-OpenHands.</li>
             </ul>
         </section>
 
