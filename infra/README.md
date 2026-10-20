@@ -29,13 +29,14 @@ Visit the live interactive lessons at:
 - [Lesson 07: Daytona Architecture and Container vs VM Classes](https://ivanleomk.github.io/workspace-notes/infra/07-daytona/)
 - [Lesson 08: Modal Sandboxes - gVisor, Memory Snapshots, and Elasticity](https://ivanleomk.github.io/workspace-notes/infra/08-modal-sandboxes/)
 - [Lesson 09: Other Open-Source Sandboxes](https://ivanleomk.github.io/workspace-notes/infra/09-open-source-sandboxes/)
+- [Lesson 10: Ray Core - Tasks, Actors, Object Store, and GCS](https://ivanleomk.github.io/workspace-notes/infra/10-ray-core/)
 
 ## What You'll Learn
 
 - **Phase 1 (Lessons 01–04):** Linux isolation primitives — namespaces, cgroups, seccomp, overlayfs, runc, gVisor, Kata, Firecracker
 - **Phase 2 (Lessons 05–06):** Snapshot/restore and forking agent state with Firecracker and E2B
 - **Phase 3 (Lessons 07–09):** Hosted and open-source sandbox platforms — Daytona, Modal, microsandbox, agent-sandbox, beta9, Fly Machines
-- **Phase 4 (Lessons 10–13):** Ray orchestration for multi-GPU RL — tasks, actors, placement groups, KubeRay, fault tolerance
+- **Phase 4 (Lessons 10–13):** Ray orchestration for multi-GPU RL — Ray Core, scheduling, KubeRay, production RL (verl, OpenRLHF)
 - **Phase 5 (Lessons 14–17):** Real eval harnesses — SWE-bench, Inspect AI, OpenHands, warm pools, image caching
 - **Phase 6 (Lessons 18–20):** Production concerns — exec protocols, retries, idempotency, observability, cost control
 - **Phase 7 (Lessons 21–24):** Advanced topics — DeepSWE's K8s migration, gVisor deep dive, GPU in sandboxes, live migration
