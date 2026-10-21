@@ -91,26 +91,26 @@ const domainResults = {
 
 // Transfer learning results from Figure 9
 const transferResults = [
-    { setting: 'BERT on HellaSwag (trained on HellaSwag)', accuracy: 46.7 },
+    { setting: 'BERT on HellaSwag (trained on HellaSwag)', accuracy: 46.4 },
     { setting: 'BERT on HellaSwag (trained on SWAG)', accuracy: 34.6 },
     { setting: 'BERT on SWAG (trained on SWAG)', accuracy: 86.7 },
-    { setting: 'BERT on SWAG (trained on HellaSwag)', accuracy: 69.1 }
+    { setting: 'BERT on SWAG (trained on HellaSwag)', accuracy: 71.4 }
 ];
 
 // SWAG comparison data from Section 3
 const swagComparison = [
     { setting: 'SWAG - Full context', model: 'BERT-Large', accuracy: 86.7 },
     { setting: 'SWAG - Ending only', model: 'BERT-Large', accuracy: 74.8 },
-    { setting: 'SWAG - Shuffled', model: 'BERT-Large', accuracy: 77.1 },
+    { setting: 'SWAG - Shuffled', model: 'BERT-Large', accuracy: 77.0 },
     { setting: 'SWAG - Shuffled + Ending only', model: 'BERT-Large', accuracy: 60.4 },
     { setting: 'HellaSwag - Full context', model: 'BERT-Large', accuracy: 46.7 }
 ];
 
 // Real HellaSwag examples for the explorer
-// These are representative examples based on the paper's format
+// Four real items from Rowan/hellaswag (endings reordered to match the paper figures) + two illustrative items
 const hellaSwagExamples = [
     {
-        ind: 24,
+        ind: 4,
         activity_label: "Removing ice from car",
         source: "activitynet",
         split_type: "indomain",
@@ -124,35 +124,37 @@ const hellaSwagExamples = [
         label: 3
     },
     {
-        ind: 73,
+        ind: 28652,
         activity_label: "Playing drums",
         source: "activitynet",
         split_type: "indomain",
-        ctx: "A guy is sitting with sticks in his hands. A guy plays the drums.",
+        illustrative: true,
+        ctx: "A guy is sitting with sticks in his hands. a guy",
         endings: [
-            "A guy is sitting with drumsticks in his hands.",
-            "The guy wipes his face with his hand.",
-            "The guy is swirling around with drum sticks.",
-            "The guy has finished playing drums."
-        ],
-        label: 1
-    },
-    {
-        ind: 1133,
-        activity_label: "Cutting the grass",
-        source: "activitynet",
-        split_type: "indomain",
-        ctx: "A man is standing in a yard holding a lawn mower. He starts the lawn mower.",
-        endings: [
-            "He then cuts the grass on the lawn.",
-            "He then does a split and rubs his hands together.",
-            "He takes off the hat he is wearing.",
-            "He is cutting all the grass around the side."
+            "is playing the drums.",
+            "moves away from him and begins to play a set of drums.",
+            "walks into the frame and out of the stage.",
+            "is sitting on a chair and drumming."
         ],
         label: 0
     },
     {
-        ind: 201,
+        ind: 491,
+        activity_label: "Cutting the grass",
+        source: "activitynet",
+        split_type: "zeroshot",
+        illustrative: true,
+        ctx: "A man walks outside plugs his lawn mower in and gets ready to mow. he",
+        endings: [
+            "goes back and fourth mowing in different directions going pretty fast.",
+            "pushes the lawn mower up and down the yard chopping some grass and raking the dirt.",
+            "starts the mower and begins going over the lawn cutting the grass.",
+            "stands up and is laying on the ground now."
+        ],
+        label: 2
+    },
+    {
+        ind: 39692,
         activity_label: "Sharpening knives",
         source: "activitynet",
         split_type: "zeroshot",
@@ -166,7 +168,7 @@ const hellaSwagExamples = [
         label: 3
     },
     {
-        ind: 487,
+        ind: 44552,
         activity_label: "Youth",
         source: "wikihow",
         split_type: "indomain",
@@ -180,7 +182,7 @@ const hellaSwagExamples = [
         label: 2
     },
     {
-        ind: 912,
+        ind: 10344,
         activity_label: "Family Life",
         source: "wikihow",
         split_type: "zeroshot",

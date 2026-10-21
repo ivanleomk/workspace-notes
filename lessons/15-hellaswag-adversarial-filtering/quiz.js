@@ -42,7 +42,7 @@ const quizQuestions = [
             "Humans: 99%, BERT-Large: 25%"
         ],
         correct: 2,
-        explanation: "Humans achieved 95.6% accuracy on HellaSwag, showing it's easy for people. BERT-Large, the best model at the time, achieved only 47.3% on the test set - less than half of human performance and barely above random chance (25%). This massive 48+ point gap demonstrates that commonsense reasoning remained unsolved."
+        explanation: "Humans achieved 95.6% accuracy on HellaSwag, showing it's easy for people. BERT-Large, the best model at the time, achieved only 47.3% on the test set - far below human performance and just under twice random chance (25%). This massive 48+ point gap demonstrates that commonsense reasoning remained unsolved."
     },
     {
         question: "What motivated the creation of HellaSwag after BERT solved SWAG?",
@@ -86,7 +86,7 @@ const quizQuestions = [
             "Transfer fails completely with 25% accuracy (random chance)"
         ],
         correct: 1,
-        explanation: "A BERT-Large model trained on SWAG achieves only 34.6% when evaluated on HellaSwag - barely above random chance and 12 points below a model trained on HellaSwag (46.7%). This poor transfer suggests that solving SWAG didn't require learning general commonsense reasoning, just dataset-specific patterns."
+        explanation: "A BERT-Large model trained on SWAG achieves only 34.6% when evaluated on HellaSwag - only ~10 points above random chance and about 12 points below a model trained on HellaSwag (46.4%). This poor transfer suggests that solving SWAG didn't require learning general commonsense reasoning, just dataset-specific patterns."
     }
 ];
 

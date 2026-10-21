@@ -65,7 +65,7 @@ All values from Table 1 of the paper.
 |---------|----------|--------|
 | SWAG - Full context (BERT-Large) | 86.7% | Figure 4 |
 | SWAG - Ending only (no context) | 74.8% | Figure 4 |
-| SWAG - Shuffled words | 77.1% | Figure 4 |
+| SWAG - Shuffled words | 77.0% | Figure 4 |
 | SWAG - Shuffled + Ending only | 60.4% | Figure 4 |
 | HellaSwag - Full context (BERT-Large) | 46.7% | Table 1 |
 | Human accuracy on SWAG | 88% | Section 1, Introduction |
@@ -77,10 +77,10 @@ All values from Table 1 of the paper.
 
 | Setting | Accuracy | Source |
 |---------|----------|--------|
-| BERT on HellaSwag (trained on HellaSwag) | 46.7% | Figure 9 |
+| BERT on HellaSwag (trained on HellaSwag) | 46.4% | Figure 9 |
 | BERT on HellaSwag (trained on SWAG) | 34.6% | Figure 9 |
 | BERT on SWAG (trained on SWAG) | 86.7% | Figure 9 |
-| BERT on SWAG (trained on HellaSwag) | 69.1% | Figure 9 |
+| BERT on SWAG (trained on HellaSwag) | 71.4% | Figure 9 |
 
 **Source:** Figure 9 (transfer experiments)
 
@@ -131,16 +131,14 @@ The following information is from sources published after the 2019 paper and is 
 
 | Claim | Approximate Values | Source Note |
 |-------|-------------------|-------------|
-| GPT-4 on HellaSwag (2023) | ~95% | Model technical reports, lm-eval-harness leaderboards (post-2019) |
-| Claude 3 Opus (2024) | ~96% | Post-2019 model reports |
-| Llama-3 70B (2024) | ~92% | Post-2019 model reports |
-| Llama-3 8B (2024) | ~82% | Post-2019 model reports |
+| GPT-4 on HellaSwag (2023) | 95.3% (10-shot) | GPT-4 Technical Report (OpenAI, 2023) |
+| Claude 3 Opus (2024) | 95.4% (10-shot) | Claude 3 Model Card (Anthropic, March 2024) |
 
 **Note:** These values are not from the original paper. They represent the state of HellaSwag saturation as of 2024-2025, based on public model evaluations.
 
 ## Dataset Examples
 
-The interactive examples used in the lesson are representative of the HellaSwag format as described in the paper. While we created illustrative examples based on the paper's structure, the lesson clearly indicates they follow the format shown in Figure 1, Figure 8, Figure 10, and Table 2 of the paper.
+The interactive examples used in the lesson include four real items from the HellaSwag dataset (from Rowan/hellaswag on Hugging Face) and two illustrative items written for this lesson. The real items' endings are reordered to match the paper's presentation, and the lesson clearly indicates which items are illustrative.
 
 The paper provides example questions with the following structure:
 - Context from ActivityNet or WikiHow
@@ -172,9 +170,6 @@ The paper provides example questions with the following structure:
 
 > "More broadly, it suggests a new path forward for NLP research, in which benchmarks co-evolve with the evolving state-of-the-art in an adversarial way, so as to present ever-harder challenges."
 - Source: Abstract
-
-> "Generation quality initially improves with an increasing target margin but degrades when the margin becomes too large"
-- Source: Section 2.3 (this is about the margin parameter γ in preference optimization, but the concept applies to adversarial filtering convergence)
 
 ## Summary
 
