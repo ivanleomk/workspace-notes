@@ -26,7 +26,7 @@ const quizQuestions = [
         question: "How does Ray's hybrid two-level scheduler decide where to place tasks vs actors?",
         options: [
             "Both tasks and actors are scheduled by the GCS (centralized scheduling)",
-            "Tasks are scheduled by local raylets (local-first, then spillback); actors are scheduled by the GCS (centralized)",
+            "Tasks are scheduled by the caller's preferred raylet (hybrid pack-then-spread, with spillback); actor creation is coordinated by the GCS",
             "Both tasks and actors are scheduled by local raylets (no GCS involvement)",
             "Tasks are scheduled by the GCS; actors are scheduled by local raylets"
         ],
