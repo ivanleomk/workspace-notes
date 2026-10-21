@@ -27,7 +27,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 12 | B | ✅ Complete | DeepSeek-R1: Reasoning via RL | DeepSeek-AI (2025) |
 | 13 | A | ✅ Complete | TruthfulQA: Imitative Falsehoods | Lin, Hilton, Evans (ACL 2022) |
 | 14 | B | ✅ Complete | SimPO: Simple Preference Optimization | Meng, Xia, Chen (NeurIPS 2024) |
-| 15 | A | 📝 Next | BIG-bench or HellaSwag or ARC | Foundational benchmark classic |
+| 15 | A | ✅ Complete | HellaSwag: Adversarial Filtering | Zellers, Holtzman, Bisk, Farhadi, Choi (ACL 2019) |
+| 16 | B | 📝 Next | Advanced Post-Training Technique | ORPO, KTO, or Online DPO |
 
 ## Learning Objectives by Track
 
@@ -72,13 +73,14 @@ Each lesson includes:
 - ✅ Lesson 12 (Track B): DeepSeek-R1 - Reasoning via Reinforcement Learning (DeepSeek-AI, 2025)
 - ✅ Lesson 13 (Track A): TruthfulQA - Imitative Falsehoods (Lin, Hilton, Evans, ACL 2022)
 - ✅ Lesson 14 (Track B): SimPO - Simple Preference Optimization with Reference-Free Reward (Meng, Xia, Chen, NeurIPS 2024)
+- ✅ Lesson 15 (Track A): HellaSwag - Can a Machine Really Finish Your Sentence? Adversarial Filtering for Commonsense NLI (Zellers et al., ACL 2019)
 
 **Next Up:**
-Lesson 15 (Track A): Foundational benchmark classic not yet covered. Strong candidates:
-- **BIG-bench:** Diverse collection of challenging tasks requiring generalization
-- **HellaSwag:** Commonsense reasoning through sentence completion
-- **ARC (AI2 Reasoning Challenge):** Science exam questions requiring reasoning
-- **Chatbot Arena:** Crowdsourced evaluation with ELO rankings (partial coverage in Lesson 05)
+Lesson 16 (Track B): Advanced post-training technique building on DPO/SimPO foundations. Strong candidates:
+- **ORPO (Odds Ratio Preference Optimization):** Combines SFT and preference learning in one stage (Hong et al., 2024)
+- **KTO (Kahneman-Tversky Optimization):** Uses binary feedback instead of pairwise preferences (Ethayarajh et al., 2024)
+- **Online/Iterative DPO:** Generates new preference data during training for better distribution matching
+- **RSO (Rejection Sampling Optimization):** Combines rejection sampling with DPO for improved sample efficiency
 
 ## How to Request a Lesson
 
