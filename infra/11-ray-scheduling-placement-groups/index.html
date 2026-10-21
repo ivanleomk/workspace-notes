@@ -48,11 +48,11 @@
                 <h3>What You'll Learn</h3>
                 <ul>
                     <li>Ray's logical resource model: CPU, GPU, memory, object_store_memory, and custom resources</li>
-                    <li>Default resource allocations for tasks (1 CPU) vs actors (0 CPU for creation, 1 CPU for methods)</li>
+                    <li>Default resource allocations: tasks use 1 CPU; actors use 1 CPU for scheduling and 0 CPU while running</li>
                     <li>Fractional resources (e.g., <code>num_gpus=0.25</code>) and when to use them</li>
                     <li>How Ray's hybrid scheduler works: two-level (GCS for actors, local raylet for tasks), 
                     locality-aware, spillback when resources unavailable</li>
-                    <li>Scheduling strategies: DEFAULT (local-first), SPREAD (anti-affinity), NodeAffinitySchedulingStrategy 
+                    <li>Scheduling strategies: DEFAULT (hybrid: pack until scheduler_spread_threshold=0.5, then spread), SPREAD (best-effort spreading), NodeAffinitySchedulingStrategy 
                     (soft vs hard), PlacementGroupSchedulingStrategy</li>
                     <li>Placement groups: bundles, strategies (PACK, SPREAD, STRICT_PACK, STRICT_SPREAD), two-phase 
                     commit, lifecycle, <code>placement_group_capture_child_tasks</code></li>
@@ -273,16 +273,14 @@ graph TB
                 "When a resource request (i.e RequestWorkerLease PRC) is received by the raylet, it will go through the above state machine"
             </blockquote>
             <p>
-                The raylet uses a <strong>local-first</strong> policy:
+                The raylet applies the default hybrid policy: it packs onto the local node until its critical resource utilization exceeds 50% (scheduler_spread_threshold), then prefers other nodes.
             </p>
             <ol>
-                <li><strong>Local placement:</strong> If the local node has resources, schedule the task locally.</li>
+                <li><strong>Local placement:</strong> If the local node has resources and is below the 50% threshold, schedule the task locally.</li>
                 <li><strong>Spillback:</strong> If not, the raylet replies to the caller (owner) with the address of a remote raylet chosen from its eventually-consistent cluster view, and the caller retries the lease request there. The GCS is not on this path. If no node has resources, the task is queued (status: PENDING).</li>
             </ol>
             <p>
-                <strong>Why local-first?</strong> Minimizes data transfer. If a task depends on objects created by 
-                the driver or previous tasks on the same node, those objects are already in the local object store 
-                (zero-copy access).
+                Data locality is handled by the caller, not the raylet: "Ray supports data locality by having each task caller choose a preferred raylet based on the caller's local information about task argument locations. The scheduling policies implemented by the raylets do not consider data locality."
             </p>
 
             <div class="mermaid">
@@ -309,7 +307,7 @@ sequenceDiagram
     end
             </div>
             <p class="diagram-caption">
-                <strong>Figure 2:</strong> Task scheduling with local-first policy. Driver requests worker lease from 
+                <strong>Figure 2:</strong> Task scheduling via the preferred raylet, with spillback. Driver requests worker lease from 
                 local raylet. If local resources available, task runs locally. If not, the local raylet replies with a remote raylet's address and the driver retries the lease there (spillback).
             </p>
 
@@ -355,7 +353,7 @@ future = task.remote()</code></pre>
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/index.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "\"SPREAD\" strategy will try to spread the tasks or actors among available nodes."
+                <code>"SPREAD"</code> strategy will try to spread the tasks or actors among available nodes.
             </blockquote>
             <pre><code class="language-python">@ray.remote(scheduling_strategy="SPREAD")
 def task():
@@ -463,10 +461,10 @@ worker = Worker.options(
                 A placement group consists of <strong>bundles</strong>: resource specifications. From Ray docs:
             </p>
             <blockquote>
-                "A **bundle** is a collection of "resources". It could be a single resource, ``{"CPU": 1}``, or a group of resources, ``{"CPU": 1, "GPU": 4}``."
+                "A <strong>bundle</strong> is a collection of "resources". It could be a single resource, <code>{"CPU": 1}</code>, or a group of resources, <code>{"CPU": 1, "GPU": 4}</code>."
             </blockquote>
             <blockquote>
-                "Ray supports four placement group strategies. The default scheduling policy is ``PACK``."
+                "Ray supports four placement group strategies. The default scheduling policy is <code>PACK</code>."
             </blockquote>
             <pre><code class="language-python">from ray.util.placement_group import placement_group
 
@@ -500,7 +498,7 @@ ray.get(pg.ready())
                 From Ray docs:
             </p>
             <blockquote>
-                "**PACK** All provided bundles are packed onto a single node on a best-effort basis. If strict packing is not feasible (i.e., some bundles do not fit on the node), bundles can be placed onto other nodes."
+                "<strong>PACK</strong> All provided bundles are packed onto a single node on a best-effort basis. If strict packing is not feasible (i.e., some bundles do not fit on the node), bundles can be placed onto other nodes."
             </blockquote>
             <p>
                 <strong>Use case:</strong> Multi-GPU training where all GPUs should be on the same node (fast NVLink 
@@ -512,7 +510,7 @@ ray.get(pg.ready())
                 From Ray docs:
             </p>
             <blockquote>
-                "**STRICT_PACK** All bundles must be placed into a single node on the cluster. Use this strategy when you want to maximize the locality."
+                "<strong>STRICT_PACK</strong> All bundles must be placed into a single node on the cluster. Use this strategy when you want to maximize the locality."
             </blockquote>
             <p>
                 If no single node has enough resources, the placement group remains PENDING.
@@ -523,7 +521,7 @@ ray.get(pg.ready())
                 From Ray docs:
             </p>
             <blockquote>
-                "**SPREAD** Each bundle is spread onto separate nodes on a best-effort basis. If strict spreading is not feasible, bundles can be placed on overlapping nodes."
+                "<strong>SPREAD</strong> Each bundle is spread onto separate nodes on a best-effort basis. If strict spreading is not feasible, bundles can be placed on overlapping nodes."
             </blockquote>
             <p>
                 <strong>Use case:</strong> Distributed training where you want one worker per node (to maximize 
@@ -535,7 +533,7 @@ ray.get(pg.ready())
                 From Ray docs:
             </p>
             <blockquote>
-                "**STRICT_SPREAD** Each bundle must be scheduled in a separate node."
+                "<strong>STRICT_SPREAD</strong> Each bundle must be scheduled in a separate node."
             </blockquote>
             <p>
                 If the cluster has fewer nodes than bundles, the placement group stays PENDING (infeasible); it does not fail.
@@ -640,7 +638,7 @@ remove_placement_group(pg)</code></pre>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/placement-group.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "By default, child actors and tasks don't share the same placement group that the parent uses. To automatically schedule child actors or tasks to the same placement group, set ``placement_group_capture_child_tasks`` to True."
+                "By default, child actors and tasks don't share the same placement group that the parent uses. To automatically schedule child actors or tasks to the same placement group, set <code>placement_group_capture_child_tasks</code> to True."
             </blockquote>
             <pre><code class="language-python">from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -710,10 +708,11 @@ ray.get(future)  # "child task"</code></pre>
                 <a href="https://github.com/verl-project/verl/blob/main/verl/single_controller/ray/base.py" target="_blank"><code>verl/single_controller/ray/base.py</code></a> 
                 (RayResourcePool.get_placement_groups, main, excerpt):
             </p>
-            <pre><code class="language-python"># Real verl code (verl/single_controller/ray/base.py):
-def get_placement_groups(self, strategy="STRICT_PACK", ...):
+            <pre><code class="language-python"># Abridged excerpt from verl/single_controller/ray/base.py (L135-166; lines omitted):
+def get_placement_groups(self, strategy="STRICT_PACK", name=None, device_name="cuda"):
     bundle = {"CPU": self.max_colocate_count}
-    bundle[device_name] = 1
+    if self.use_gpu:
+        bundle[device_name] = 1
     placement_group(bundles=bundles, strategy=strategy, name=pg_name_prefix + str(idx), lifetime=lifetime)
     
 # RayWorkerGroup uses bin_pack: bool = True → strategy = "STRICT_PACK"</code></pre>
@@ -730,7 +729,7 @@ def get_placement_groups(self, strategy="STRICT_PACK", ...):
                 Apache-2.0) is an open-source RLHF framework supporting Ray + vLLM + DeepSpeed. From the README:
             </p>
             <blockquote>
-                "OpenRLHF is **the first** high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM distributed architecture** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback."
+                "OpenRLHF is <strong>the first</strong> high-performance, production-ready open-source RLHF framework that combines <strong>Ray + vLLM distributed architecture</strong> with a <strong>unified agent-based design paradigm</strong> for scalable and extensible reinforcement learning from human feedback."
             </blockquote>
             <p>
                 OpenRLHF uses placement groups for vLLM inference. From 
@@ -753,7 +752,7 @@ ray.get(shared_pg.ready())</code></pre>
                 From OpenRLHF's <a href="https://github.com/OpenRLHF/OpenRLHF#readme" target="_blank">README</a> (vendor claim):
             </p>
             <blockquote>
-                "RLHF training spends **80% of the time on sample generation**. Powered by vLLM with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation."
+                "RLHF training spends <strong>80% of the time on sample generation</strong>. Powered by vLLM with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation."
             </blockquote>
             <p>
                 <strong>Lesson 13</strong> (Ray in Production RL) covers verl and OpenRLHF in more detail, including 
@@ -814,7 +813,7 @@ def demo_placement_group_strategies():
     print("\n--- Strategy: PACK ---")
     pg_pack = placement_group(
         name="pg_pack",
-        bundles=[{"CPU": 2, "simulated_gpu": 1}] * 3,
+        bundles=[{"CPU": 2, "simulated_gpu": 1}] * 2,
         strategy="PACK"
     )
     ray.get(pg_pack.ready())
@@ -825,21 +824,21 @@ def demo_placement_group_strategies():
     print("\n--- Strategy: SPREAD ---")
     pg_spread = placement_group(
         name="pg_spread",
-        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 2,
+        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 1,
         strategy="SPREAD"
     )
-    ray.get(pg_spread.ready())
+    ray.get(pg_spread.ready(), timeout=10)
     print(f"✓ SPREAD placement group created")
-    print(f"  Bundles will be spread across nodes")
+    print(f"  Bundles are spread across nodes on a best-effort basis (single node here, so they share it)")
     
     # STRICT_PACK: all on same node
     print("\n--- Strategy: STRICT_PACK ---")
     pg_strict_pack = placement_group(
         name="pg_strict_pack",
-        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 2,
+        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 1,
         strategy="STRICT_PACK"
     )
-    ray.get(pg_strict_pack.ready(), timeout=5)
+    ray.get(pg_strict_pack.ready(), timeout=10)
     print(f"✓ STRICT_PACK placement group created")
     print(f"  All bundles MUST be on the same node")
     
@@ -1035,15 +1034,15 @@ def demo_resource_exhaustion():
 
 def demo_capture_child_tasks():
     """
-    Demonstrate capture_child_tasks flag
+    Demonstrate placement_group_capture_child_tasks flag
     """
     print("\n" + "="*60)
-    print("DEMO 4: capture_child_tasks Flag")
+    print("DEMO 4: placement_group_capture_child_tasks Flag")
     print("="*60)
     
     ray.init(num_cpus=8, ignore_reinit_error=True)
     
-    # Create placement group with placement_group_capture_child_tasks
+    # Create placement group
     pg = placement_group(
         bundles=[{"CPU": 4}],
         strategy="PACK",
@@ -1091,7 +1090,7 @@ if __name__ == "__main__":
         print("2. PACK/SPREAD/STRICT_PACK/STRICT_SPREAD control placement strategy")
         print("3. Use STRICT_PACK for multi-GPU training (all GPUs on same node)")
         print("4. Pending placement groups block actor creation until resources available")
-        print("5. capture_child_tasks=True automatically schedules child tasks in PG")
+        print("5. placement_group_capture_child_tasks=True automatically schedules child tasks in PG")
         print("\nNext: Read Lesson 12 (KubeRay) and Lesson 13 (RL in Production)")
     except Exception as e:
         print(f"\n✗ Demo failed: {e}")
@@ -1159,7 +1158,7 @@ if __name__ == "__main__":
             </p>
             <ul>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_actor_scheduler.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_actor_scheduler.h</code></a></strong> 
-                — GCS actor scheduler: hybrid policy, local-first, spillback.</li>
+                — GCS actor scheduler: forwards actor leases to a raylet (hybrid policy), spillback.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_placement_group_manager.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_placement_group_manager.h</code></a></strong> 
                 — GCS placement group manager.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_placement_group_scheduler.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_placement_group_scheduler.h</code></a></strong> 

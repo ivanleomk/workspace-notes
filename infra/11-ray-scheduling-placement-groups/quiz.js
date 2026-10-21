@@ -42,7 +42,7 @@ const quizQuestions = [
             "The placement group fails immediately with an error"
         ],
         correctAnswer: 1,
-        explanation: "From Ray 2.40.0 docs (Placement Groups): '**STRICT_PACK** All bundles must be placed into a single node on the cluster.' If no single node has enough resources for all bundles, the placement group remains PENDING (state: PENDING in placement_group_table()). It waits until autoscaling adds a node with sufficient resources, or until other jobs free resources. Option A is wrong: STRICT_PACK will NOT split across nodes (that's PACK without STRICT). Option C is wrong: Ray doesn't create virtual nodes. Option D is wrong: the placement group doesn't fail; it stays PENDING. Compare to PACK (without STRICT): would place 2 bundles on Node 1, 2 on Node 2, accepting split placement."
+        explanation: "From Ray 2.40.0 docs (Placement Groups): 'STRICT_PACK: All bundles must be placed into a single node on the cluster.' If no single node has enough resources for all bundles, the placement group remains PENDING (state: PENDING in placement_group_table()). It waits until autoscaling adds a node with sufficient resources, or until other jobs free resources. Option A is wrong: STRICT_PACK will NOT split across nodes (that's PACK without STRICT). Option C is wrong: Ray doesn't create virtual nodes. Option D is wrong: the placement group doesn't fail; it stays PENDING. Compare to PACK (without STRICT): would place 2 bundles on Node 1, 2 on Node 2, accepting split placement."
     },
     {
         question: "How do real RL frameworks (e.g., verl, OpenRLHF) use Ray placement groups for multi-GPU training and generation?",
@@ -53,7 +53,7 @@ const quizQuestions = [
             "They create one global placement group for the entire cluster and schedule all tasks/actors in it"
         ],
         correctAnswer: 1,
-        explanation: "verl (verl/single_controller/ray/base.py) creates per-node placement groups for each resource pool, STRICT_PACK by default; OpenRLHF (openrlhf/trainer/ray/vllm_engine.py, launcher.py) creates PACK placement groups for vLLM engines and DeepSpeed actors. Why PACK/STRICT_PACK? Colocating multi-GPU workers on the same node minimizes inter-GPU latency (NVLink > PCIe > network). Option A is wrong: they DO use placement groups (not just node affinity). Option C is wrong: they use placement groups for GPU workers. Option D is wrong: they create multiple placement groups (one per worker type), not one global group."
+        explanation: "verl (verl/single_controller/ray/base.py) creates per-node placement groups for each resource pool, STRICT_PACK by default; OpenRLHF (openrlhf/trainer/ray/vllm_engine.py, launcher.py) creates PACK placement groups for vLLM engines and DeepSpeed actors. Why PACK/STRICT_PACK? Colocating multi-GPU workers on the same node minimizes inter-GPU latency (NVLink > PCIe > network). Option A is wrong: they DO use placement groups (not just node affinity). Option C is wrong: they use placement groups for GPU workers. Option D is wrong: they create multiple placement groups (per resource pool / per node in verl; per engine group in OpenRLHF), not one global group."
     }
 ];
 

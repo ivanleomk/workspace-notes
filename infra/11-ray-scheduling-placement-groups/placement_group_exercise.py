@@ -51,7 +51,7 @@ def demo_placement_group_strategies():
     )
     ray.get(pg_spread.ready(), timeout=10)
     print(f"✓ SPREAD placement group created")
-    print(f"  Bundles will be spread across nodes")
+    print(f"  Bundles are spread across nodes on a best-effort basis (single node here, so they share it)")
     
     # STRICT_PACK: all on same node
     print("\n--- Strategy: STRICT_PACK ---")
