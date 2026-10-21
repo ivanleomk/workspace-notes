@@ -138,7 +138,7 @@ The following information is from sources published after the 2019 paper and is 
 
 ## Dataset Examples
 
-The interactive examples used in the lesson include four real items from the HellaSwag dataset (from Rowan/hellaswag on Hugging Face) and two illustrative items written for this lesson. The real items' endings are reordered to match the paper's presentation, and the lesson clearly indicates which items are illustrative.
+The interactive examples used in the lesson are six real items from the HellaSwag dataset (from Rowan/hellaswag on Hugging Face). Some endings are reordered to match the paper's presentation.
 
 The paper provides example questions with the following structure:
 - Context from ActivityNet or WikiHow

@@ -107,7 +107,7 @@ const swagComparison = [
 ];
 
 // Real HellaSwag examples for the explorer
-// Four real items from Rowan/hellaswag (endings reordered to match the paper figures) + two illustrative items
+// Six real items from Rowan/hellaswag (some endings reordered to match the paper's figures)
 const hellaSwagExamples = [
     {
         ind: 4,
@@ -128,13 +128,12 @@ const hellaSwagExamples = [
         activity_label: "Playing drums",
         source: "activitynet",
         split_type: "indomain",
-        illustrative: true,
         ctx: "A guy is sitting with sticks in his hands. a guy",
         endings: [
             "is playing the drums.",
             "moves away from him and begins to play a set of drums.",
-            "walks into the frame and out of the stage.",
-            "is sitting on a chair and drumming."
+            "starts playing a game of foosball.",
+            "grabs a shot the stands at a camp site."
         ],
         label: 0
     },
@@ -143,13 +142,12 @@ const hellaSwagExamples = [
         activity_label: "Cutting the grass",
         source: "activitynet",
         split_type: "zeroshot",
-        illustrative: true,
         ctx: "A man walks outside plugs his lawn mower in and gets ready to mow. he",
         endings: [
-            "goes back and fourth mowing in different directions going pretty fast.",
-            "pushes the lawn mower up and down the yard chopping some grass and raking the dirt.",
-            "starts the mower and begins going over the lawn cutting the grass.",
-            "stands up and is laying on the ground now."
+            "drives through the grass while drinking from a large cup of water and carrying his lawn mower.",
+            "walks off the porch and goes back inside.",
+            "starts mowing his lawn casually going over all the grass.",
+            "does this multiple times until a pale orange moon appears overhead."
         ],
         label: 2
     },
