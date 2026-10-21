@@ -22,7 +22,7 @@ def demo_placement_group_strategies():
     print("DEMO 1: Placement Group Strategies")
     print("="*60)
     
-    # Simulate a 2-node cluster: 4 CPUs per node, 2 "GPUs" per node (custom resource)
+    # Single-node local cluster: 8 logical CPUs, 4 "GPUs" (custom resource)
     ray.init(
         num_cpus=8,
         resources={"simulated_gpu": 4},
@@ -35,7 +35,7 @@ def demo_placement_group_strategies():
     print("\n--- Strategy: PACK ---")
     pg_pack = placement_group(
         name="pg_pack",
-        bundles=[{"CPU": 2, "simulated_gpu": 1}] * 3,
+        bundles=[{"CPU": 2, "simulated_gpu": 1}] * 2,
         strategy="PACK"
     )
     ray.get(pg_pack.ready())
@@ -46,10 +46,10 @@ def demo_placement_group_strategies():
     print("\n--- Strategy: SPREAD ---")
     pg_spread = placement_group(
         name="pg_spread",
-        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 2,
+        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 1,
         strategy="SPREAD"
     )
-    ray.get(pg_spread.ready())
+    ray.get(pg_spread.ready(), timeout=10)
     print(f"✓ SPREAD placement group created")
     print(f"  Bundles will be spread across nodes")
     
@@ -57,10 +57,10 @@ def demo_placement_group_strategies():
     print("\n--- Strategy: STRICT_PACK ---")
     pg_strict_pack = placement_group(
         name="pg_strict_pack",
-        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 2,
+        bundles=[{"CPU": 1, "simulated_gpu": 1}] * 1,
         strategy="STRICT_PACK"
     )
-    ray.get(pg_strict_pack.ready(), timeout=5)
+    ray.get(pg_strict_pack.ready(), timeout=10)
     print(f"✓ STRICT_PACK placement group created")
     print(f"  All bundles MUST be on the same node")
     
@@ -202,8 +202,7 @@ def demo_resource_exhaustion():
     
     # Check placement group table
     time.sleep(1)  # Give GCS time to schedule
-    table = placement_group_table()
-    pg_info = table[pg_large.id]
+    pg_info = placement_group_table(pg_large)
     
     print(f"\nPlacement group state: {pg_info['state']}")
     if pg_info['state'] == 'PENDING':
@@ -257,23 +256,22 @@ def demo_resource_exhaustion():
 
 def demo_capture_child_tasks():
     """
-    Demonstrate capture_child_tasks flag
+    Demonstrate placement_group_capture_child_tasks flag
     """
     print("\n" + "="*60)
-    print("DEMO 4: capture_child_tasks Flag")
+    print("DEMO 4: placement_group_capture_child_tasks Flag")
     print("="*60)
     
     ray.init(num_cpus=8, ignore_reinit_error=True)
     
-    # Create placement group with capture_child_tasks=True
+    # Create placement group
     pg = placement_group(
         bundles=[{"CPU": 4}],
         strategy="PACK",
-        name="pg_with_capture",
-        capture_child_tasks=True
+        name="pg_with_capture"
     )
     ray.get(pg.ready())
-    print("✓ Placement group with capture_child_tasks=True created")
+    print("✓ Placement group created")
     
     @ray.remote
     def parent_task():
@@ -284,9 +282,12 @@ def demo_capture_child_tasks():
         
         return ray.get(child_task.remote())
     
-    # Schedule parent in placement group
+    # Schedule parent in placement group with placement_group_capture_child_tasks=True
     result = ray.get(parent_task.options(
-        scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg)
+        scheduling_strategy=PlacementGroupSchedulingStrategy(
+            placement_group=pg,
+            placement_group_capture_child_tasks=True
+        )
     ).remote())
     
     print(f"✓ Parent task spawned child task: {result}")
@@ -311,7 +312,7 @@ if __name__ == "__main__":
         print("2. PACK/SPREAD/STRICT_PACK/STRICT_SPREAD control placement strategy")
         print("3. Use STRICT_PACK for multi-GPU training (all GPUs on same node)")
         print("4. Pending placement groups block actor creation until resources available")
-        print("5. capture_child_tasks=True automatically schedules child tasks in PG")
+        print("5. placement_group_capture_child_tasks=True automatically schedules child tasks in PG")
         print("\nNext: Read Lesson 12 (KubeRay) and Lesson 13 (RL in Production)")
     except Exception as e:
         print(f"\n✗ Demo failed: {e}")
