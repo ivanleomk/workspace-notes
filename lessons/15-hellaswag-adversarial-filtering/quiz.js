@@ -42,7 +42,7 @@ const quizQuestions = [
             "Humans: 99%, BERT-Large: 25%"
         ],
         correct: 2,
-        explanation: "Humans achieved 95.6% accuracy on HellaSwag, showing it's easy for people. BERT-Large, the best model at the time, achieved only 47.3% on the test set - far below human performance and just under twice random chance (25%). This massive 48+ point gap demonstrates that commonsense reasoning remained unsolved."
+        explanation: "Humans achieved 95.6% accuracy on HellaSwag, showing it's easy for people. BERT-Large, the best model at the time, achieved only 47.3% on the test set - far below human performance and just under twice random chance (random = 25%). This massive 48+ point gap demonstrates that commonsense reasoning remained unsolved."
     },
     {
         question: "What motivated the creation of HellaSwag after BERT solved SWAG?",
