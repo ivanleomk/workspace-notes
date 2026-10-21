@@ -39,7 +39,7 @@
                 <strong>This lesson</strong> covers Ray's <strong>resource model</strong> (logical CPU/GPU/memory/custom 
                 resources, fractional allocations, and defaults), <strong>scheduling</strong> (how the raylet/GCS 
                 decides where to place tasks and actors), <strong>scheduling strategies</strong> (DEFAULT, SPREAD, 
-                node affinity, label-based), and <strong>placement groups</strong> (gang-scheduling bundles of 
+                NodeAffinity, PlacementGroup), and <strong>placement groups</strong> (gang-scheduling bundles of 
                 resources across nodes, PACK/SPREAD/STRICT_PACK/STRICT_SPREAD strategies, two-phase commit reservation, 
                 fault tolerance).
             </p>
@@ -55,7 +55,7 @@
                     <li>Scheduling strategies: DEFAULT (local-first), SPREAD (anti-affinity), NodeAffinitySchedulingStrategy 
                     (soft vs hard), PlacementGroupSchedulingStrategy</li>
                     <li>Placement groups: bundles, strategies (PACK, SPREAD, STRICT_PACK, STRICT_SPREAD), two-phase 
-                    commit, lifecycle, <code>capture_child_tasks</code></li>
+                    commit, lifecycle, <code>placement_group_capture_child_tasks</code></li>
                     <li>How real RL frameworks (verl, OpenRLHF) use placement groups for gang-scheduling GPU workers</li>
                     <li>Hands-on: Simulate a multi-node cluster with placement groups, gang-schedule GPU workers, 
                     observe pending placement groups and resource exhaustion</li>
@@ -101,17 +101,16 @@
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">Ray 2.40.0 Docs: Specifying Task and Actor Resources</a>:
             </p>
             <blockquote>
-                "Ray natively supports the CPU, GPU, memory, and object_store_memory resource types."
+                "For convenience, Ray has native support for CPU, GPU, and memory resource types; CPU, GPU and memory are called pre-defined resources."
             </blockquote>
             <ul>
-                <li><strong>CPU:</strong> Logical CPU cores. Ray auto-detects physical cores at <code>ray start</code> 
+                <li><strong>CPU:</strong> Logical CPUs. By default set to the number of CPUs of the machine/container at <code>ray start</code> 
                 or <code>ray.init()</code>. Override with <code>--num-cpus</code> or <code>num_cpus=</code>.</li>
                 <li><strong>GPU:</strong> GPU devices (NVIDIA, AMD, etc.). Ray auto-detects via CUDA_VISIBLE_DEVICES. 
                 Override with <code>--num-gpus</code> or <code>num_gpus=</code>.</li>
-                <li><strong>memory:</strong> Bytes of RAM. Ray sets this to total system memory by default. Override with 
+                <li><strong>memory:</strong> Bytes of RAM. By default Ray sets this to 70% of available memory at startup. Override with 
                 <code>--memory</code>.</li>
-                <li><strong>object_store_memory:</strong> Bytes for Plasma object store. Default: 30% of total memory 
-                (from Lesson 10). Override with <code>--object-store-memory</code>.</li>
+                <li><strong>object_store_memory:</strong> Bytes for Plasma object store (not a logical resource; cannot be used for scheduling). By default Ray sets this to 30% of available memory at startup. Override with <code>--object-store-memory</code>.</li>
             </ul>
 
             <h3>Custom Resources</h3>
@@ -120,8 +119,7 @@
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "Custom resources are identified solely by their name. Ray does not validate that the specified 
-                resource name matches a physical resource."
+                "Besides pre-defined resources, you can also specify a Ray node's custom resources and request them in your tasks or actors."
             </blockquote>
             <pre><code class="language-python">ray.init(resources={"tpu": 4, "fpga": 2})
 
@@ -140,9 +138,10 @@ def train_on_tpu():
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "Fractional resource requirements can be used to pack multiple tasks or actors on the same resource. [...] 
-                Ray does not impose limits on fractional resource usage. It's your responsibility to ensure that a task 
-                or actor uses no more resources than it requested."
+                "Ray supports fractional resource requirements. For example, if your task or actor is IO bound and has low CPU usage, you can specify fractional CPU num_cpus=0.5 or even zero CPU num_cpus=0."
+            </blockquote>
+            <blockquote>
+                "It's your responsibility to make sure tasks or actors use no more resources than specified via resource requirements."
             </blockquote>
             <pre><code class="language-python"># 4 tasks can share 1 GPU
 @ray.remote(num_gpus=0.25)
@@ -154,12 +153,12 @@ def light_gpu_task():
 futures = [light_gpu_task.remote() for _ in range(8)]</code></pre>
             <p>
                 <strong>When to use:</strong> Multiple small models fitting on one GPU (e.g., 4×1.5B models on one A100), 
-                or CPU-bound tasks that don't need a full core.
+                or IO-bound tasks with low CPU usage.
             </p>
             <p>
                 <strong>Warning:</strong> Ray does NOT enforce resource limits at runtime. If you request 
                 <code>num_gpus=0.25</code> but use 80% of GPU memory, you'll cause OOM for other tasks on that GPU. 
-                Use external tools (e.g., CUDA_VISIBLE_DEVICES, Docker memory limits) to enforce limits.
+                Ray sets CUDA_VISIBLE_DEVICES itself (device-level isolation only); to cap per-task GPU memory use framework settings (e.g., vLLM gpu_memory_utilization, torch.cuda.set_per_process_memory_fraction) or MPS/MIG.
             </p>
 
             <h3>Default Resource Allocations: Tasks vs Actors</h3>
@@ -167,8 +166,7 @@ futures = [light_gpu_task.remote() for _ in range(8)]</code></pre>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">Ray 2.40.0 docs</a>:
             </p>
             <blockquote>
-                "If no resource requirements are specified, the default behavior is to reserve 1 CPU for scheduling 
-                unless the function or class is decorated with <code>@ray.remote(num_cpus=0)</code>."
+                "By default, Ray tasks use 1 logical CPU resource and Ray actors use 1 logical CPU for scheduling, and 0 logical CPU for running. (This means, by default, actors cannot get scheduled on a zero-cpu node, but an infinite number of them can run on any non-zero cpu node. ... If resources are specified explicitly, they are required both at schedule time and at execution time.)"
             </blockquote>
             <p>
                 <strong>Tasks:</strong> Default <code>num_cpus=1</code>. A task without explicit resource requirements 
@@ -178,32 +176,21 @@ futures = [light_gpu_task.remote() for _ in range(8)]</code></pre>
 def default_task():
     return "uses 1 CPU"</code></pre>
             <p>
-                <strong>Actors:</strong> More nuanced. From the same docs page:
+                <strong>Actors:</strong> More nuanced. By default, actors use 1 CPU for scheduling (to be placed on the cluster) 
+                and then hold 0 CPUs while running.
             </p>
-            <blockquote>
-                "Lifetime CPU resources: The CPU resources required to create an actor and any system overhead are 
-                separate from the CPU resources required to run the actor's methods. [...] The num_cpus field for 
-                an actor specifies lifetime CPU resources."
-            </blockquote>
-            <p>
-                For actors, <code>num_cpus</code> is <strong>reserved for the actor's lifetime</strong> (while the 
-                actor exists), not per method call. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">docs</a>:
-            </p>
-            <blockquote>
-                "For actors, num_cpus=0 by default. For tasks, num_cpus=1 by default."
-            </blockquote>
             <p>
                 <strong>Example:</strong>
             </p>
-            <pre><code class="language-python">@ray.remote  # Implicitly num_cpus=0 for actors
+            <pre><code class="language-python">@ray.remote  # Default actor: needs 1 free CPU to be scheduled, then holds 0 CPUs for its lifetime
 class MyActor:
     def method(self):
-        return "actor method uses CPUs, but actor creation reserves 0"
+        return "actor method uses the actor's process"
 
-# Actor creation reserves 0 CPUs, but method execution reserves 1 CPU (task default)
+# Actor creation needs 1 CPU free to be scheduled, then releases it
 actor = MyActor.remote()
-ray.get(actor.method.remote())  # This method call reserves 1 CPU by default</code></pre>
+# Actor method calls do not acquire CPUs; they run on the actor's process
+ray.get(actor.method.remote())</code></pre>
             <p>
                 To reserve CPUs for the actor's lifetime (useful for actors that hold expensive state like GPU models):
             </p>
@@ -216,9 +203,11 @@ class GPUModelActor:
     def infer(self, data):
         return "inference"</code></pre>
             <p>
-                <strong>Why the difference?</strong> Tasks are short-lived; actors are long-lived. Actor methods 
-                often run serially (default concurrency=1), so reserving 1 CPU per method call would waste resources. 
-                Actors hold the CPUs they need in <code>num_cpus</code>, and methods use task-level defaults.
+                If you set num_cpus (or any resource) explicitly, it is held for the actor's lifetime, both at scheduling and execution time.
+            </p>
+
+            <p>
+                <strong>Why the difference?</strong> Per the Ray docs, the actor default "was chosen for historical reasons. It's recommended to always explicitly set num_cpus for actors to avoid any surprises."
             </p>
 
             <div class="mermaid">
@@ -226,13 +215,13 @@ graph TB
     subgraph node["Ray Node (4 CPUs, 1 GPU)"]
         TASK1[Task 1<br/>num_cpus=1]
         TASK2[Task 2<br/>num_cpus=1]
-        ACTOR[Actor<br/>num_cpus=0, num_gpus=1<br/>lifetime reservation]
-        AVAILABLE[Available: 2 CPUs, 0 GPUs]
+        ACTOR[Actor<br/>num_gpus=1 (CPU defaults to 1)<br/>lifetime reservation]
+        AVAILABLE[Available: 1 CPU, 0 GPUs]
     end
     
     TASK1 -.->|reserves 1 CPU| node
     TASK2 -.->|reserves 1 CPU| node
-    ACTOR -.->|reserves 1 GPU<br/>for lifetime| node
+    ACTOR -.->|reserves 1 GPU<br/>and 1 CPU for lifetime| node
     
     style TASK1 fill:#3b82f6,stroke:#f1f5f9
     style TASK2 fill:#3b82f6,stroke:#f1f5f9
@@ -241,8 +230,7 @@ graph TB
             </div>
             <p class="diagram-caption">
                 <strong>Figure 1:</strong> Resource allocation on a node with 4 CPUs and 1 GPU. Two tasks reserve 
-                1 CPU each. An actor reserves 1 GPU for its lifetime (num_gpus=1) but 0 CPUs (default for actors). 
-                2 CPUs remain available.
+                1 CPU each. An actor declared with num_gpus=1 holds 1 GPU and, because a resource was specified, 1 CPU for its lifetime. 1 CPU remains available.
             </p>
         </section>
 
@@ -254,12 +242,10 @@ graph TB
                 <a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a>:
             </p>
             <blockquote>
-                "GCS manages metadata that is less frequently accessed but likely to be used by most or all workers 
-                in the cluster. [...] The GCS also manages a handful of cluster-level operations, including scheduling 
-                for placement groups and actors."
+                "The GCS also manages a handful of cluster-level operations, including scheduling for placement groups and actors and determining cluster node membership. In general, the GCS manages metadata that is less frequently accessed but likely to be used by most or all workers in the cluster."
             </blockquote>
             <p>
-                and "tasks are scheduled by local raylets in a bottom-up manner."
+                From the whitepaper: "A task caller schedules a task by first sending a resource request to the preferred raylet for that request. ... 3. By default, the local raylet."
             </p>
 
             <h3>Actor Placement (GCS)</h3>
@@ -274,13 +260,9 @@ graph TB
                 The GCS uses a <strong>default hybrid policy</strong> (source: 
                 <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_actor_scheduler.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_actor_scheduler.h</code></a>):
             </p>
-            <ol>
-                <li><strong>Lease request:</strong> GCS asks the local raylet (where the driver runs) if it has resources.</li>
-                <li><strong>Local placement:</strong> If yes, the actor is placed locally (reduces latency for driver 
-                ↔ actor communication).</li>
-                <li><strong>Spillback:</strong> If no, GCS asks other raylets in round-robin order until a node with 
-                resources is found. If no node has resources, the actor creation is queued (status: PENDING).</li>
-            </ol>
+            <p>
+                By default (gcs_actor_scheduling_enabled=false), the GCS forwards the actor creation lease request to the raylet on the owner's node (or a random node). That raylet applies the normal hybrid policy and may spill back to another raylet, exactly as for tasks: "as if the GCS were the actor creation task's caller" (whitepaper). If no node is feasible, the actor stays PENDING.
+            </p>
 
             <h3>Task Placement (Raylet)</h3>
             <p>
@@ -288,15 +270,14 @@ graph TB
                 checks resources. From the whitepaper:
             </p>
             <blockquote>
-                "the owner sends a RequestWorkerLease RPC to a raylet"
+                "When a resource request (i.e RequestWorkerLease PRC) is received by the raylet, it will go through the above state machine"
             </blockquote>
             <p>
                 The raylet uses a <strong>local-first</strong> policy:
             </p>
             <ol>
                 <li><strong>Local placement:</strong> If the local node has resources, schedule the task locally.</li>
-                <li><strong>Spillback:</strong> If not, the raylet forwards the request to the GCS, which tries other 
-                nodes (hybrid scheduling). If no node has resources, the task is queued (status: PENDING).</li>
+                <li><strong>Spillback:</strong> If not, the raylet replies to the caller (owner) with the address of a remote raylet chosen from its eventually-consistent cluster view, and the caller retries the lease request there. The GCS is not on this path. If no node has resources, the task is queued (status: PENDING).</li>
             </ol>
             <p>
                 <strong>Why local-first?</strong> Minimizes data transfer. If a task depends on objects created by 
@@ -308,7 +289,6 @@ graph TB
 sequenceDiagram
     participant Driver
     participant LocalRaylet
-    participant GCS
     participant RemoteRaylet
     participant Worker
     
@@ -321,18 +301,16 @@ sequenceDiagram
         Driver->>Worker: 3a. PushTask(square, args=[5])
         Worker->>Worker: Execute square(5)
     else Local raylet has no CPUs
-        LocalRaylet->>GCS: 2b. Spillback: RequestWorkerLease
-        GCS->>RemoteRaylet: 3b. Try remote node
-        RemoteRaylet->>GCS: 4b. Lease granted
-        GCS->>Driver: 5b. Lease granted (remote worker)
-        Driver->>Worker: 6b. PushTask(square, args=[5])
+        LocalRaylet-->>Driver: 2b. Spillback: retry at RemoteRaylet
+        Driver->>RemoteRaylet: 3b. RequestWorkerLease
+        RemoteRaylet-->>Driver: 4b. Lease granted (remote worker)
+        Driver->>Worker: 5b. PushTask(square, args=[5])
         Worker->>Worker: Execute square(5)
     end
             </div>
             <p class="diagram-caption">
                 <strong>Figure 2:</strong> Task scheduling with local-first policy. Driver requests worker lease from 
-                local raylet. If local resources available, task runs locally. If not, raylet spills back to GCS, 
-                which finds a remote node.
+                local raylet. If local resources available, task runs locally. If not, the local raylet replies with a remote raylet's address and the driver retries the lease there (spillback).
             </p>
 
             <h3>Pending Tasks and Actors: Resource Exhaustion</h3>
@@ -341,7 +319,7 @@ sequenceDiagram
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/resources.html" target="_blank">Ray 2.40.0 docs</a>:
             </p>
             <blockquote>
-                "Tasks that cannot run will be queued until resources are available."
+                "If there are feasible nodes, Ray will either choose an available node or wait until a unavailable node to become available depending on other factors discussed below. If all nodes are infeasible, the task or actor cannot be scheduled until feasible nodes are added to the cluster."
             </blockquote>
             <p>
                 You can inspect pending tasks/actors in the Ray dashboard (:8265) or with <code>ray status</code> (CLI). 
@@ -356,13 +334,12 @@ sequenceDiagram
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/index.html" target="_blank">Ray 2.40.0 Docs: Scheduling</a>:
             </p>
             <blockquote>
-                "Ray provides a flexible set of scheduling strategies to control where tasks and actors are placed."
+                "Tasks or actors support a scheduling_strategy option to specify the strategy used to decide the best node among feasible nodes."
             </blockquote>
 
-            <h3>DEFAULT: Local-First, Then Spillback</h3>
+            <h3>DEFAULT: Hybrid (pack until 50% utilization, then spread)</h3>
             <p>
-                The default strategy (if you don't specify one) is <code>"DEFAULT"</code>. As covered in the previous 
-                section, this tries local placement first, then spills to remote nodes.
+                The default strategy (if you don't specify one) is <code>"DEFAULT"</code>. Nodes whose critical-resource utilization is below RAY_scheduler_spread_threshold (default 0.5) score 0 and are preferred, with the local/preferred node favoured for locality; above the threshold the score is the utilization itself. Ray picks randomly among the top k lowest-score nodes, where k = max(RAY_scheduler_top_k_fraction (0.2) × nodes, RAY_scheduler_top_k_absolute (1)).
             </p>
             <pre><code class="language-python">@ray.remote
 def task():
@@ -378,7 +355,7 @@ future = task.remote()</code></pre>
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/index.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "The SPREAD scheduling strategy will try to spread the tasks or actors among available nodes."
+                "\"SPREAD\" strategy will try to spread the tasks or actors among available nodes."
             </blockquote>
             <pre><code class="language-python">@ray.remote(scheduling_strategy="SPREAD")
 def task():
@@ -394,11 +371,10 @@ actors = [MyActor.options(scheduling_strategy="SPREAD").remote() for _ in range(
             <h3>NodeAffinitySchedulingStrategy: Soft and Hard Affinity</h3>
             <p>
                 Target a specific node by node ID. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/index.html" target="_blank">Ray docs</a>:
+                <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/index.html" target="_blank">Ray docs</a>, first sentence:
             </p>
             <blockquote>
-                "The NodeAffinitySchedulingStrategy allows you to schedule tasks or actors to a particular node specified 
-                by its node id."
+                "NodeAffinitySchedulingStrategy is a low-level strategy that allows a task or actor to be scheduled onto a particular node specified by its node id."
             </blockquote>
             <pre><code class="language-python">from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
@@ -407,7 +383,7 @@ import ray
 nodes = ray.nodes()
 node_id = nodes[0]["NodeID"]
 
-# Soft affinity: prefer this node, but allow spillback
+# soft=True: fall back elsewhere only if node dies/is infeasible
 @ray.remote(scheduling_strategy=NodeAffinitySchedulingStrategy(
     node_id=node_id,
     soft=True
@@ -415,7 +391,7 @@ node_id = nodes[0]["NodeID"]
 def task_soft():
     return "prefer node, but can spill"
 
-# Hard affinity: MUST run on this node or fail
+# soft=False: fail with *UnschedulableError if node dies/is infeasible
 @ray.remote(scheduling_strategy=NodeAffinitySchedulingStrategy(
     node_id=node_id,
     soft=False
@@ -423,12 +399,10 @@ def task_soft():
 def task_hard():
     return "must run on node"</code></pre>
             <p>
-                <strong>Soft affinity (soft=True):</strong> Prefer the specified node, but if resources unavailable, 
-                spill to other nodes.
+                <strong>Soft (soft=True):</strong> runs only on the target node while it is alive and feasible (waiting if it is busy); falls back to another feasible node only if the target is dead or infeasible.
             </p>
             <p>
-                <strong>Hard affinity (soft=False):</strong> The task/actor will ONLY run on the specified node. If 
-                resources unavailable, it remains PENDING forever (or until resources free up).
+                <strong>Hard (soft=False):</strong> same while the node is alive and feasible; if the node is dead or infeasible, the task/actor fails with TaskUnschedulableError / ActorUnschedulableError.
             </p>
             <p>
                 <strong>Use case:</strong> Pin tasks to nodes with specific hardware (e.g., high-memory node for 
@@ -489,7 +463,10 @@ worker = Worker.options(
                 A placement group consists of <strong>bundles</strong>: resource specifications. From Ray docs:
             </p>
             <blockquote>
-                "Each bundle is a collection of resources (e.g., {'CPU': 1, 'GPU': 1})."
+                "A **bundle** is a collection of "resources". It could be a single resource, ``{"CPU": 1}``, or a group of resources, ``{"CPU": 1, "GPU": 4}``."
+            </blockquote>
+            <blockquote>
+                "Ray supports four placement group strategies. The default scheduling policy is ``PACK``."
             </blockquote>
             <pre><code class="language-python">from ray.util.placement_group import placement_group
 
@@ -517,14 +494,14 @@ ray.get(pg.ready())
             <p>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/placement-group.html" target="_blank">Ray docs</a>:
             </p>
-            <blockquote>
-                "Placement groups support the following placement strategies: PACK, SPREAD, STRICT_PACK, STRICT_SPREAD."
-            </blockquote>
 
             <h4>PACK: Prefer Same Node</h4>
             <p>
-                From Ray docs: "Pack bundles into as few nodes as possible."
+                From Ray docs:
             </p>
+            <blockquote>
+                "**PACK** All provided bundles are packed onto a single node on a best-effort basis. If strict packing is not feasible (i.e., some bundles do not fit on the node), bundles can be placed onto other nodes."
+            </blockquote>
             <p>
                 <strong>Use case:</strong> Multi-GPU training where all GPUs should be on the same node (fast NVLink 
                 communication). If one node doesn't have enough resources, Ray will split across nodes.
@@ -532,16 +509,22 @@ ray.get(pg.ready())
 
             <h4>STRICT_PACK: All on Same Node</h4>
             <p>
-                From Ray docs: "All bundles must be placed on the same node."
+                From Ray docs:
             </p>
+            <blockquote>
+                "**STRICT_PACK** All bundles must be placed into a single node on the cluster. Use this strategy when you want to maximize the locality."
+            </blockquote>
             <p>
                 If no single node has enough resources, the placement group remains PENDING.
             </p>
 
-            <h4>SPREAD: One Bundle Per Node</h4>
+            <h4>SPREAD: Prefer Separate Nodes (best-effort)</h4>
             <p>
-                From Ray docs: "Each bundle must be placed on a separate node."
+                From Ray docs:
             </p>
+            <blockquote>
+                "**SPREAD** Each bundle is spread onto separate nodes on a best-effort basis. If strict spreading is not feasible, bundles can be placed on overlapping nodes."
+            </blockquote>
             <p>
                 <strong>Use case:</strong> Distributed training where you want one worker per node (to maximize 
                 cross-node bandwidth usage and avoid intra-node contention).
@@ -549,10 +532,13 @@ ray.get(pg.ready())
 
             <h4>STRICT_SPREAD: Exactly One Bundle Per Node</h4>
             <p>
-                From Ray docs: "Strictly enforces SPREAD: if there are not enough nodes, the placement group fails."
+                From Ray docs:
             </p>
+            <blockquote>
+                "**STRICT_SPREAD** Each bundle must be scheduled in a separate node."
+            </blockquote>
             <p>
-                If the cluster has fewer nodes than bundles, the placement group remains PENDING.
+                If the cluster has fewer nodes than bundles, the placement group stays PENDING (infeasible); it does not fail.
             </p>
 
             <div class="mermaid">
@@ -567,7 +553,7 @@ graph TB
             SPNODE[Node 1<br/>Bundle 0: 1 GPU<br/>Bundle 1: 1 GPU<br/>Bundle 2: 1 GPU<br/>Bundle 3: 1 GPU<br/>(or PENDING)]
         end
         
-        subgraph spread["SPREAD: One Per Node (Prefer)"]
+        subgraph spread["SPREAD: Prefer Separate Nodes (best-effort)"]
             SPREADNODE1[Node 1<br/>Bundle 0: 1 GPU]
             SPREADNODE2[Node 2<br/>Bundle 1: 1 GPU]
             SPREADNODE3[Node 3<br/>Bundle 2: 1 GPU]
@@ -601,7 +587,7 @@ graph TB
                 <a href="https://docs.ray.io/en/latest/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a>:
             </p>
             <blockquote>
-                "To atomically reserve resources across multiple nodes, we use a two-phase commit protocol."
+                "Since resource groups may involve resources across multiple nodes, Ray uses a two phase commit protocol across the raylets to ensure atomicity. The protocol is coordinated by the GCS. If any raylet dies in the middle of the protocol, the placement group creation is rolled back and the GCS queues the request again."
             </blockquote>
             <p>
                 <strong>Phase 1 (Prepare):</strong> GCS asks raylets on selected nodes: "Can you reserve these resources?" 
@@ -649,16 +635,16 @@ ray.get(future)
 # Remove when done
 remove_placement_group(pg)</code></pre>
 
-            <h3>capture_child_tasks: Automatic Placement</h3>
+            <h3>placement_group_capture_child_tasks: Automatic Placement</h3>
             <p>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/placement-group.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "If the flag capture_child_tasks is set to True on a placement group, all child tasks and actors 
-                created by tasks or actors scheduled into the placement group will also be scheduled into the 
-                placement group."
+                "By default, child actors and tasks don't share the same placement group that the parent uses. To automatically schedule child actors or tasks to the same placement group, set ``placement_group_capture_child_tasks`` to True."
             </blockquote>
-            <pre><code class="language-python">pg = placement_group([{"CPU": 4}], strategy="PACK", capture_child_tasks=True)
+            <pre><code class="language-python">from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+pg = placement_group([{"CPU": 4}], strategy="PACK")
 ray.get(pg.ready())
 
 @ray.remote
@@ -669,15 +655,18 @@ def parent():
         return "child task"
     return ray.get(child.remote())
 
-# parent.remote() uses the placement group, child.remote() does too
+# parent.remote() uses the placement group with capture_child_tasks, child.remote() does too
 future = parent.options(
-    scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg)
+    scheduling_strategy=PlacementGroupSchedulingStrategy(
+        placement_group=pg,
+        placement_group_capture_child_tasks=True
+    )
 ).remote()
 
 ray.get(future)  # "child task"</code></pre>
             <p>
                 <strong>Use case:</strong> Nested parallelism (e.g., a rollout actor spawns per-episode sandbox tasks). 
-                Without <code>capture_child_tasks</code>, child tasks might spill to other nodes; with it, they stay 
+                Without <code>placement_group_capture_child_tasks</code>, child tasks might spill to other nodes; with it, they stay 
                 in the placement group.
             </p>
 
@@ -686,12 +675,14 @@ ray.get(future)  # "child task"</code></pre>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/scheduling/placement-group.html" target="_blank">Ray docs</a>:
             </p>
             <blockquote>
-                "If one or more nodes in a placement group fails, the placement group enters the RESCHEDULING state. 
-                Ray automatically reschedules the placement group on available nodes."
+                "If nodes that contain some bundles of a placement group die, all the bundles are rescheduled on different nodes by GCS (i.e., we try reserving resources again). This means that the initial creation of placement group is "atomic", but once it is created, there could be partial placement groups. Rescheduling bundles have higher scheduling priority than other placement group scheduling."
+            </blockquote>
+            <blockquote>
+                "Actors and tasks that use the bundle (reserved resources) are rescheduled based on their fault tolerant policy once the bundle is recovered."
             </blockquote>
             <p>
                 <strong>Rescheduling:</strong> GCS tries to find replacement nodes with resources. If actors were 
-                running in the failed bundles, they are reconstructed (if <code>max_restarts > 0</code>).
+                running in the failed bundles, they are rescheduled per their fault-tolerance policy (e.g., max_restarts) once the bundle is recovered.
             </p>
             <p>
                 <strong>Manual removal:</strong> If you don't want automatic rescheduling, call 
@@ -707,39 +698,31 @@ ray.get(future)  # "child task"</code></pre>
 
             <h3>verl: Volcano Engine Reinforcement Learning</h3>
             <p>
-                <strong>verl</strong> (<a href="https://github.com/volcengine/verl" target="_blank">github.com/volcengine/verl</a>, 
+                <strong>verl</strong> (<a href="https://github.com/verl-project/verl" target="_blank">github.com/verl-project/verl</a>, 
                 Apache-2.0) is Volcano Engine's RL framework for RLHF. From the README:
             </p>
             <blockquote>
-                "verl is a flexible, efficient and production-ready RL training framework designed for large language 
+                "verl is a flexible, efficient and production-ready RL training library for large language 
                 models (LLMs)."
             </blockquote>
             <p>
                 verl uses Ray placement groups to gang-schedule multi-GPU workers. From 
-                <a href="https://github.com/volcengine/verl/blob/main/verl/trainer/ppo/ray_trainer.py" target="_blank"><code>verl/trainer/ppo/ray_trainer.py</code></a> 
-                (main branch, accessed Oct 2026):
+                <a href="https://github.com/verl-project/verl/blob/main/verl/single_controller/ray/base.py" target="_blank"><code>verl/single_controller/ray/base.py</code></a> 
+                (RayResourcePool.get_placement_groups, main, excerpt):
             </p>
-            <pre><code class="language-python"># Create placement group for actor model (vLLM generation workers)
-actor_rollout_pg = placement_group(
-    bundles=[{"GPU": gpu_per_rollout_worker, "CPU": cpu_per_rollout_worker}
-             for _ in range(n_rollout_workers)],
-    strategy="PACK"  # Pack vLLM workers on same node for fast comms
-)</code></pre>
+            <pre><code class="language-python"># Real verl code (verl/single_controller/ray/base.py):
+def get_placement_groups(self, strategy="STRICT_PACK", ...):
+    bundle = {"CPU": self.max_colocate_count}
+    bundle[device_name] = 1
+    placement_group(bundles=bundles, strategy=strategy, name=pg_name_prefix + str(idx), lifetime=lifetime)
+    
+# RayWorkerGroup uses bin_pack: bool = True → strategy = "STRICT_PACK"</code></pre>
             <p>
-                verl's <strong>HybridFlow</strong> architecture splits work:
+                verl's architecture:
             </p>
             <ul>
-                <li><strong>Rollout workers (vLLM):</strong> Generate completions on GPUs. Placed in a PACK placement 
-                group (prefer same node for tensor-parallel vLLM).</li>
-                <li><strong>Trainer workers (Megatron-LM):</strong> Train the policy on GPUs. Placed in a separate 
-                PACK placement group (multi-GPU training with NCCL).</li>
-                <li><strong>Reward workers (CPU):</strong> Compute rewards. Scheduled as Ray tasks (no placement group).</li>
+                <li>verl maps roles (actor/rollout, critic, reference, reward model) to resource pools; each pool creates one placement group per node, using STRICT_PACK by default (RayWorkerGroup bin_pack=True), and the actor and rollout engines are colocated in the same workers (HybridFlow hybrid engine).</li>
             </ul>
-            <p>
-                From verl's Ray trainer code (line ~200-250 of <code>ray_trainer.py</code>, exact lines vary by commit), 
-                the trainer creates three placement groups: one for actor rollout, one for critic (value model), one 
-                for reference model (if KL penalty is used). Each uses <code>PACK</code> to colocate multi-GPU workers.
-            </p>
 
             <h3>OpenRLHF: Open-Source RLHF Framework</h3>
             <p>
@@ -747,34 +730,30 @@ actor_rollout_pg = placement_group(
                 Apache-2.0) is an open-source RLHF framework supporting Ray + vLLM + DeepSpeed. From the README:
             </p>
             <blockquote>
-                "OpenRLHF is a high-performance RLHF framework built on Ray, DeepSpeed and HF Transformers."
+                "OpenRLHF is **the first** high-performance, production-ready open-source RLHF framework that combines **Ray + vLLM distributed architecture** with a **unified agent-based design paradigm** for scalable and extensible reinforcement learning from human feedback."
             </blockquote>
             <p>
                 OpenRLHF uses placement groups for vLLM inference. From 
-                <a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_worker_wrap.py" target="_blank"><code>openrlhf/trainer/ray/vllm_worker_wrap.py</code></a> 
-                (main branch, accessed Oct 2026):
+                <a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_engine.py" target="_blank"><code>openrlhf/trainer/ray/vllm_engine.py</code></a> 
+                (main branch, L248-251):
             </p>
-            <pre><code class="language-python"># Create placement group for vLLM workers
-self._placement_group = placement_group(
-    bundles=[{"GPU": 1, "CPU": 1}] * self.num_gpus_per_actor,
-    strategy="PACK"  # vLLM tensor-parallel needs all GPUs on same node
-)
-ray.get(self._placement_group.ready())</code></pre>
+            <pre><code class="language-python"># Create a big placement group to ensure that all engines are packed
+bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_engines * tensor_parallel_size)]
+shared_pg = placement_group(bundles, strategy="PACK")
+ray.get(shared_pg.ready())</code></pre>
             <p>
                 OpenRLHF's hybrid engine uses:
             </p>
             <ul>
                 <li><strong>vLLM actors in placement groups:</strong> Generation on GPUs (tensor-parallel across 
                 multiple GPUs on the same node).</li>
-                <li><strong>DeepSpeed training actors:</strong> Policy training on GPUs. Also use placement groups 
-                (STRICT_PACK to ensure all GPUs for one training job are on the same node).</li>
+                <li><strong>DeepSpeed training actors:</strong> placed in a PACK placement group (launcher.py) with one {"GPU": 1, "CPU": 1} bundle per GPU.</li>
             </ul>
             <p>
-                From OpenRLHF's <a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/docs/ray.md" target="_blank">Ray docs</a>:
+                From OpenRLHF's <a href="https://github.com/OpenRLHF/OpenRLHF#readme" target="_blank">README</a> (vendor claim):
             </p>
             <blockquote>
-                "The generation phase typically takes 80% of the training time. We use vLLM with tensor parallelism 
-                for fast generation."
+                "RLHF training spends **80% of the time on sample generation**. Powered by vLLM with Auto Tensor Parallelism (AutoTP) and Pipeline Parallelism (PP), OpenRLHF delivers high-throughput, memory-efficient generation."
             </blockquote>
             <p>
                 <strong>Lesson 13</strong> (Ray in Production RL) covers verl and OpenRLHF in more detail, including 
@@ -822,7 +801,7 @@ def demo_placement_group_strategies():
     print("DEMO 1: Placement Group Strategies")
     print("="*60)
     
-    # Simulate a 2-node cluster: 4 CPUs per node, 2 "GPUs" per node (custom resource)
+    # Single-node local cluster: 8 logical CPUs, 4 "GPUs" (custom resource)
     ray.init(
         num_cpus=8,
         resources={"simulated_gpu": 4},
@@ -1002,8 +981,7 @@ def demo_resource_exhaustion():
     
     # Check placement group table
     time.sleep(1)  # Give GCS time to schedule
-    table = placement_group_table()
-    pg_info = table[pg_large.id]
+    pg_info = placement_group_table(pg_large)
     
     print(f"\nPlacement group state: {pg_info['state']}")
     if pg_info['state'] == 'PENDING':
@@ -1065,15 +1043,14 @@ def demo_capture_child_tasks():
     
     ray.init(num_cpus=8, ignore_reinit_error=True)
     
-    # Create placement group with capture_child_tasks=True
+    # Create placement group with placement_group_capture_child_tasks
     pg = placement_group(
         bundles=[{"CPU": 4}],
         strategy="PACK",
-        name="pg_with_capture",
-        capture_child_tasks=True
+        name="pg_with_capture"
     )
     ray.get(pg.ready())
-    print("✓ Placement group with capture_child_tasks=True created")
+    print("✓ Placement group created")
     
     @ray.remote
     def parent_task():
@@ -1084,9 +1061,12 @@ def demo_capture_child_tasks():
         
         return ray.get(child_task.remote())
     
-    # Schedule parent in placement group
+    # Schedule parent in placement group with placement_group_capture_child_tasks=True
     result = ray.get(parent_task.options(
-        scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=pg)
+        scheduling_strategy=PlacementGroupSchedulingStrategy(
+            placement_group=pg,
+            placement_group_capture_child_tasks=True
+        )
     ).remote())
     
     print(f"✓ Parent task spawned child task: {result}")
@@ -1136,11 +1116,11 @@ if __name__ == "__main__":
             <h3>Experiment</h3>
             <ul>
                 <li>Change <code>strategy="STRICT_PACK"</code> to <code>"SPREAD"</code> in demo_gang_scheduling. 
-                What happens? (Workers spread across nodes instead of being colocated.)</li>
+                What happens? (On a single-node ray.init cluster SPREAD falls back to packing everything on the one node; to see real spreading use ray.cluster_utils.Cluster with several nodes. STRICT_SPREAD would stay PENDING.)</li>
                 <li>In demo_resource_exhaustion, reduce <code>num_cpus=4</code> to <code>num_cpus=2</code> and 
                 <code>resources={"simulated_gpu": 1}</code>. Try creating a placement group with 2 bundles. Still PENDING?</li>
                 <li>Add a second placement group in demo_gang_scheduling. Observe how Ray schedules both groups.</li>
-                <li>Remove <code>capture_child_tasks=True</code> in demo_capture_child_tasks. Child task will 
+                <li>Remove <code>placement_group_capture_child_tasks=True</code> in demo_capture_child_tasks. Child task will 
                 spill to default scheduling.</li>
             </ul>
         </section>
@@ -1181,9 +1161,9 @@ if __name__ == "__main__":
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_actor_scheduler.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_actor_scheduler.h</code></a></strong> 
                 — GCS actor scheduler: hybrid policy, local-first, spillback.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_placement_group_manager.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_placement_group_manager.h</code></a></strong> 
-                — GCS placement group manager: two-phase commit, scheduling.</li>
+                — GCS placement group manager.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/gcs/gcs_server/gcs_placement_group_scheduler.h" target="_blank"><code>src/ray/gcs/gcs_server/gcs_placement_group_scheduler.h</code></a></strong> 
-                — Placement group scheduler: PACK/SPREAD/STRICT_PACK/STRICT_SPREAD strategies.</li>
+                — Placement group scheduler: PACK/SPREAD/STRICT_PACK/STRICT_SPREAD strategies, two-phase commit.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/src/ray/raylet/scheduling/cluster_resource_scheduler.h" target="_blank"><code>src/ray/raylet/scheduling/cluster_resource_scheduler.h</code></a></strong> 
                 — Raylet task scheduler: local resource tracking.</li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/util/placement_group.py" target="_blank"><code>python/ray/util/placement_group.py</code></a></strong> 
@@ -1192,13 +1172,10 @@ if __name__ == "__main__":
 
             <h3>RL Framework Examples</h3>
             <ul>
-                <li><strong><a href="https://github.com/volcengine/verl/blob/main/verl/trainer/ppo/ray_trainer.py" target="_blank">verl/trainer/ppo/ray_trainer.py</a></strong> 
-                — verl's Ray trainer: creates placement groups for vLLM rollout workers, Megatron training workers, 
-                and reference models.</li>
-                <li><strong><a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_worker_wrap.py" target="_blank">OpenRLHF vllm_worker_wrap.py</a></strong> 
-                — OpenRLHF's vLLM worker: creates placement group for tensor-parallel vLLM inference.</li>
-                <li><strong><a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/docs/ray.md" target="_blank">OpenRLHF Ray Documentation</a></strong> 
-                — How OpenRLHF uses Ray for RLHF: generation (80% time) on vLLM, training on DeepSpeed.</li>
+                <li><strong><a href="https://github.com/verl-project/verl/blob/main/verl/single_controller/ray/base.py" target="_blank">verl/single_controller/ray/base.py</a></strong> 
+                — verl's Ray resource pool: creates per-node placement groups (STRICT_PACK by default) for each resource pool.</li>
+                <li><strong><a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_engine.py" target="_blank">OpenRLHF vllm_engine.py</a></strong> 
+                — OpenRLHF's vLLM engine: creates PACK placement group for tensor-parallel vLLM inference.</li>
             </ul>
 
             <h3>Related Lessons</h3>
@@ -1214,7 +1191,7 @@ if __name__ == "__main__":
 
         <footer>
             <p><a href="../10-ray-core/">← Previous: Lesson 10 - Ray Core</a></p>
-            <p><a href="../curriculum.html">Back to Curriculum</a></p>
+            <p><a href="https://github.com/ivanleomk/workspace-notes/blob/main/infra/curriculum.md">Back to Curriculum</a></p>
             <p>Eval Infrastructure Deep Dive © 2026 Ivan Leo</p>
         </footer>
     </div>

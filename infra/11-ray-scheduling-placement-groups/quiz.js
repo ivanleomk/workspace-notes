@@ -4,12 +4,12 @@ const quizQuestions = [
         question: "What is the default resource allocation for a Ray task vs a Ray actor (when no explicit num_cpus is specified)?",
         options: [
             "Tasks default to num_cpus=1; actors default to num_cpus=1",
-            "Tasks default to num_cpus=1; actors default to num_cpus=0",
+            "Tasks use 1 CPU; actors need 1 CPU to be scheduled but hold 0 CPUs while running",
             "Tasks default to num_cpus=0; actors default to num_cpus=1",
             "Both tasks and actors default to num_cpus=0"
         ],
         correctAnswer: 1,
-        explanation: "From Ray 2.40.0 docs (Specifying Task and Actor Resources): 'For actors, num_cpus=0 by default. For tasks, num_cpus=1 by default.' Tasks are short-lived and reserve 1 CPU for execution. Actors are long-lived: num_cpus specifies lifetime CPU resources (reserved while the actor exists), not per-method resources. Actor methods use the task default (1 CPU) unless overridden. This difference exists because tasks run once; actors run many methods serially (default concurrency=1), so reserving 1 CPU per method would waste resources. Option A is wrong: actors default to 0. Option C is wrong: tasks default to 1. Option D is wrong: tasks default to 1."
+        explanation: "From Ray 2.40.0 docs (Specifying Task and Actor Resources): 'By default, Ray tasks use 1 logical CPU resource and Ray actors use 1 logical CPU for scheduling, and 0 logical CPU for running. (This means, by default, actors cannot get scheduled on a zero-cpu node, but an infinite number of them can run on any non-zero cpu node. ... If resources are specified explicitly, they are required both at schedule time and at execution time.)' Option A is wrong: actors need 1 CPU to schedule but hold 0 while running. Option C is wrong: tasks default to 1. Option D is wrong: tasks default to 1."
     },
     {
         question: "You request num_gpus=0.25 for a Ray task. What does Ray enforce at runtime?",
@@ -20,7 +20,7 @@ const quizQuestions = [
             "Ray creates a cgroup with 25% GPU memory limit"
         ],
         correctAnswer: 1,
-        explanation: "From Ray 2.40.0 docs: 'Fractional resource requirements can be used to pack multiple tasks or actors on the same resource. [...] Ray does not impose limits on fractional resource usage. It's your responsibility to ensure that a task or actor uses no more resources than it requested.' Ray tracks logical resources for scheduling (4 tasks with num_gpus=0.25 can share 1 GPU), but does NOT enforce limits at runtime. If a task requests 0.25 GPU but uses 80% of GPU memory, it will cause OOM for other tasks. Use external tools (CUDA_VISIBLE_DEVICES, Docker limits, CUDA MPS) to enforce limits. Option A is wrong: Ray doesn't use MPS. Option C is wrong: Ray doesn't set CUDA_VISIBLE_DEVICES for fractions. Option D is wrong: Ray doesn't use cgroups for GPU limits."
+        explanation: "From Ray 2.40.0 docs: 'Ray supports fractional resource requirements. For example, if your task or actor is IO bound and has low CPU usage, you can specify fractional CPU num_cpus=0.5 or even zero CPU num_cpus=0.' and 'It's your responsibility to make sure tasks or actors use no more resources than specified via resource requirements.' Ray tracks logical resources for scheduling (4 tasks with num_gpus=0.25 can share 1 GPU), but does NOT enforce limits at runtime. If a task requests 0.25 GPU but uses 80% of GPU memory, it will cause OOM for other tasks. Option A is wrong: Ray doesn't use MPS. Option C is wrong: Ray sets CUDA_VISIBLE_DEVICES to the whole GPU ID it assigned; there is no \"fractional GPU ID\". Option D is wrong: Ray doesn't use cgroups for GPU limits."
     },
     {
         question: "How does Ray's hybrid two-level scheduler decide where to place tasks vs actors?",
@@ -31,7 +31,7 @@ const quizQuestions = [
             "Tasks are scheduled by the GCS; actors are scheduled by local raylets"
         ],
         correctAnswer: 1,
-        explanation: "From Ray 2.0 Architecture Whitepaper: 'tasks are scheduled by local raylets in a bottom-up manner' and 'The GCS also manages a handful of cluster-level operations, including scheduling for placement groups and actors.' Task scheduling: driver sends RequestWorkerLease to local raylet; if local resources available, task runs locally (local-first); if not, raylet spills back to GCS which tries remote nodes. Actor scheduling: driver sends actor creation to GCS; GCS picks a node with resources (tries local first, then round-robin remote nodes) and tells a raylet to create the actor. Option A is wrong: tasks are not scheduled by GCS (only actors). Option C is wrong: GCS schedules actors. Option D is wrong: reversed."
+        explanation: "Whitepaper: 'A task caller schedules a task by first sending a resource request to the preferred raylet'; on spillback the raylet 'respond[s] to the caller with the address of a remote raylet at which the caller should retry'. Actors: 'Actor creation tasks are scheduled through the centralized GCS service' ... 'through the same distributed scheduling protocol that is used for normal tasks, as if the GCS were the actor creation task's caller.' Option A is wrong: tasks are scheduled by raylets, not GCS. Option C is wrong: actors are scheduled by GCS. Option D is wrong: reversed."
     },
     {
         question: "You create a placement group with 4 bundles using strategy='STRICT_PACK'. The cluster has 2 nodes, each with 2 GPUs. What happens?",
@@ -42,7 +42,7 @@ const quizQuestions = [
             "The placement group fails immediately with an error"
         ],
         correctAnswer: 1,
-        explanation: "From Ray 2.40.0 docs (Placement Groups): 'STRICT_PACK: All bundles must be placed on the same node.' If no single node has enough resources for all bundles, the placement group remains PENDING (state: PENDING in placement_group_table()). It waits until autoscaling adds a node with sufficient resources, or until other jobs free resources. Option A is wrong: STRICT_PACK will NOT split across nodes (that's PACK without STRICT). Option C is wrong: Ray doesn't create virtual nodes. Option D is wrong: the placement group doesn't fail; it stays PENDING. Compare to PACK (without STRICT): would place 2 bundles on Node 1, 2 on Node 2, accepting split placement."
+        explanation: "From Ray 2.40.0 docs (Placement Groups): '**STRICT_PACK** All bundles must be placed into a single node on the cluster.' If no single node has enough resources for all bundles, the placement group remains PENDING (state: PENDING in placement_group_table()). It waits until autoscaling adds a node with sufficient resources, or until other jobs free resources. Option A is wrong: STRICT_PACK will NOT split across nodes (that's PACK without STRICT). Option C is wrong: Ray doesn't create virtual nodes. Option D is wrong: the placement group doesn't fail; it stays PENDING. Compare to PACK (without STRICT): would place 2 bundles on Node 1, 2 on Node 2, accepting split placement."
     },
     {
         question: "How do real RL frameworks (e.g., verl, OpenRLHF) use Ray placement groups for multi-GPU training and generation?",
@@ -53,7 +53,7 @@ const quizQuestions = [
             "They create one global placement group for the entire cluster and schedule all tasks/actors in it"
         ],
         correctAnswer: 1,
-        explanation: "From verl source (verl/trainer/ppo/ray_trainer.py): verl creates placement groups with strategy='PACK' for actor rollout workers (vLLM, GPU), critic workers, and reference model workers. Each group gang-schedules multi-GPU workers that need to be colocated (vLLM tensor-parallel requires all GPUs on same node for fast communication; Megatron training uses NCCL across GPUs on same node). From OpenRLHF source (openrlhf/trainer/ray/vllm_worker_wrap.py): creates placement group with PACK for vLLM workers (tensor-parallel). Why PACK/STRICT_PACK? Colocating multi-GPU workers on the same node minimizes inter-GPU latency (NVLink > PCIe > network). Option A is wrong: they DO use placement groups (not just node affinity). Option C is wrong: they use placement groups for GPU workers. Option D is wrong: they create multiple placement groups (one per worker type), not one global group."
+        explanation: "verl (verl/single_controller/ray/base.py) creates per-node placement groups for each resource pool, STRICT_PACK by default; OpenRLHF (openrlhf/trainer/ray/vllm_engine.py, launcher.py) creates PACK placement groups for vLLM engines and DeepSpeed actors. Why PACK/STRICT_PACK? Colocating multi-GPU workers on the same node minimizes inter-GPU latency (NVLink > PCIe > network). Option A is wrong: they DO use placement groups (not just node affinity). Option C is wrong: they use placement groups for GPU workers. Option D is wrong: they create multiple placement groups (one per worker type), not one global group."
     }
 ];
 
