@@ -7,7 +7,7 @@ Ivan’s personal working notes: ops carryover from COS, plus a post-training la
 | Path | What |
 |------|------|
 | [`lessons/`](lessons/) | 🎓 Interactive paper curriculum (benchmarks + post-training) |
-| [`infra/`](infra/) | 🔧 Eval infrastructure deep dive (sandboxes, orchestration, Ray) |
+| [`infra/`](infra/) | 🔧 Eval infrastructure deep dive: Lessons 1-11 complete (sandboxes, Ray core, scheduling) |
 | [`ops/cos-notes.md`](ops/cos-notes.md) | COS → Main Guy operating notes |
 | [`post-training/README.md`](post-training/README.md) | Lab guide hub (start here for ML) |
 | [`post-training/00-map.md`](post-training/00-map.md) | What post-training is |
