@@ -43,8 +43,8 @@
             <p>
                 When the <strong>SWAG dataset</strong> was first introduced in 2018 for commonsense natural language 
                 inference (NLI), this task seemed challenging for machines (<60% accuracy) while being easy for humans 
-                (88%). But then BERT arrived and quickly reached over 86%—almost human-level performance. Headlines 
-                proclaimed: <em>"Finally, a machine that can finish your sentence."</em>
+                (88%). But then BERT arrived and quickly reached over 86%—almost human-level performance. One news article 
+                was headlined: <em>"Finally, a machine that can finish your sentence."</em>
             </p>
 
             <div class="info-box">
@@ -92,7 +92,7 @@
                 </div>
             </div>
             <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
-                <em>All values from paper Table 1</em>
+                <em>Accuracies from paper Table 1; dataset size from Section 4.4</em>
             </p>
         </section>
 
@@ -156,7 +156,7 @@
                 </div>
                 <div class="comparison-card">
                     <h4>Shuffled Words</h4>
-                    <p><strong>Accuracy: 77.1%</strong></p>
+                    <p><strong>Accuracy: 77.0%</strong></p>
                     <p>Context provided, but words in each ending randomly shuffled</p>
                     <p>⚠️ BERT never saw shuffled text during pretraining, yet adapted easily—structure doesn't matter much.</p>
                 </div>
@@ -327,7 +327,7 @@
                     <p>Longer contexts give more opportunities for generators to make detectable mistakes.</p>
                 </div>
             </div>
-            <p class="chart-caption"><em>Values from paper Figure 7 and Section 4.3</em></p>
+            <p class="chart-caption"><em>Values from paper Figure 6 and Section 4.3</em></p>
         </section>
 
         <section id="construction" class="content-section">
@@ -403,8 +403,8 @@
                     <div class="stat-label">Test Set</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-number">50,000</div>
-                    <div class="stat-label">Training Set</div>
+                    <div class="stat-number">~40k</div>
+                    <div class="stat-label">Training Set (39,905 in released split)</div>
                 </div>
             </div>
             <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
@@ -443,7 +443,7 @@
 
             <p>
                 BERT-Large—the same model used as the adversarial filter—achieves only 47.3% on the test set. 
-                This is <strong>barely above twice random chance</strong> and a staggering 48 points below human performance. 
+                This is <strong>just under twice random chance</strong> and a staggering 48 points below human performance. 
                 By making the dataset adversarial for BERT, it also became adversarial for every other model.
             </p>
 
@@ -524,7 +524,7 @@
             <h4>1. Pretraining is Critical but Not Enough</h4>
             <p>
                 BERT-Large outperforms all other models, but its 47.3% accuracy is still abysmal. Even with massive 
-                pretraining (on Wikipedia and BooksCorpus), finetuning on 50k examples, and being the model used for 
+                pretraining (on Wikipedia and BooksCorpus), finetuning on the ~40k-example training split, and being the model used for 
                 Adversarial Filtering, BERT cannot reliably distinguish sensible from nonsensical continuations.
             </p>
 
@@ -567,9 +567,9 @@
             </p>
 
             <p>
-                Interestingly, OpenAI GPT outperforms BERT on WikiHow (39.8% vs 42.9% on validation), but the reverse 
-                is true for ActivityNet. The left-to-right structure of GPT may be a better inductive bias for WikiHow's 
-                longer sequential contexts.
+                Interestingly, OpenAI GPT outperforms BERT-Base on WikiHow (39.8% vs 34.9% on validation), but the reverse 
+                is true for ActivityNet (46.4% vs 48.9%), though GPT still trails BERT-Large on both (42.9% WikiHow, 54.7% ActivityNet). 
+                The left-to-right structure of GPT may be a better inductive bias for WikiHow's longer sequential contexts.
             </p>
 
             <h3>Transfer from SWAG to HellaSwag</h3>
@@ -579,7 +579,7 @@
 
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-number">46.7%</div>
+                    <div class="stat-number">46.4%</div>
                     <div class="stat-label">BERT on HellaSwag<br>(trained on HellaSwag)</div>
                 </div>
                 <div class="stat-card">
@@ -591,7 +591,7 @@
                     <div class="stat-label">BERT on SWAG<br>(trained on SWAG)</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-number">69.1%</div>
+                    <div class="stat-number">71.4%</div>
                     <div class="stat-label">BERT on SWAG<br>(trained on HellaSwag)</div>
                 </div>
             </div>
@@ -599,8 +599,8 @@
 
             <p>
                 Training on SWAG and evaluating on HellaSwag yields only <strong>34.6%</strong>—barely above random chance 
-                and 12 points below training on HellaSwag directly. The reverse transfer (HellaSwag → SWAG) is better (69.1%), 
-                but still 17 points below SWAG-native training (86.7%). 
+                and about 12 points below training on HellaSwag directly. The reverse transfer (HellaSwag → SWAG) is better (71.4%), 
+                but still about 15 points below SWAG-native training (86.7%). 
             </p>
 
             <p>
@@ -614,8 +614,8 @@
             <h2>Try Real HellaSwag Examples</h2>
             
             <p>
-                Below are real examples from the HellaSwag dataset. Try to predict the correct continuation before 
-                revealing the answer. Remember: these are trivial for humans (>95% accuracy) but extremely challenging 
+                Below are examples from the HellaSwag paper and dataset (four real items; two marked 'illustrative' were written for this lesson). Try to predict 
+                the correct continuation before revealing the answer. Remember: these are trivial for humans (>95% accuracy) but extremely challenging 
                 for models like BERT (<50% accuracy).
             </p>
 
@@ -670,10 +670,8 @@
                 Modern frontier models have largely solved HellaSwag:
             </p>
             <ul>
-                <li><strong>GPT-4 (2023):</strong> ~95% accuracy (approaching human-level)</li>
-                <li><strong>Claude 3 Opus (2024):</strong> ~96% accuracy</li>
-                <li><strong>Llama-3 70B (2024):</strong> ~92% accuracy</li>
-                <li><strong>Even smaller models (Llama-3 8B):</strong> ~82% accuracy</li>
+                <li><strong>GPT-4 (2023):</strong> 95.3% (10-shot; <a href="https://arxiv.org/abs/2303.08774" target="_blank">GPT-4 Technical Report</a>)</li>
+                <li><strong>Claude 3 Opus (2024):</strong> 95.4% (10-shot; <a href="https://www-cdn.anthropic.com/de8ba9b01c9ab7cbabf5c33b80b7bbc618857627/Model_Card_Claude_3.pdf" target="_blank">Claude 3 Model Card</a>)</li>
             </ul>
 
             <p>
@@ -684,20 +682,10 @@
 
             <h3>2. Label Noise and Validity Critiques</h3>
             <p>
-                <strong>Source: Community discussions, benchmark analysis papers (2022-2024)</strong>
-            </p>
-            <p>
-                Researchers have identified issues with HellaSwag's labels:
-            </p>
-            <ul>
-                <li><strong>Annotation artifacts:</strong> Some examples have debatable "correct" answers or multiple plausible continuations</li>
-                <li><strong>Context ambiguity:</strong> Short video captions sometimes lack enough information to disambiguate endings</li>
-                <li><strong>Adversarial generation artifacts:</strong> Wrong endings occasionally make sense in ways annotators didn't anticipate</li>
-            </ul>
-
-            <p>
-                Despite these limitations, HellaSwag remains a valuable benchmark because it represents a specific methodology 
-                (Adversarial Filtering) and historical snapshot of commonsense NLI research.
+                Practitioners have reported label errors in HellaSwag (anecdotal; not quantified here). Some examples have debatable 
+                "correct" answers or multiple plausible continuations, and short video captions sometimes lack enough information to 
+                disambiguate endings. Despite these limitations, HellaSwag remains a valuable benchmark because it represents a specific 
+                methodology (Adversarial Filtering) and historical snapshot of commonsense NLI research.
             </p>
 
             <h3>3. Log-Likelihood Multiple-Choice Scoring</h3>
@@ -716,10 +704,10 @@
                     <li>Repeat for all 4 ending choices</li>
                     <li>Select the ending with the highest log-probability</li>
                 </ol>
-                <p><strong>Length normalization (acc_norm):</strong> Divide log P(E | C) by the number of tokens in E to avoid bias toward shorter endings.</p>
+                <p><strong>Length normalization (acc_norm):</strong> Divide log P(E | C) by the character length of E (lm-evaluation-harness <code>acc_norm</code>) to avoid bias toward shorter endings.</p>
                 <p>
-                    This is the metric reported in most leaderboards. It aligns with HellaSwag's original design: the task is to 
-                    predict which continuation is most likely under the model's distribution.
+                    This is the metric most leaderboards report for zero/few-shot LMs. Note it differs from the paper's original setup, where models 
+                    were finetuned as four-way classifiers over (context, ending) pairs.
                 </p>
             </div>
 
@@ -737,8 +725,7 @@
                 This philosophy has influenced modern benchmark design:
             </p>
             <ul>
-                <li><strong>Dynamic benchmarks:</strong> Chatbot Arena (Lesson 05) uses real user preferences and continuously updates</li>
-                <li><strong>Harder variants:</strong> Researchers create "HellaSwag 2.0"-style datasets with stronger generators (e.g., GPT-4 as adversary)</li>
+                <li><strong>Dynamic benchmarks:</strong> MT-Bench & Chatbot Arena (Lesson 05) use real user preferences and continuously update</li>
                 <li><strong>Multi-modal extensions:</strong> Video understanding benchmarks extend HellaSwag's sentence-completion paradigm to visual reasoning</li>
             </ul>
 
@@ -779,8 +766,8 @@
                 <canvas id="domain-comparison-chart"></canvas>
             </div>
             <p class="chart-caption">
-                Values from paper Table 1. Models drop ~5-7 points on zero-shot categories (novel activities/topics not 
-                seen during training), while human performance remains constant. This shows models struggle to generalize 
+                Values from paper Table 1. Models drop ~4-7 points on zero-shot categories (the paper: "slips an additional 5%") 
+                while human performance remains constant. This shows models struggle to generalize 
                 commonsense knowledge.
             </p>
 
@@ -962,7 +949,7 @@
 
                 <div class="resource-card">
                     <h3>📚 Previous Curriculum Lessons</h3>
-                    <p><a href="../01-mmlu-benchmark-fundamentals/">Lesson 01: MMLU</a></p>
+                    <p><a href="../01-mmlu-what-makes-a-benchmark/">Lesson 01: MMLU</a></p>
                     <p><a href="../13-truthfulqa-imitation-falsehoods/">Lesson 13: TruthfulQA</a></p>
                     <p><a href="../09-helm-holistic-evaluation/">Lesson 09: HELM</a></p>
                 </div>
@@ -980,7 +967,7 @@
     <footer>
         <p>Lesson 15: HellaSwag - Can a Machine Really Finish Your Sentence?</p>
         <p>Part of Ivan's Alternating Paper Curriculum | Track A: Foundations</p>
-        <p><a href="../curriculum.html">View Full Curriculum</a> | <a href="https://arxiv.org/abs/1905.07830" target="_blank">Read the Paper</a></p>
+        <p><a href="https://arxiv.org/abs/1905.07830" target="_blank">Read the Paper</a></p>
     </footer>
 
     <script src="data.js"></script>

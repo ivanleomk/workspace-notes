@@ -91,7 +91,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     },
                     {
                         label: 'Human (Both)',
-                        data: [95.6, 95.6, 95.6, 95.6],
+                        data: [95.7, 95.7, 95.7, 95.7],
                         backgroundColor: 'rgba(16, 185, 129, 0.3)',
                         borderColor: 'rgb(16, 185, 129)',
                         borderWidth: 2,
@@ -203,14 +203,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 datasets: [
                     {
                         label: 'Evaluated on HellaSwag',
-                        data: [46.7, 34.6],
+                        data: [46.4, 34.6],
                         backgroundColor: 'rgba(59, 130, 246, 0.8)',
                         borderColor: 'rgb(59, 130, 246)',
                         borderWidth: 2
                     },
                     {
                         label: 'Evaluated on SWAG',
-                        data: [69.1, 86.7],
+                        data: [71.4, 86.7],
                         backgroundColor: 'rgba(139, 92, 246, 0.8)',
                         borderColor: 'rgb(139, 92, 246)',
                         borderWidth: 2
@@ -261,7 +261,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 labels: ['Full Context', 'Ending Only', 'Shuffled', 'Shuffled +\nEnding Only', 'HellaSwag\n(baseline)'],
                 datasets: [{
                     label: 'BERT-Large Accuracy (%)',
-                    data: [86.7, 74.8, 77.1, 60.4, 46.7],
+                    data: [86.7, 74.8, 77.0, 60.4, 46.7],
                     backgroundColor: [
                         'rgba(16, 185, 129, 0.8)',
                         'rgba(251, 146, 60, 0.8)',
@@ -332,8 +332,9 @@ function initExampleExplorer() {
         card.className = 'example-card';
         card.id = 'current-example';
 
+        const illustrativeNote = example.illustrative ? ' (illustrative, not from dataset)' : '';
         card.innerHTML = `
-            <h4>Example ${index + 1} of ${examples.length}: ${example.activity_label} (${example.source}, ${example.split_type})</h4>
+            <h4>Example ${index + 1} of ${examples.length}: ${example.activity_label}${illustrativeNote} (${example.source}, ${example.split_type})</h4>
             <div class="example-context">
                 <strong>Context:</strong> ${example.ctx}
             </div>
