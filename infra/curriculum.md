@@ -65,8 +65,8 @@ Survey microsandbox (libkrun microVMs, embeddable), kubernetes-sigs/agent-sandbo
 **10. Ray Core: Tasks, Actors, Object Store, and GCS** ✅ *Complete*  
 <a href="10-ray-core/" target="_blank">Lesson 10</a> | <a href="https://ivanleomk.github.io/workspace-notes/infra/10-ray-core/" target="_blank">Live</a> — Understand Ray's execution model. Build async actor pools for I/O-bound sandbox orchestration. Learn when Ray's object store (Plasma) helps vs when it becomes a bottleneck.
 
-**11. Ray Scheduling, Placement Groups, and Resource Management** 📝 *Planned*  
-Master Ray's resource-based scheduler. Use placement groups to gang-schedule GPU workers. Understand DEFAULT vs SPREAD vs PACK strategies and soft vs hard node affinity.
+**11. Ray Scheduling, Placement Groups, and Resource Management** ✅ *Complete*  
+<a href="11-ray-scheduling-placement-groups/" target="_blank">Lesson 11</a> | <a href="https://ivanleomk.github.io/workspace-notes/infra/11-ray-scheduling-placement-groups/" target="_blank">Live</a> — Master Ray's resource-based scheduler. Use placement groups to gang-schedule GPU workers. Understand DEFAULT vs SPREAD vs PACK strategies and soft vs hard node affinity.
 
 **12. KubeRay, Autoscaling, and GCS Fault Tolerance** 📝 *Planned*  
 Deploy Ray on Kubernetes with the RayCluster CRD. Enable GCS HA with Redis. Size head nodes properly. Handle the three failure modes: head-node bottleneck, object store full, actor death.

@@ -1,0 +1,159 @@
+// Quiz questions for Lesson 11: Ray Scheduling, Placement Groups, and Resource Management
+const quizQuestions = [
+    {
+        question: "What is the default resource allocation for a Ray task vs a Ray actor (when no explicit num_cpus is specified)?",
+        options: [
+            "Tasks default to num_cpus=1; actors default to num_cpus=1",
+            "Tasks default to num_cpus=1; actors default to num_cpus=0",
+            "Tasks default to num_cpus=0; actors default to num_cpus=1",
+            "Both tasks and actors default to num_cpus=0"
+        ],
+        correctAnswer: 1,
+        explanation: "From Ray 2.40.0 docs (Specifying Task and Actor Resources): 'For actors, num_cpus=0 by default. For tasks, num_cpus=1 by default.' Tasks are short-lived and reserve 1 CPU for execution. Actors are long-lived: num_cpus specifies lifetime CPU resources (reserved while the actor exists), not per-method resources. Actor methods use the task default (1 CPU) unless overridden. This difference exists because tasks run once; actors run many methods serially (default concurrency=1), so reserving 1 CPU per method would waste resources. Option A is wrong: actors default to 0. Option C is wrong: tasks default to 1. Option D is wrong: tasks default to 1."
+    },
+    {
+        question: "You request num_gpus=0.25 for a Ray task. What does Ray enforce at runtime?",
+        options: [
+            "Ray limits the task to 25% of GPU memory and 25% of GPU compute cycles using CUDA MPS",
+            "Ray does nothing; it's your responsibility to ensure the task uses ≤25% of the GPU. Ray only tracks logical availability for scheduling.",
+            "Ray automatically sets CUDA_VISIBLE_DEVICES to a fractional GPU ID",
+            "Ray creates a cgroup with 25% GPU memory limit"
+        ],
+        correctAnswer: 1,
+        explanation: "From Ray 2.40.0 docs: 'Fractional resource requirements can be used to pack multiple tasks or actors on the same resource. [...] Ray does not impose limits on fractional resource usage. It's your responsibility to ensure that a task or actor uses no more resources than it requested.' Ray tracks logical resources for scheduling (4 tasks with num_gpus=0.25 can share 1 GPU), but does NOT enforce limits at runtime. If a task requests 0.25 GPU but uses 80% of GPU memory, it will cause OOM for other tasks. Use external tools (CUDA_VISIBLE_DEVICES, Docker limits, CUDA MPS) to enforce limits. Option A is wrong: Ray doesn't use MPS. Option C is wrong: Ray doesn't set CUDA_VISIBLE_DEVICES for fractions. Option D is wrong: Ray doesn't use cgroups for GPU limits."
+    },
+    {
+        question: "How does Ray's hybrid two-level scheduler decide where to place tasks vs actors?",
+        options: [
+            "Both tasks and actors are scheduled by the GCS (centralized scheduling)",
+            "Tasks are scheduled by local raylets (local-first, then spillback); actors are scheduled by the GCS (centralized)",
+            "Both tasks and actors are scheduled by local raylets (no GCS involvement)",
+            "Tasks are scheduled by the GCS; actors are scheduled by local raylets"
+        ],
+        correctAnswer: 1,
+        explanation: "From Ray 2.0 Architecture Whitepaper: 'tasks are scheduled by local raylets in a bottom-up manner' and 'The GCS also manages a handful of cluster-level operations, including scheduling for placement groups and actors.' Task scheduling: driver sends RequestWorkerLease to local raylet; if local resources available, task runs locally (local-first); if not, raylet spills back to GCS which tries remote nodes. Actor scheduling: driver sends actor creation to GCS; GCS picks a node with resources (tries local first, then round-robin remote nodes) and tells a raylet to create the actor. Option A is wrong: tasks are not scheduled by GCS (only actors). Option C is wrong: GCS schedules actors. Option D is wrong: reversed."
+    },
+    {
+        question: "You create a placement group with 4 bundles using strategy='STRICT_PACK'. The cluster has 2 nodes, each with 2 GPUs. What happens?",
+        options: [
+            "Ray places 2 bundles on Node 1 and 2 bundles on Node 2 (splitting across nodes)",
+            "The placement group remains PENDING forever (or until a node with 4 GPUs is added), because STRICT_PACK requires all bundles on the same node",
+            "Ray creates a virtual 'super node' by merging Node 1 and Node 2's resources",
+            "The placement group fails immediately with an error"
+        ],
+        correctAnswer: 1,
+        explanation: "From Ray 2.40.0 docs (Placement Groups): 'STRICT_PACK: All bundles must be placed on the same node.' If no single node has enough resources for all bundles, the placement group remains PENDING (state: PENDING in placement_group_table()). It waits until autoscaling adds a node with sufficient resources, or until other jobs free resources. Option A is wrong: STRICT_PACK will NOT split across nodes (that's PACK without STRICT). Option C is wrong: Ray doesn't create virtual nodes. Option D is wrong: the placement group doesn't fail; it stays PENDING. Compare to PACK (without STRICT): would place 2 bundles on Node 1, 2 on Node 2, accepting split placement."
+    },
+    {
+        question: "How do real RL frameworks (e.g., verl, OpenRLHF) use Ray placement groups for multi-GPU training and generation?",
+        options: [
+            "They don't use placement groups; they manually assign tasks to specific node IDs with NodeAffinitySchedulingStrategy",
+            "They create placement groups with PACK or STRICT_PACK to gang-schedule vLLM generation workers (tensor-parallel) and training workers (multi-GPU) on the same node(s)",
+            "They use placement groups only for CPU workers, never for GPU workers",
+            "They create one global placement group for the entire cluster and schedule all tasks/actors in it"
+        ],
+        correctAnswer: 1,
+        explanation: "From verl source (verl/trainer/ppo/ray_trainer.py): verl creates placement groups with strategy='PACK' for actor rollout workers (vLLM, GPU), critic workers, and reference model workers. Each group gang-schedules multi-GPU workers that need to be colocated (vLLM tensor-parallel requires all GPUs on same node for fast communication; Megatron training uses NCCL across GPUs on same node). From OpenRLHF source (openrlhf/trainer/ray/vllm_worker_wrap.py): creates placement group with PACK for vLLM workers (tensor-parallel). Why PACK/STRICT_PACK? Colocating multi-GPU workers on the same node minimizes inter-GPU latency (NVLink > PCIe > network). Option A is wrong: they DO use placement groups (not just node affinity). Option C is wrong: they use placement groups for GPU workers. Option D is wrong: they create multiple placement groups (one per worker type), not one global group."
+    }
+];
+
+// Quiz UI logic
+let currentQuestion = 0;
+let score = 0;
+let answers = new Array(quizQuestions.length).fill(null);
+
+function renderQuiz() {
+    const container = document.getElementById('quiz-container');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="quiz-progress">
+            Question ${currentQuestion + 1} of ${quizQuestions.length}
+        </div>
+        <div class="quiz-question">
+            <h3>${quizQuestions[currentQuestion].question}</h3>
+            <div class="quiz-options">
+                ${quizQuestions[currentQuestion].options.map((option, index) => `
+                    <label class="quiz-option ${answers[currentQuestion] === index ? 'selected' : ''}">
+                        <input type="radio" name="answer" value="${index}" 
+                            ${answers[currentQuestion] === index ? 'checked' : ''}
+                            onchange="selectAnswer(${index})">
+                        <span>${option}</span>
+                    </label>
+                `).join('')}
+            </div>
+            ${answers[currentQuestion] !== null ? `
+                <div class="quiz-feedback ${answers[currentQuestion] === quizQuestions[currentQuestion].correctAnswer ? 'correct' : 'wrong'} show">
+                    <strong>${answers[currentQuestion] === quizQuestions[currentQuestion].correctAnswer ? '✓ Correct!' : '✗ Incorrect'}</strong>
+                    <p>${quizQuestions[currentQuestion].explanation}</p>
+                </div>
+            ` : ''}
+            <div class="quiz-navigation" style="margin-top: 20px;">
+                ${currentQuestion > 0 ? '<button class="quiz-button" onclick="previousQuestion()">← Previous</button>' : '<button class="quiz-button" disabled>← Previous</button>'}
+                ${currentQuestion < quizQuestions.length - 1 ? 
+                    '<button class="quiz-button" onclick="nextQuestion()">Next →</button>' : 
+                    '<button class="quiz-button" onclick="finishQuiz()">Finish Quiz</button>'}
+            </div>
+        </div>
+    `;
+}
+
+function selectAnswer(index) {
+    answers[currentQuestion] = index;
+    if (answers[currentQuestion] === quizQuestions[currentQuestion].correctAnswer) {
+        score++;
+    }
+    renderQuiz();
+}
+
+function nextQuestion() {
+    if (currentQuestion < quizQuestions.length - 1) {
+        currentQuestion++;
+        renderQuiz();
+    }
+}
+
+function previousQuestion() {
+    if (currentQuestion > 0) {
+        currentQuestion--;
+        renderQuiz();
+    }
+}
+
+function finishQuiz() {
+    const correctAnswers = answers.filter((answer, index) => 
+        answer === quizQuestions[index].correctAnswer
+    ).length;
+    
+    const container = document.getElementById('quiz-container');
+    container.innerHTML = `
+        <div class="quiz-results">
+            <h3>Quiz Complete!</h3>
+            <p class="score">You scored ${correctAnswers} out of ${quizQuestions.length}</p>
+            <p>${getScoreMessage(correctAnswers)}</p>
+            <button class="quiz-button" onclick="restartQuiz()">Restart Quiz</button>
+        </div>
+    `;
+}
+
+function getScoreMessage(score) {
+    const percentage = (score / quizQuestions.length) * 100;
+    if (percentage === 100) return "Perfect! You've mastered Ray scheduling, placement groups, and resource management.";
+    if (percentage >= 80) return "Excellent! You understand gang scheduling and when to use placement groups for RL workloads.";
+    if (percentage >= 60) return "Good job! Review the sections on fractional resources, STRICT_PACK vs PACK, and hybrid scheduling.";
+    return "Keep studying! Re-read the resource model, placement group strategies, and the verl/OpenRLHF examples.";
+}
+
+function restartQuiz() {
+    currentQuestion = 0;
+    score = 0;
+    answers = new Array(quizQuestions.length).fill(null);
+    renderQuiz();
+}
+
+// Initialize quiz on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', renderQuiz);
+} else {
+    renderQuiz();
+}
