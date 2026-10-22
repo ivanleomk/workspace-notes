@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lesson 16: KTO - Model Alignment as Prospect Theoretic Optimization</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lesson 16: KTO - Model Alignment as Prospect Theoretic Optimization</h1>
+            <p class="subtitle">Track B: SOTA | Paper: Ethayarajh, Xu, Muennighoff, Jurafsky, Kiela (2024)</p>
+        </header>
+
+        <nav class="lesson-nav">
+            <a href="#introduction">Introduction</a>
+            <a href="#prospect-theory">Prospect Theory</a>
+            <a href="#halo-framework">HALO Framework</a>
+            <a href="#kto-design">KTO Design</a>
+            <a href="#value-function">Value Function</a>
+            <a href="#results">Results</a>
+            <a href="#quiz">Interactive Quiz</a>
+            <a href="#explorer">Value Function Explorer</a>
+            <a href="#charts">Charts & Data</a>
+            <a href="#bridge">Bridge to Curriculum</a>
+            <a href="#resources">Resources</a>
+        </nav>
+
+        <section id="introduction" class="content-section">
+            <h2>Introduction: Learning from Binary Feedback</h2>
+            
+            <p>
+                In Lesson 04 (DPO) and Lesson 14 (SimPO), you learned how to align language models using 
+                <strong>preference pairs</strong>: given two outputs for the same input, the model learns to 
+                increase the probability of the preferred output and decrease that of the dispreferred one. 
+                This approach has proven highly effective, but it has a practical limitation: preference data 
+                is relatively scarce and expensive to collect.
+            </p>
+
+            <div class="info-box">
+                <h3>The Binary Feedback Question</h3>
+                <p>
+                    <strong>What if you only have binary labels—"this output is good" or "this output is bad"—instead 
+                    of paired preferences?</strong>
+                </p>
+                <p>
+                    Binary feedback is far more abundant, faster, and cheaper to collect than preferences. You can get 
+                    it from thumbs-up/thumbs-down buttons, approval/disapproval signals, or even implicit signals like 
+                    whether a user accepted a suggestion. But can you match preference-based methods with this simpler signal?
+                </p>
+                <p>
+                    <a href="https://arxiv.org/abs/2402.01306" target="_blank">KTO (Kahneman-Tversky Optimization)</a> 
+                    by Ethayarajh, Xu, Muennighoff, Jurafsky, and Kiela (2024) answers: <strong>yes</strong>. By framing 
+                    alignment through the lens of <strong>prospect theory</strong>—the Nobel Prize-winning model of human 
+                    decision-making under uncertainty—KTO matches or exceeds DPO performance at scales from 1B to 30B parameters, 
+                    despite learning from a weaker signal.
+                </p>
+            </div>
+
+            <h3>Why Prospect Theory?</h3>
+            <p>
+                Prospect theory (Kahneman & Tversky, 1979, 1992) explains why humans make decisions about uncertain 
+                outcomes that don't maximize expected value. For example, humans are <strong>loss-averse</strong>: 
+                losing $100 hurts more than gaining $100 feels good. They're also <strong>risk-averse in gains</strong> 
+                (prefer a sure $50 over a 50% chance of $100) but <strong>risk-seeking in losses</strong> (prefer a 
+                50% chance of losing $100 over a sure loss of $50).
+            </p>
+
+            <p>
+                The paper shows that successful alignment objectives like DPO and PPO-Clip <strong>implicitly model 
+                these human biases</strong>, which helps explain why they outperform simple cross-entropy training. 
+                The authors call these objectives <strong>Human-Aware Losses (HALOs)</strong>. KTO takes this insight 
+                further by directly using the Kahneman-Tversky value function to derive a loss that:
+            </p>
+
+            <ul>
+                <li>Maximizes the utility of generations (not just the log-likelihood of preferences)</li>
+                <li>Works with binary desirable/undesirable labels</li>
+                <li>Incorporates loss aversion and a reference point based on KL divergence</li>
+                <li>Handles extreme data imbalances (e.g., 1:10 desirable:undesirable ratio)</li>
+            </ul>
+
+            <h3>What You'll Learn</h3>
+            <ul>
+                <li>The Kahneman-Tversky value function: loss aversion, risk aversion, and reference points</li>
+                <li>Human-Aware Losses (HALOs): why DPO and PPO succeed beyond their data</li>
+                <li>KTO's loss function: binary signals, value function, and reference point z₀</li>
+                <li>Hyperparameters: β (risk aversion), λ_D/λ_U (loss aversion), and their effects</li>
+                <li>Results: KTO matches DPO at 1B-30B scale, handles 90% data imbalance, skips SFT when base model is good</li>
+                <li>When to use KTO vs DPO: noise, intransitivity, and data format</li>
+            </ul>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">≥ DPO</div>
+                    <div class="stat-label">Performance (1B-30B)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">90%</div>
+                    <div class="stat-label">Data Imbalance Tolerance</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">Binary</div>
+                    <div class="stat-label">Signal Type</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">2×</div>
+                    <div class="stat-label">Data from n Preferences</div>
+                </div>
+            </div>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>From paper Abstract, Section 4.3, Figure 5</em>
+            </p>
+        </section>
+
+        <section id="prospect-theory" class="content-section">
+            <h2>Prospect Theory: How Humans Perceive Value</h2>
+
+            <h3>The Classical Problem</h3>
+            <p>
+                Classical economics assumes humans maximize expected value. Given a gamble that returns $100 with 80% 
+                probability and $60 with 20% probability, a rational agent should value it at $92 (expected value). 
+                But in experiments, many people accept only $60 to avoid the gamble—even though their certainty 
+                equivalent ($60) is less than the expected value ($92).
+            </p>
+
+            <p>
+                <strong>Why?</strong> Kahneman & Tversky (1979) showed that humans perceive value in a biased but 
+                well-defined way, described by a <strong>value function</strong>.
+            </p>
+
+            <h3>The Kahneman-Tversky Value Function</h3>
+            <p>
+                The value function maps an outcome \( z \), relative to a reference point \( z_0 \), to its perceived 
+                (subjective) value:
+            </p>
+
+            <div class="math-block">
+                $$
+                v(z; \lambda, \alpha, z_0) = \begin{cases}
+                (z - z_0)^\alpha & \text{if } z \geq z_0 \text{ (gains)} \\
+                -\lambda(z_0 - z)^\alpha & \text{if } z < z_0 \text{ (losses)}
+                \end{cases}
+                $$
+            </div>
+
+            <p>Where:</p>
+            <ul>
+                <li>\( z_0 \) = <strong>reference point</strong>, the baseline against which gains/losses are measured</li>
+                <li>\( \alpha = 0.88 \) (median) = <strong>curvature</strong>, controls risk aversion (diminishing sensitivity away from \( z_0 \))</li>
+                <li>\( \lambda = 2.25 \) (median) = <strong>loss aversion coefficient</strong>, reflects that losses hurt more than equivalent gains feel good</li>
+            </ul>
+
+            <h3>Key Properties</h3>
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>1. Reference Dependence</h4>
+                    <p>Value depends on <em>changes</em> relative to \( z_0 \), not absolute outcomes. Winning $100 from $0 
+                    feels different than winning $100 from $1000.</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>2. Loss Aversion (\(\lambda > 1\))</h4>
+                    <p>Losses are weighted more heavily than gains. Losing $50 hurts approximately 2.25× more than gaining $50 feels good.</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>3. Diminishing Sensitivity (\(\alpha < 1\))</h4>
+                    <p>Concave in gains (risk-averse: prefer sure $50 over 50% of $100) and convex in losses (risk-seeking: prefer 
+                    50% chance of $100 loss over sure $50 loss).</p>
+                </div>
+            </div>
+
+            <h3>Prospect Theory in LLM Alignment</h3>
+            <p>
+                In the alignment context, outcomes are not monetary but <strong>rewards measured in nats</strong>—the decrease 
+                in conditional surprisal when going from the reference model \( \pi_{\text{ref}} \) to the aligned model 
+                \( \pi_\theta \). The implied reward is:
+            </p>
+
+            <div class="math-block">
+                $$
+                r_\theta(x, y) = l(y) \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}
+                $$
+            </div>
+
+            <p>
+                where \( l(y) \) is a normalizing factor (e.g., \( \beta \) in DPO). As alignment proceeds, \( r_\theta \) 
+                should grow increasingly positive for desirable outputs and increasingly negative for undesirable ones.
+            </p>
+
+            <p>
+                The reference point \( z_0 \) is the expected reward from the human's perspective. In KTO, this is the 
+                KL divergence \( \text{KL}(\pi_\theta(y'|x) \| \pi_{\text{ref}}(y'|x)) \), representing the typical 
+                reward change across all outputs for input \( x \).
+            </p>
+        </section>
+
+        <section id="halo-framework" class="content-section">
+            <h2>Human-Aware Losses (HALOs)</h2>
+
+            <h3>Definition</h3>
+            <p>
+                A loss function \( f \) is a <strong>HALO</strong> if it can be written as:
+            </p>
+
+            <div class="math-block">
+                $$
+                f(\pi_\theta, \pi_{\text{ref}}) = \mathbb{E}_{x,y \sim \mathcal{D}} \left[ a_{x,y} \, v_{x,y} \left( r_\theta(x, y) - \mathbb{E}_Q[r_\theta(x, Y')] \right) \right] + C_\mathcal{D}
+                $$
+            </div>
+
+            <p>Where:</p>
+            <ul>
+                <li>\( r_\theta(x, y) = l(y) \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)} \) = implied reward</li>
+                <li>\( Q(Y'|x) \) = reference-point distribution (what humans compare against)</li>
+                <li>\( v_{x,y} : \mathbb{R} \to \mathbb{R} \) = value function, non-decreasing everywhere</li>
+                <li>\( a_{x,y} \in \mathbb{R} \setminus \{0\} \) = coefficient (e.g., scaling by importance)</li>
+                <li>\( C_\mathcal{D} \) = data-specific constant (doesn't depend on \( \pi_\theta \) or \( \pi_{\text{ref}} \))</li>
+            </ul>
+
+            <p>
+                <strong>Intuition:</strong> HALOs evaluate the <em>human value</em> of the reward relative to a reference point, 
+                not just the raw reward itself. This reference-dependent structure mirrors how humans judge outcomes in prospect theory.
+            </p>
+
+            <h3>Why HALOs Matter: DPO and PPO are HALOs</h3>
+            <p>
+                The paper proves (Theorem 3.5) that DPO and PPO-Clip are HALOs. This helps explain why they outperform 
+                simple cross-entropy methods: they implicitly model human biases like loss aversion and reference dependence.
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>DPO as a HALO</h4>
+                    <p>
+                        DPO's loss can be rewritten with \( v(z) = \log \sigma(z) \), \( Q = \delta_{y_l} \) (reference point 
+                        is the rejected output \( y_l \)), and \( a_{x,y} = -1 \). The value function \( \log \sigma(\cdot) \) 
+                        is concave everywhere, reflecting risk aversion in both gains and losses.
+                    </p>
+                </div>
+                <div class="comparison-card">
+                    <h4>PPO-Clip as a HALO</h4>
+                    <p>
+                        PPO-Clip's clipping function creates an asymmetric value function: flat beyond \([1-\epsilon, 1+\epsilon]\) 
+                        probability ratios. This reflects bounded sensitivity to extreme advantage values, similar to prospect 
+                        theory's diminishing sensitivity.
+                    </p>
+                </div>
+            </div>
+
+            <h3>Experimental Evidence: HALOs vs Non-HALOs</h3>
+            <p>
+                The paper compares HALOs (DPO, offline PPO) with non-HALOs (SLiC, CSFT) across Pythia-{1.4B, 2.8B, 6.9B, 12B} 
+                and Llama-{7B, 13B, 30B} models (Section 3.3, Figure 2). All models are aligned on the same data 
+                (Anthropic-HH, OpenAssistant, SHP) and judged by GPT-4 against SFT targets:
+            </p>
+
+            <ul>
+                <li><strong>HALOs match or outperform non-HALOs</strong> at every scale, though differences are only 
+                statistically significant (p < 0.05) at 13B+ parameters after multiple-comparison correction.</li>
+                <li><strong>Only HALO-aligned Llama-{13B, 30B}</strong> models achieve ≥50% winrate (matching or exceeding 
+                the SFT targets).</li>
+                <li><strong>Offline PPO with dummy +1/-1 rewards</strong> (no learned reward model!) matches DPO up to 13B, 
+                suggesting that <em>inductive bias in the loss function</em> can compensate for weak reward signals. However, 
+                offline PPO lags at 30B and suffers from hyperparameter sensitivity.</li>
+            </ul>
+
+            <p>
+                This motivates KTO: can we design a principled HALO using prospect theory that works with binary feedback 
+                and matches DPO more reliably?
+            </p>
+        </section>
+
+        <section id="kto-design" class="content-section">
+            <h2>KTO Design: Directly Maximizing Utility</h2>
+
+            <h3>Core Insight</h3>
+            <p>
+                DPO maximizes the <strong>log-likelihood of preferences</strong>. KTO instead directly maximizes the 
+                <strong>utility of generations</strong> using a Kahneman-Tversky-inspired value function. It requires 
+                only a binary signal: whether output \( y \) is desirable or undesirable for input \( x \).
+            </p>
+
+            <h3>The KTO Loss Function</h3>
+            <p>
+                The default KTO loss is (Equation 8 from paper):
+            </p>
+
+            <div class="math-block">
+                $$
+                \mathcal{L}_{\text{KTO}}(\pi_\theta, \pi_{\text{ref}}) = \mathbb{E}_{x,y \sim \mathcal{D}} \left[ \lambda_y - v(x, y) \right]
+                $$
+            </div>
+
+            <p>Where:</p>
+
+            <div class="math-block">
+                $$
+                r_\theta(x, y) = \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}
+                $$
+            </div>
+
+            <div class="math-block">
+                $$
+                z_0 = \text{KL}(\pi_\theta(y'|x) \| \pi_{\text{ref}}(y'|x))
+                $$
+            </div>
+
+            <div class="math-block">
+                $$
+                v(x, y) = \begin{cases}
+                \lambda_D \sigma(\beta(r_\theta(x, y) - z_0)) & \text{if } y \sim y_{\text{desirable}}|x \\
+                \lambda_U \sigma(\beta(z_0 - r_\theta(x, y))) & \text{if } y \sim y_{\text{undesirable}}|x
+                \end{cases}
+                $$
+            </div>
+
+            <p>And \( \lambda_y = \lambda_D \) if \( y \) is desirable, \( \lambda_U \) if undesirable.</p>
+
+            <h3>Key Components</h3>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Value Function: Logistic \(\sigma(\cdot)\)</h4>
+                    <p>
+                        The original Kahneman-Tversky function \((z - z_0)^\alpha\) causes numerical instability due to the 
+                        exponent. KTO uses \(\sigma(\beta z)\), which is also concave in gains and convex in losses, but 
+                        numerically stable. The hyperparameter \(\beta\) controls risk aversion (see next section).
+                    </p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Reference Point \(z_0\): KL Divergence</h4>
+                    <p>
+                        Unlike DPO (where the reference is one dispreferred output \(y_l\)), KTO assumes humans judge \(y|x\) 
+                        relative to <em>all possible outputs</em>. The reference point is the KL divergence from \(\pi_{\text{ref}}\), 
+                        representing the typical reward shift. It is held fixed during backpropagation for stability.
+                    </p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Loss Aversion: \(\lambda_D, \lambda_U\)</h4>
+                    <p>
+                        Separate coefficients for desirable (\(\lambda_D\)) and undesirable (\(\lambda_U\)) examples replace 
+                        the single \(\lambda\) in the original Kahneman-Tversky function. Default: \(\lambda_D = \lambda_U = 1\). 
+                        For imbalanced data, set them so that \(\frac{\lambda_D n_D}{\lambda_U n_U} \in [1, 1.5]\) (Equation 9).
+                    </p>
+                </div>
+            </div>
+
+            <h3>How KTO Works</h3>
+            <p>
+                <strong>For desirable examples:</strong> If the model increases the reward \( r_\theta(x, y) \) naively 
+                (e.g., by just boosting all token probabilities), the KL penalty \( z_0 \) also rises, and no progress is 
+                made. This forces the model to learn <em>what specifically makes the output desirable</em>, so the reward 
+                can rise while the KL stays flat or even decreases.
+            </p>
+
+            <p>
+                <strong>For undesirable examples:</strong> The same logic applies in reverse: the model must learn what 
+                makes outputs bad, decreasing their reward without increasing KL. The non-negativity of KL allows faster 
+                saturation in the loss regime (undesirable examples can drive \( z_0 - r_\theta \) large more easily).
+            </p>
+
+            <h3>KL Estimate (Practical Implementation)</h3>
+            <p>
+                Estimating \( z_0 = \text{KL}(\pi_\theta \| \pi_{\text{ref}}) \) by sampling from \( \pi_\theta \) is slow. 
+                Instead, KTO uses a biased but fast estimate by shifting outputs in the same microbatch to create mismatched 
+                pairs \(\{(x_1, y_2), (x_2, y_3), \ldots, (x_m, y_1)\}\):
+            </p>
+
+            <div class="math-block">
+                $$
+                \hat{z}_0 = \max\left( 0, \frac{1}{m} \sum_{i=1}^{m} \log \frac{\pi_\theta(y_j|x_i)}{\pi_{\text{ref}}(y_j|x_i)} \right)
+                $$
+            </div>
+
+            <p>
+                where \( j = (i \mod m) + 1 \). Clamping to 0 reduces variance while introducing upward bias. If KTO is 
+                preceded by SFT on the same desirable data and the SFT model is used as \( \pi_{\text{ref}} \), then KL 
+                quickly approaches zero and \( \hat{z}_0 \) can be set to 0 (Section 4.1).
+            </p>
+        </section>
+
+        <section id="value-function" class="content-section">
+            <h2>The Value Function and Hyperparameters</h2>
+
+            <h3>Risk Aversion: \(\beta\)</h3>
+            <p>
+                The hyperparameter \(\beta \in \mathbb{R}^+\) controls the curvature of the value function. The greater \(\beta\), 
+                the more quickly the value saturates:
+            </p>
+
+            <ul>
+                <li><strong>High \(\beta\):</strong> More risk-averse in gains (saturates quickly for positive \(r_\theta - z_0\)) 
+                and more risk-seeking in losses (saturates quickly for negative \(r_\theta - z_0\)).</li>
+                <li><strong>Low \(\beta\):</strong> Less saturation, allowing the model to learn from a wider range of reward values.</li>
+            </ul>
+
+            <p>
+                <strong>Default: \(\beta = 0.1\)</strong> works well in most cases (Table 1, Section 4.2). Smaller values 
+                (\(\beta \in [0.01, 0.10)\)) are recommended when applying KTO to a model that has already been finetuned 
+                on the same data. Larger values (\(\beta \in (0.10, 0.50]\)) are recommended when the reference model is 
+                already very performant (e.g., Llama-3 8B Instruct: \(\beta = 0.25\)).
+            </p>
+
+            <h3>Loss Aversion: \(\lambda_D, \lambda_U\)</h3>
+            <p>
+                These control the degree of loss aversion—how much the model weighs undesirable examples relative to desirable ones:
+            </p>
+
+            <ul>
+                <li><strong>\(\lambda_D\):</strong> Weight for desirable examples.</li>
+                <li><strong>\(\lambda_U\):</strong> Weight for undesirable examples.</li>
+                <li><strong>Default: \(\lambda_D = \lambda_U = 1\)</strong> (loss-neutral).</li>
+            </ul>
+
+            <p>
+                For imbalanced data (e.g., 10× more undesirable than desirable examples), the paper recommends setting 
+                \(\lambda_D, \lambda_U\) such that (Equation 9, Section 4.2):
+            </p>
+
+            <div class="math-block">
+                $$
+                \frac{\lambda_D n_D}{\lambda_U n_U} \in \left[1, \frac{3}{2}\right]
+                $$
+            </div>
+
+            <p>
+                where \(n_D\) and \(n_U\) are the counts of desirable and undesirable examples. For a 1:10 ratio, set 
+                \(\lambda_U = 1, \lambda_D \in [10, 15]\). This empirically-determined interval implies that after adjusting 
+                for class imbalances, gain sensitivity yields better performance than loss sensitivity—producing good outputs 
+                is more important than avoiding bad ones for success on most benchmarks.
+            </p>
+
+            <h3>Learning Rate</h3>
+            <p>
+                KTO is more sensitive to learning rate than to any other hyperparameter (Section 4.2). The optimal learning 
+                rate for KTO is typically <strong>2× to 10× the optimal rate for DPO</strong>, because the reference-adjusted 
+                reward \(r_\theta - z_0\) is much smaller in magnitude than DPO's log-ratio reward. 
+            </p>
+
+            <p>
+                <strong>Default: 5e-6 with AdamW</strong> works well for 8B models across all setups (with SFT, without SFT, 
+                when using an already instruction-tuned model, and with LoRA instead of full finetuning). DPO's default at 8B 
+                is 5e-7 with RMSProp. Smaller or larger models benefit from proportionally smaller or larger learning rates.
+            </p>
+
+            <div class="info-box">
+                <h4>Learning Rate Diagnostic</h4>
+                <p>
+                    If the learning rate is too aggressive, the implied rewards of <em>both</em> desirable and undesirable 
+                    examples will decline. Ideally, only undesirable rewards should decline, with desirable rewards staying 
+                    flat or increasing. If the reference model has already undergone SFT or alignment, the average reward of 
+                    desirable examples may stay flat even under ideal settings, because the reference model is hard to improve upon.
+                </p>
+            </div>
+
+            <h3>Ablations: What Happens When You Change the Design?</h3>
+            <p>
+                The paper tests several variants of KTO on Zephyr-β-SFT aligned on UltraFeedback (Table 2, middle section):
+            </p>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Removing \(z_0\) (no reference point)</h4>
+                    <p>
+                        <strong>BBH:</strong> 52.6% → 49.0% (−3.6 pts) <br>
+                        <strong>GSM8K:</strong> 53.5% → 49.5% (−4.0 pts)
+                    </p>
+                    <p>The reference point is crucial for KTO's performance.</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Concave everywhere (like DPO)</h4>
+                    <p>
+                        Change \(v = 1 - \sigma(\cdot)\) to \(v = -\log \sigma(\cdot)\):
+                        <strong>BBH:</strong> 52.6% → 43.2% (−9.4 pts) <br>
+                        <strong>GSM8K:</strong> 53.5% → 42.5% (−11.0 pts)
+                    </p>
+                    <p>Removing the asymmetry (loss-averse value function) significantly hurts performance.</p>
+                </div>
+                <div class="comparison-card">
+                    <h4>Risk-neutral (identity function)</h4>
+                    <p>
+                        Set \(v(z) = z\):
+                        <strong>BBH:</strong> 52.6% → 6.1% (total collapse!)
+                    </p>
+                    <p>The saturation property of \(\sigma(\cdot)\) is essential.</p>
+                </div>
+            </div>
+
+            <p>
+                These ablations confirm that KTO's design choices—the reference point, asymmetric value function, and 
+                saturation—are not arbitrary but critical to its success.
+            </p>
+        </section>
+
+        <section id="results" class="content-section">
+            <h2>Results: KTO Matches or Exceeds DPO</h2>
+
+            <h3>Main Result: KTO ≥ DPO at All Scales</h3>
+            <p>
+                The paper evaluates KTO against DPO across Pythia-{1.4B, 2.8B, 6.9B, 12B} and Llama-{7B, 13B, 30B} models, 
+                all aligned on the same data (Anthropic-HH, OpenAssistant, SHP) and judged by GPT-4 against SFT targets 
+                (Figure 3, Section 4.3):
+            </p>
+
+            <ul>
+                <li><strong>SFT+KTO is competitive with SFT+DPO</strong> at scales from 1B to 30B.</li>
+                <li><strong>KTO alone is significantly better than DPO alone</strong> for Llama-{7B, 13B, 30B} (p < 0.01 
+                at 7B and 30B after multiple-comparison correction).</li>
+                <li>Among Pythia models, there is no significant difference, suggesting a minimum model capacity is needed 
+                for these differences to emerge.</li>
+            </ul>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">KTO ≥ DPO</div>
+                    <div class="stat-label">All scales (1B-30B)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">p < 0.01</div>
+                    <div class="stat-label">Significance (Llama 7B, 30B)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">13.5 pts</div>
+                    <div class="stat-label">GSM8K gain over DPO<br>(Zephyr-β-SFT)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">No SFT</div>
+                    <div class="stat-label">KTO works without SFT<br>(Llama 13B, 30B)</div>
+                </div>
+            </div>
+            <p style="text-align: center; color: var(--text-secondary); margin-top: 10px;">
+                <em>Values from Figure 3, Table 2, Section 4.3</em>
+            </p>
+
+            <h3>Benchmark Results: Zephyr-β-SFT on UltraFeedback</h3>
+            <p>
+                Aligning Zephyr-β-SFT (Tunstall et al., 2023) on UltraFeedback for 1 epoch (Table 2, top):
+            </p>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>MMLU (EM)</th>
+                        <th>GSM8K (EM)</th>
+                        <th>HumanEval (pass@1)</th>
+                        <th>BBH (EM)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>SFT</td>
+                        <td>57.2%</td>
+                        <td>39.0%</td>
+                        <td>30.1%</td>
+                        <td>46.3%</td>
+                    </tr>
+                    <tr>
+                        <td>DPO</td>
+                        <td>58.2%</td>
+                        <td>40.0%</td>
+                        <td>30.1%</td>
+                        <td>44.1%</td>
+                    </tr>
+                    <tr>
+                        <td>ORPO (\(\lambda = 0.1\))</td>
+                        <td>57.1%</td>
+                        <td>36.5%</td>
+                        <td>29.5%</td>
+                        <td>47.5%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>KTO</strong> (\(\beta = 0.1, \lambda_D = 1\))</td>
+                        <td><strong>58.6%</strong></td>
+                        <td><strong>53.5%</strong></td>
+                        <td><strong>30.9%</strong></td>
+                        <td><strong>52.6%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="chart-caption"><em>Exact values from Table 2 (top section)</em></p>
+
+            <p>
+                <strong>Most striking:</strong> On GSM8K (mathematical reasoning), swapping DPO for KTO improves performance 
+                by <strong>13.5 points</strong> (40.0% → 53.5%), a 34% relative improvement.
+            </p>
+
+            <h3>KTO Does Not Need SFT (at Sufficient Scale)</h3>
+            <p>
+                KTO-aligned Llama-{13B, 30B} models are competitive with their SFT+KTO counterparts <em>despite not undergoing 
+                SFT first</em> (Figure 3, Section 4.3). This is unique to KTO among the methods tested. The paper hypothesizes 
+                this is because KTO alone keeps the average response length roughly the same, while running DPO without SFT 
+                prior causes response length to increase dramatically (Figure 4).
+            </p>
+
+            <div class="info-box">
+                <h4>When to Skip SFT</h4>
+                <p>
+                    If your pretrained base model is sufficiently good (e.g., Llama-{13B, 30B} or larger), you can go straight 
+                    to KTO without SFT and still match SFT+KTO performance. This saves a training stage. However, at smaller 
+                    scales (e.g., 7B), SFT+KTO still outperforms KTO alone.
+                </p>
+            </div>
+
+            <h3>Extreme Data Imbalance: Up to 90% Fewer Desirable Examples</h3>
+            <p>
+                The paper tests whether KTO secretly benefits from its 2n examples coming from n preference pairs (which might 
+                create hidden structure). They randomly discard increasingly large fractions of desirable data before aligning 
+                Llama-7B, handling imbalances by adjusting \(\lambda_D, \lambda_U\) per Equation 9 (Figure 5, Section 4.3):
+            </p>
+
+            <ul>
+                <li><strong>With 90% of desirable data discarded</strong> (1:10 desirable:undesirable ratio, \(\lambda_U = 1, \lambda_D = 13.33\)), 
+                KTO still outperforms DPO (which uses the full balanced dataset).</li>
+                <li><strong>The vast majority of undesirable examples no longer have a preferred counterpart</strong>, confirming 
+                that KTO does not rely on paired structure.</li>
+            </ul>
+
+            <p>
+                This demonstrates that KTO's success is not an artifact of the preference-pair structure—it genuinely learns 
+                from unpaired binary feedback.
+            </p>
+
+            <h3>One-y-per-x: KTO on Truly Unpaired Data</h3>
+            <p>
+                To further verify this, the paper aligns Mistral-7B on OpenAssistant using:
+            </p>
+            <ul>
+                <li><strong>DPO on n pairs</strong></li>
+                <li><strong>Standard KTO on all 2n outputs</strong></li>
+                <li><strong>KTO (one-y-per-x):</strong> Only one y per x is used, removing any trace of paired preferences 
+                at the cost of reducing training data by 72%.</li>
+            </ul>
+
+            <p>
+                Results (Table 3):
+            </p>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>Winrate vs. SFT Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Mistral-7B (unaligned)</td>
+                        <td>52.5% ± 3.7%</td>
+                    </tr>
+                    <tr>
+                        <td>Mistral-7B + DPO</td>
+                        <td>60.0% ± 3.7%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Mistral-7B + KTO (all y per x)</strong></td>
+                        <td><strong>65.2% ± 3.6%</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Mistral-7B + KTO (one y per x)</strong></td>
+                        <td><strong>63.1% ± 3.6%</strong></td>
+                    </tr>
+                    <tr>
+                        <td>Mistral-7B-Instruct (official)</td>
+                        <td>62.1% ± 3.1%</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="chart-caption"><em>Exact values from Table 3</em></p>
+
+            <p>
+                Despite using 72% less data, <strong>KTO (one-y-per-x) still outperforms DPO</strong> (63.1% vs 60.0%) and 
+                even beats the official Mistral-7B-Instruct model (62.1%). This confirms that KTO works with truly unpaired 
+                binary feedback.
+            </p>
+
+            <h3>Human Evaluation: Larger KTO-DPO Gap</h3>
+            <p>
+                The paper also runs human evaluation on Mistral-7B models aligned on OpenAssistant (256 prompts, third-party 
+                annotators; Appendix D):
+            </p>
+
+            <ul>
+                <li><strong>KTO winrate vs. SFT targets (humans):</strong> 72.9% ± 5.3%</li>
+                <li><strong>DPO winrate vs. SFT targets (humans):</strong> 62.1% ± 5.7%</li>
+                <li><strong>Gap:</strong> 10.8 percentage points (significant at p < 0.05)</li>
+            </ul>
+
+            <p>
+                In contrast, GPT-4-based evaluation shows a smaller gap (65.2% vs 60.0%, not significant). The larger gap in 
+                human evaluation suggests that KTO's utility-based objective better captures what humans actually prefer, even 
+                if GPT-4 judges don't fully reflect that.
+            </p>
+        </section>
+
+        <section id="quiz" class="content-section">
+            <h2>Interactive Quiz</h2>
+            <p>Test your understanding of KTO, prospect theory, and human-aware losses:</p>
+            <div id="quiz-container" class="quiz-container"></div>
+            <div class="quiz-summary" id="quiz-summary" style="display: none;">
+                <h3>Quiz Complete!</h3>
+                <div class="quiz-score" id="quiz-score"></div>
+                <button class="btn" onclick="location.reload()">Retake Quiz</button>
+            </div>
+        </section>
+
+        <section id="explorer" class="content-section">
+            <h2>Interactive: Value Function Explorer</h2>
+            <p>
+                Explore how KTO's value function \( v(x, y) = \lambda \sigma(\beta(r_\theta - z_0)) \) changes with 
+                different hyperparameters and reward values.
+            </p>
+
+            <div class="explorer-controls">
+                <div class="control-group">
+                    <label for="beta-slider">Risk Aversion (\(\beta\)): <span id="beta-value">0.1</span></label>
+                    <input type="range" id="beta-slider" min="0.01" max="0.50" step="0.01" value="0.1">
+                    <p class="slider-caption">Higher β = more risk-averse (faster saturation)</p>
+                </div>
+                <div class="control-group">
+                    <label for="lambda-slider">Loss Aversion (\(\lambda\)): <span id="lambda-value">2.25</span></label>
+                    <input type="range" id="lambda-slider" min="1.0" max="4.0" step="0.05" value="2.25">
+                    <p class="slider-caption">Higher λ = more loss-averse (losses hurt more than gains feel good)</p>
+                </div>
+                <div class="control-group">
+                    <label for="z0-slider">Reference Point (\(z_0\)): <span id="z0-value">0.0</span></label>
+                    <input type="range" id="z0-slider" min="-1.0" max="1.0" step="0.05" value="0.0">
+                    <p class="slider-caption">Baseline KL divergence separating gains from losses</p>
+                </div>
+            </div>
+
+            <div class="chart-container" style="height: 400px; margin-top: 20px;">
+                <canvas id="value-function-chart"></canvas>
+            </div>
+
+            <div id="value-display" class="info-box" style="margin-top: 20px;">
+                <h4>Interpretation</h4>
+                <p>
+                    The value function maps the reference-adjusted reward \( r_\theta - z_0 \) to its perceived human value. 
+                    For <strong>desirable examples</strong> (blue), the value is \( \lambda_D \sigma(\beta(r_\theta - z_0)) \). 
+                    For <strong>undesirable examples</strong> (red), the value is \( \lambda_U \sigma(\beta(z_0 - r_\theta)) \).
+                </p>
+                <p>
+                    Notice the S-shaped curve for each type: it saturates quickly if \( \beta \) is high (risk-averse) and 
+                    is steeper in losses if \( \lambda \) is high (loss-averse). The reference point \( z_0 \) shifts the 
+                    boundary between gains and losses.
+                </p>
+            </div>
+        </section>
+
+        <section id="charts" class="content-section">
+            <h2>Charts & Visualizations</h2>
+
+            <h3>KTO vs DPO: Winrates Across Scales</h3>
+            <div class="chart-container">
+                <canvas id="kto-vs-dpo-chart"></canvas>
+                <p class="chart-caption">
+                    Winrates from Figure 3 of the paper. KTO alone (no SFT) significantly outperforms DPO alone for 
+                    Llama-{7B, 13B, 30B} (p < 0.01 at 7B and 30B). SFT+KTO is competitive with SFT+DPO at all scales.
+                </p>
+            </div>
+
+            <h3>Benchmark Performance: Zephyr-β-SFT + KTO</h3>
+            <div class="chart-container">
+                <canvas id="benchmark-results-chart"></canvas>
+                <p class="chart-caption">
+                    Exact values from Table 2 (top). KTO outperforms DPO across all four benchmarks, with the largest 
+                    gain on GSM8K (+13.5 points). ORPO, a recent reference-free method, underperforms KTO.
+                </p>
+            </div>
+
+            <h3>Data Imbalance Robustness</h3>
+            <div class="chart-container">
+                <canvas id="data-imbalance-chart"></canvas>
+                <p class="chart-caption">
+                    Values from Figure 5. KTO-aligned Llama-7B matches or exceeds DPO performance while using up to 90% 
+                    fewer desirable examples (1:10 ratio). \(\lambda_D, \lambda_U\) are adjusted per Equation 9.
+                </p>
+            </div>
+
+            <h3>HALO vs Non-HALO Performance</h3>
+            <div class="chart-container">
+                <canvas id="halo-comparison-chart"></canvas>
+                <p class="chart-caption">
+                    Approximate values from Figure 2. HALOs (DPO, offline PPO) outperform non-HALOs (SLiC, CSFT) at 
+                    13B+ scales. Only HALO-aligned Llama-{13B, 30B} models achieve winrate ≥50% (match or exceed SFT targets).
+                </p>
+            </div>
+        </section>
+
+        <section id="bridge" class="content-section">
+            <h2>Bridge to the Curriculum</h2>
+
+            <h3>How KTO Connects to Previous Lessons</h3>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Lesson 04: Direct Preference Optimization (DPO)</h4>
+                    <p>
+                        DPO requires paired preferences \( (x, y_w, y_l) \). KTO generalizes to binary feedback 
+                        \( (x, y_{\text{desirable}}) \) or \( (x, y_{\text{undesirable}}) \), which is easier to collect. 
+                        Breaking n preferences into 2n binary labels can yield <em>better</em> results with KTO. Both are 
+                        HALOs, but KTO directly maximizes utility instead of preference log-likelihood.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 14: SimPO</h4>
+                    <p>
+                        SimPO eliminated DPO's reference model by using length-normalized average log-probability. KTO takes 
+                        a different simplification: it keeps the reference model but removes the need for paired preferences. 
+                        Both address DPO's practical limitations, but along orthogonal axes (memory efficiency vs data requirements).
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 02: InstructGPT & RLHF</h4>
+                    <p>
+                        KTO, like DPO and SimPO, is an offline alternative to RLHF's PPO stage. The paper proves that 
+                        PPO-Clip is a HALO, and KTO uses a similar but more principled prospect-theoretic value function. 
+                        KTO's offline PPO baseline (with dummy +1/-1 rewards) shows that even simple rewards can succeed 
+                        with the right inductive bias.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 05: LLM-as-Judge & MT-Bench</h4>
+                    <p>
+                        KTO is evaluated using GPT-4 as a judge (winrate against SFT targets), the same approach as MT-Bench 
+                        and AlpacaEval. Interestingly, human evaluation shows a <em>larger</em> KTO-DPO gap than GPT-4 
+                        evaluation, suggesting KTO's utility-based objective better captures human preferences than preference 
+                        likelihood does.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 10: Tülu 3 - Open Post-Training</h4>
+                    <p>
+                        Tülu 3's pipeline (SFT → DPO → RLVR) could substitute KTO for DPO, potentially improving data 
+                        efficiency (KTO handles extreme imbalances) and skipping SFT when the base model is strong enough. 
+                        KTO's one-y-per-x mode aligns with Tülu 3's philosophy of using diverse, non-preference data sources.
+                    </p>
+                </div>
+
+                <div class="comparison-card">
+                    <h4>Lesson 13: TruthfulQA - Imitative Falsehoods</h4>
+                    <p>
+                        TruthfulQA showed that imitation learning from web text teaches models human misconceptions. KTO, 
+                        like DPO, addresses this by learning from human feedback (binary or preference) that encodes 
+                        truthfulness judgments. Binary feedback for truthfulness is easier to collect than preferences: 
+                        "Is this answer truthful?" (yes/no) vs. "Which of these answers is more truthful?" (comparison).
+                    </p>
+                </div>
+            </div>
+
+            <h3>The Bigger Picture: Data Efficiency and Practical Alignment</h3>
+
+            <div class="info-box">
+                <h4>Progression of Alignment Methods</h4>
+                <ol>
+                    <li><strong>Classical RLHF (Lesson 02):</strong> SFT → Reward Model → PPO. Requires preference data, 
+                    reward model training, and online sampling. Complex and unstable.</li>
+                    <li><strong>DPO (Lesson 04):</strong> SFT → DPO. Requires preference data. Simpler than RLHF, but 
+                    preferences are expensive to collect.</li>
+                    <li><strong>SimPO (Lesson 14):</strong> SFT → SimPO. Requires preference data but eliminates reference 
+                    model for memory efficiency.</li>
+                    <li><strong>KTO (Lesson 16):</strong> (Optional SFT) → KTO. Requires only binary feedback, which is 
+                    abundant and cheap. Handles extreme imbalances. Can skip SFT for strong base models.</li>
+                </ol>
+                <p>
+                    KTO represents a shift from <em>preference-centric</em> to <em>utility-centric</em> alignment, opening 
+                    the door to using richer and more diverse forms of human feedback.
+                </p>
+            </div>
+
+            <h3>When to Use KTO vs DPO vs SimPO</h3>
+
+            <div class="comparison-grid">
+                <div class="comparison-card">
+                    <h4>Use KTO when:</h4>
+                    <ul>
+                        <li>You have binary feedback (thumbs-up/down, approval/disapproval)</li>
+                        <li>Your data is highly imbalanced (e.g., 10× more negatives than positives)</li>
+                        <li>Your preference data is noisy or intransitive (multiple annotators disagree)</li>
+                        <li>You want to skip SFT (if base model is strong enough, e.g., 13B+)</li>
+                        <li>You want to break n preferences into 2n examples for better data efficiency</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>Use DPO when:</h4>
+                    <ul>
+                        <li>You have clean, paired preference data</li>
+                        <li>Your data has low noise and little intransitivity</li>
+                        <li>You have existing DPO pipelines and infrastructure</li>
+                        <li>You want explicit KL regularization via the reference model</li>
+                    </ul>
+                </div>
+                <div class="comparison-card">
+                    <h4>Use SimPO when:</h4>
+                    <ul>
+                        <li>You have preference data but want to save memory (no reference model)</li>
+                        <li>Length exploitation is a concern</li>
+                        <li>You prioritize generation likelihood alignment</li>
+                        <li>You want simpler implementation (no reference model management)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Looking Ahead: Lesson 17 (Track A)</h3>
+            <p>
+                Lesson 16 completes another Track B (SOTA) lesson on post-training. <strong>Next up: Lesson 17</strong> 
+                returns to Track A (foundations) for another benchmarking lesson. Having learned about DPO, SimPO, and now 
+                KTO, you're ready to explore how to evaluate these aligned models on challenging benchmarks that test 
+                capabilities beyond simple question-answering.
+            </p>
+        </section>
+
+        <section id="resources" class="content-section">
+            <h2>Resources</h2>
+
+            <div class="resource-grid">
+                <div class="resource-card">
+                    <h3>📄 KTO Paper</h3>
+                    <p><a href="https://arxiv.org/abs/2402.01306" target="_blank">arXiv:2402.01306</a></p>
+                    <p>Ethayarajh, Xu, Muennighoff, Jurafsky, Kiela, "KTO: Model Alignment as Prospect Theoretic Optimization" (ICML 2024)</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>💻 Official Code</h3>
+                    <p><a href="https://github.com/ContextualAI/HALOs" target="_blank">GitHub: ContextualAI/HALOs</a></p>
+                    <p>Official implementation with training scripts and examples</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>🤗 TRL Integration</h3>
+                    <p><a href="https://github.com/huggingface/trl" target="_blank">Hugging Face TRL (Transformer Reinforcement Learning)</a></p>
+                    <p>KTO is integrated into TRL for easy use with Transformers models</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Prospect Theory (Kahneman & Tversky)</h3>
+                    <p><strong>Original (1979):</strong> <a href="https://www.jstor.org/stable/1914185" target="_blank">Econometrica</a></p>
+                    <p><strong>Cumulative (1992):</strong> <a href="https://link.springer.com/article/10.1007/BF00122574" target="_blank">Journal of Risk and Uncertainty</a></p>
+                    <p>The foundational papers on human decision-making under uncertainty</p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📊 Datasets</h3>
+                    <p><strong>Anthropic-HH:</strong> <a href="https://huggingface.co/datasets/Anthropic/hh-rlhf" target="_blank">HuggingFace</a></p>
+                    <p><strong>OpenAssistant:</strong> <a href="https://huggingface.co/datasets/OpenAssistant/oasst1" target="_blank">HuggingFace</a></p>
+                    <p><strong>UltraFeedback:</strong> <a href="https://huggingface.co/datasets/openbmb/UltraFeedback" target="_blank">HuggingFace</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Related Papers</h3>
+                    <p><strong>DPO:</strong> <a href="https://arxiv.org/abs/2305.18290" target="_blank">Rafailov et al. (2023)</a></p>
+                    <p><strong>SimPO:</strong> <a href="https://arxiv.org/abs/2405.14734" target="_blank">Meng et al. (2024)</a></p>
+                    <p><strong>ORPO:</strong> <a href="https://arxiv.org/abs/2403.07691" target="_blank">Hong et al. (2024)</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Previous Curriculum Lessons</h3>
+                    <p><a href="../04-dpo-direct-preference-optimization/">Lesson 04: DPO</a></p>
+                    <p><a href="../14-simpo-reference-free-preference-optimization/">Lesson 14: SimPO</a></p>
+                    <p><a href="../02-instructgpt-rlhf-reward-modeling/">Lesson 02: InstructGPT/RLHF</a></p>
+                </div>
+
+                <div class="resource-card">
+                    <h3>📚 Track A Lessons</h3>
+                    <p><a href="../01-mmlu-what-makes-a-benchmark/">Lesson 01: MMLU</a></p>
+                    <p><a href="../05-llm-as-judge-mt-bench/">Lesson 05: LLM-as-Judge</a></p>
+                    <p><a href="../13-truthfulqa-imitation-falsehoods/">Lesson 13: TruthfulQA</a></p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <p>Lesson 16: KTO - Model Alignment as Prospect Theoretic Optimization</p>
+        <p>Part of Ivan's Alternating Paper Curriculum | Track B: SOTA</p>
+        <p><a href="https://arxiv.org/abs/2402.01306" target="_blank">Read the Paper</a></p>
+    </footer>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+    <script src="data.js"></script>
+    <script src="quiz.js"></script>
+    <script src="charts.js"></script>
+</body>
+</html>

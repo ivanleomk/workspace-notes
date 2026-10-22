@@ -273,6 +273,8 @@ Lessons are published at **https://ivanleomk.github.io/workspace-notes/**
 - [Lesson 12: DeepSeek-R1 - Reasoning via RL](https://ivanleomk.github.io/workspace-notes/12-deepseek-r1-reasoning-rl/)
 - [Lesson 13: TruthfulQA - Imitative Falsehoods](https://ivanleomk.github.io/workspace-notes/13-truthfulqa-imitation-falsehoods/)
 - [Lesson 14: SimPO - Simple Preference Optimization](https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/)
+- [Lesson 15: HellaSwag - Adversarial Filtering](https://ivanleomk.github.io/workspace-notes/15-hellaswag-adversarial-filtering/)
+- [Lesson 16: KTO - Prospect Theoretic Alignment](https://ivanleomk.github.io/workspace-notes/16-kto-prospect-theoretic-alignment/)
 
 ### 💻 Local Serving (for development)
 ```bash
@@ -298,7 +300,76 @@ Open `lessons/XX-topic-name/index.html` directly in a browser (most features wil
 
 See [`curriculum.md`](curriculum.md) for the full roadmap and completion tracking.
 
-### Lesson 13 - TruthfulQA: Imitative Falsehoods ✅
+### Lesson 14 - SimPO: Simple Preference Optimization ✅
+- **Track:** B (SOTA)
+- **Paper:** SimPO: Simple Preference Optimization with Reference-Free Reward (Meng, Xia, Chen, NeurIPS 2024)
+- **Path:** [`14-simpo-reference-free-preference-optimization/`](14-simpo-reference-free-preference-optimization/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/](https://ivanleomk.github.io/workspace-notes/14-simpo-reference-free-preference-optimization/)
+- **Topics:**
+  - Reference-free reward: eliminates DPO's reference model requirement
+  - Length-normalized average log-probability: (β/|y|) log π_θ(y|x)
+  - Target reward margin γ for improved generalization
+  - Length normalization prevents verbosity exploitation
+  - SimPO vs DPO: up to 6.4 points improvement on AlpacaEval 2
+  - State-of-the-art: Gemma-2-9B-it-SimPO (72.4% LC AlpacaEval 2, 59.1% Arena-Hard)
+  - Memory efficiency: ~50% reduction (no reference model)
+  - Hyperparameters: β ∈ [2.0, 2.5], γ ∈ [0.5, 1.5]
+  - Bridge to DPO (Lesson 04), RLHF (Lesson 02), LLM-as-Judge (Lesson 05)
+- **Interactive Elements:**
+  - 12-question quiz with detailed feedback
+  - Reward margin explorer: interactive toy with β, γ, avg log-prob sliders
+  - SimPO vs DPO comparison charts (AlpacaEval 2, Arena-Hard)
+  - Length normalization impact visualization
+  - Gemma-2-9B-it results across Base/DPO/SimPO
+  - Baselines comparison (8 methods on Llama-3-Instruct)
+- **Status:** Complete
+
+### Lesson 15 - HellaSwag: Adversarial Filtering ✅
+- **Track:** A (Foundations)
+- **Paper:** HellaSwag: Can a Machine Really Finish Your Sentence? (Zellers, Holtzman, Bisk, Farhadi, Choi, ACL 2019)
+- **Path:** [`15-hellaswag-adversarial-filtering/`](15-hellaswag-adversarial-filtering/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/15-hellaswag-adversarial-filtering/](https://ivanleomk.github.io/workspace-notes/15-hellaswag-adversarial-filtering/)
+- **Topics:**
+  - Adversarial Filtering: co-evolving benchmarks with state-of-the-art models
+  - SWAG→BERT story: how dataset biases allowed "solving" without reasoning
+  - Goldilocks zone: ~3 sentences context + ~2 sentences generation
+  - 70,000 examples from ActivityNet Captions + WikiHow
+  - Human accuracy: 95.6%, BERT-Large: 47.3% (48.3pp gap)
+  - In-domain vs zero-shot evaluation
+  - Modern context: GPT-4 at 95.3%, benchmark saturation
+  - Why benchmarks must co-evolve with models
+- **Interactive Elements:**
+  - 10-question quiz with detailed feedback
+  - Real HellaSwag examples explorer
+  - Overall performance comparison charts
+  - Domain comparison (ActivityNet vs WikiHow)
+  - Transfer experiments visualization
+  - SWAG ablation results
+- **Status:** Complete
+
+### Lesson 16 - KTO: Model Alignment as Prospect Theoretic Optimization ✅
+- **Track:** B (SOTA)
+- **Paper:** KTO: Model Alignment as Prospect Theoretic Optimization (Ethayarajh, Xu, Muennighoff, Jurafsky, Kiela, ICML 2024)
+- **Path:** [`16-kto-prospect-theoretic-alignment/`](16-kto-prospect-theoretic-alignment/)
+- **Live:** [https://ivanleomk.github.io/workspace-notes/16-kto-prospect-theoretic-alignment/](https://ivanleomk.github.io/workspace-notes/16-kto-prospect-theoretic-alignment/)
+- **Topics:**
+  - Binary feedback instead of paired preferences (desirable/undesirable)
+  - Prospect theory: Kahneman-Tversky value function (α=0.88, λ=2.25)
+  - Human-Aware Losses (HALOs): DPO and PPO-Clip are HALOs
+  - KTO loss: reference point z₀ = KL divergence, value function σ(β(r_θ - z₀))
+  - Hyperparameters: β (risk aversion), λ_D/λ_U (loss aversion)
+  - KTO ≥ DPO at 1B-30B scale, matches with 90% fewer desirable examples
+  - Can skip SFT at 13B+ when base model is strong
+  - GSM8K: +13.5 points over DPO (40.0% → 53.5%)
+  - When to use KTO vs DPO: noise, intransitivity, data format
+- **Interactive Elements:**
+  - 12-question quiz with detailed feedback
+  - Interactive value function explorer with β, λ, z₀ sliders
+  - KTO vs DPO winrate comparisons across scales
+  - Benchmark results charts (MMLU, GSM8K, HumanEval, BBH)
+  - Data imbalance robustness visualization
+  - HALO vs non-HALO performance comparison
+- **Status:** Complete
 - **Track:** A (Foundations)
 - **Paper:** TruthfulQA: Measuring How Models Mimic Human Falsehoods (Lin, Hilton, Evans, ACL 2022)
 - **Path:** [`13-truthfulqa-imitation-falsehoods/`](13-truthfulqa-imitation-falsehoods/)

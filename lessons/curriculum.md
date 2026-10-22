@@ -28,7 +28,8 @@ Lessons alternate tracks to interleave theory with practice.
 | 13 | A | ✅ Complete | TruthfulQA: Imitative Falsehoods | Lin, Hilton, Evans (ACL 2022) |
 | 14 | B | ✅ Complete | SimPO: Simple Preference Optimization | Meng, Xia, Chen (NeurIPS 2024) |
 | 15 | A | ✅ Complete | HellaSwag: Adversarial Filtering | Zellers, Holtzman, Bisk, Farhadi, Choi (ACL 2019) |
-| 16 | B | 📝 Next | Advanced Post-Training Technique | ORPO, KTO, or Online DPO |
+| 16 | B | ✅ Complete | KTO: Model Alignment as Prospect Theoretic Optimization | Ethayarajh, Xu, Muennighoff, Jurafsky, Kiela (2024) |
+| 17 | A | 📝 Next | Benchmarking Lesson | TBD |
 
 ## Learning Objectives by Track
 
@@ -74,13 +75,10 @@ Each lesson includes:
 - ✅ Lesson 13 (Track A): TruthfulQA - Imitative Falsehoods (Lin, Hilton, Evans, ACL 2022)
 - ✅ Lesson 14 (Track B): SimPO - Simple Preference Optimization with Reference-Free Reward (Meng, Xia, Chen, NeurIPS 2024)
 - ✅ Lesson 15 (Track A): HellaSwag - Can a Machine Really Finish Your Sentence? Adversarial Filtering for Commonsense NLI (Zellers et al., ACL 2019)
+- ✅ Lesson 16 (Track B): KTO - Model Alignment as Prospect Theoretic Optimization (Ethayarajh, Xu, Muennighoff, Jurafsky, Kiela, 2024)
 
 **Next Up:**
-Lesson 16 (Track B): Advanced post-training technique building on DPO/SimPO foundations. Strong candidates:
-- **ORPO (Odds Ratio Preference Optimization):** Combines SFT and preference learning in one stage (Hong et al., 2024)
-- **KTO (Kahneman-Tversky Optimization):** Uses binary feedback instead of pairwise preferences (Ethayarajh et al., 2024)
-- **Online/Iterative DPO:** Generates new preference data during training for better distribution matching
-- **RSO (Rejection Sampling Optimization):** Combines rejection sampling with DPO for improved sample efficiency
+Lesson 17 (Track A): Benchmarking foundations lesson to complement the post-training techniques covered in recent Track B lessons.
 
 ## How to Request a Lesson
 
