@@ -32,7 +32,7 @@ const quizQuestions = [
             "Humans maximize expected value; λ = 1.0"
         ],
         correctIndex: 1,
-        explanation: "Loss aversion means losing $100 hurts more than gaining $100 feels good. The median loss aversion coefficient is λ ≈ 2.25 (from Kahneman & Tversky 1992), meaning losses are weighted ~2.25× more heavily than gains. KTO uses λ_D and λ_U to model this asymmetry."
+        explanation: "Loss aversion means losing $100 hurts more than gaining $100 feels good. The median loss aversion coefficient is λ ≈ 2.25 (median estimates from Tversky & Kahneman, 1992), meaning losses are weighted ~2.25× more heavily than gains. KTO uses λ_D and λ_U to model this asymmetry."
     },
     {
         question: "What is a Human-Aware Loss (HALO)?",
@@ -65,7 +65,7 @@ const quizQuestions = [
             "The batch size"
         ],
         correctIndex: 2,
-        explanation: "β controls risk aversion: higher β means the value function σ(β(r_θ - z₀)) saturates more quickly, making the model more risk-averse in gains and more risk-seeking in losses. Default β = 0.1 works well; use smaller values (0.01-0.10) for finetuning, larger (0.10-0.50) for strong pretrained models."
+        explanation: "β controls risk aversion: higher β means the value function σ(β(r_θ - z₀)) saturates more quickly, making the model more risk-averse in gains and more risk-seeking in losses. Default β = 0.1 works well; use smaller values (β ∈ [0.01, 0.10)) when the model was already finetuned on the same data, and larger values (β ∈ (0.10, 0.50]) when the reference model is already very performant, e.g., already aligned like Llama-3 8B Instruct (Section 4.2, v5)."
     },
     {
         question: "How much desirable data can KTO discard while still matching DPO performance (Figure 5)?",
@@ -83,11 +83,11 @@ const quizQuestions = [
         options: [
             "SFT is always required before KTO",
             "SFT makes KTO perform worse",
-            "At sufficient scale (13B+), KTO can skip SFT and match SFT+KTO performance",
+            "At sufficient scale (Llama-13B/30B), KTO without SFT is competitive with SFT+KTO",
             "SFT and KTO are incompatible"
         ],
         correctIndex: 2,
-        explanation: "At 13B+ parameters, KTO alone (without SFT) matches SFT+KTO performance (Figure 3). This is unique to KTO among tested methods. The paper hypothesizes this is because KTO keeps response length stable, while DPO without SFT causes length to increase dramatically (Figure 4)."
+        explanation: "In the paper's experiments, KTO-aligned Llama-13B and 30B without SFT were competitive with SFT+KTO (Section 4.3). This is unique to KTO among tested methods. The paper hypothesizes this is because KTO keeps response length stable, while DPO without SFT causes length to increase dramatically (Figure 4). At Llama-7B, Figure 3 shows SFT+KTO ahead of KTO alone (approximate read)."
     },
     {
         question: "How much did KTO improve over DPO on GSM8K when aligning Zephyr-β-SFT on UltraFeedback?",
@@ -98,7 +98,7 @@ const quizQuestions = [
             "20.0 points"
         ],
         correctIndex: 2,
-        explanation: "On GSM8K (mathematical reasoning), KTO achieved 53.5% compared to DPO's 40.0%, a gain of 13.5 percentage points (Table 2). This is a 34% relative improvement and the largest gain among all benchmarks tested. Mathematical reasoning appears to particularly benefit from KTO's utility-based objective."
+        explanation: "On GSM8K (mathematical reasoning), KTO achieved 53.5% compared to DPO's 40.0%, a gain of 13.5 percentage points (Table 2). This is ≈34% relative (our calculation: 13.5/40.0). The paper notes the gain is most pronounced on certain tasks such as GSM8K (Section 4.3)."
     },
     {
         question: "When should you use KTO instead of DPO?",
@@ -109,7 +109,7 @@ const quizQuestions = [
             "Never; DPO is always better"
         ],
         correctIndex: 1,
-        explanation: "Use KTO when: (1) you have binary feedback (easier to collect), (2) your data is highly imbalanced, (3) your preferences are noisy or intransitive (multiple annotators disagree), or (4) you want to skip SFT. KTO's theoretical analysis (Theorem 4.2, 4.3) shows it has better worst-case guarantees for handling noise and intransitivity than DPO."
+        explanation: "Use KTO when: (1) you have binary feedback (easier to collect), (2) your data is highly imbalanced, (3) your preferences are noisy or intransitive (multiple annotators disagree), or (4) you want to skip SFT. Proposition 4.1 shows KTO effectively ignores examples whose implied reward is extreme (often noisy labels), and Theorem 4.3 shows that with contradictory preferences, DPO's optimum can favour the minority-preferred output while KTO's update moves toward the majority one (Section 4.4)."
     },
     {
         question: "What happens when you remove the reference point z₀ from KTO?",

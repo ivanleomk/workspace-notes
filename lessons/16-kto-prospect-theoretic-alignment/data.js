@@ -5,10 +5,10 @@ const ktoData = {
     // Main results: KTO vs DPO winrates (from Figure 3)
     ktoVsDpoWinrates: {
         models: ['Pythia-1.4B', 'Pythia-2.8B', 'Pythia-6.9B', 'Pythia-12B', 'Llama-7B', 'Llama-13B', 'Llama-30B'],
-        dpoAlone: [null, null, null, null, 0.515, 0.495, 0.490], // approximate from Figure 3
-        ktoAlone: [null, null, null, null, 0.545, 0.510, 0.530], // approximate from Figure 3
-        sftPlusDpo: [null, null, null, null, 0.525, 0.505, 0.505], // approximate from Figure 3
-        sftPlusKto: [null, null, null, null, 0.535, 0.520, 0.520]  // approximate from Figure 3
+        dpoAlone: [null, null, null, null, -19, -8, 3.5], // approximate reads of Figure 3 (winrate − 50, ±2 pp)
+        ktoAlone: [null, null, null, null, -9, -3, 16.5], // approximate reads of Figure 3 (winrate − 50, ±2 pp)
+        sftPlusDpo: [null, null, null, null, -7, 0, 12], // approximate reads of Figure 3 (winrate − 50, ±2 pp)
+        sftPlusKto: [null, null, null, null, -2, 2, 15]  // approximate reads of Figure 3 (winrate − 50, ±2 pp)
     },
 
     // Benchmark results: Zephyr-β-SFT on UltraFeedback (Table 2, top section)
@@ -20,21 +20,21 @@ const ktoData = {
         bbh: [46.3, 44.1, 47.5, 52.6]
     },
 
-    // Data imbalance results (Figure 5)
+    // Data imbalance results (Figure 5, left panel)
     dataImbalance: {
-        desirableFractions: [1.0, 0.9, 0.75, 0.5, 0.25, 0.1],
-        // Approximate winrates read from Figure 5
-        ktoWinrate: [0.545, 0.540, 0.535, 0.530, 0.525, 0.520],
-        dpoWinrate: 0.515  // DPO baseline with full balanced data
+        desirableFractions: [1.0, 0.5, 0.3, 0.15, 0.1, 0.05],
+        // Approximate winrates read from Figure 5 (left panel, absolute winrate vs SFT target)
+        ktoWinrate: [0.455, 0.405, 0.40, 0.33, 0.345, 0.285], // approximate reads of Figure 5 (left), absolute winrate vs SFT target
+        dpoWinrate: 0.31  // approximate, dashed line in Figure 5
     },
 
     // HALO vs non-HALO comparison (Figure 2, approximate values)
     haloComparison: {
         models: ['Llama-7B', 'Llama-13B', 'Llama-30B'],
-        csft: [0.485, 0.490, 0.485],
-        slic: [0.490, 0.495, 0.490],
-        dpo: [0.525, 0.505, 0.505],
-        ppoOffline: [0.520, 0.500, 0.485]
+        csft: [-12, -12.5, -6.5], // approximate reads of Figure 2 (winrate − 50, ±2 pp)
+        slic: [-12, -10, -12.5], // approximate reads of Figure 2 (winrate − 50, ±2 pp)
+        dpo: [-7, 0, 12], // approximate reads of Figure 2 (winrate − 50, ±2 pp)
+        ppoOffline: [-8.5, -2, 0.5] // approximate reads of Figure 2 (winrate − 50, ±2 pp)
     },
 
     // One-y-per-x results (Table 3)

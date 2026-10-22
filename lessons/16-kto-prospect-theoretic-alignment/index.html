@@ -56,8 +56,8 @@
                 <p>
                     <a href="https://arxiv.org/abs/2402.01306" target="_blank">KTO (Kahneman-Tversky Optimization)</a> 
                     by Ethayarajh, Xu, Muennighoff, Jurafsky, and Kiela (2024) answers: <strong>yes</strong>. By framing 
-                    alignment through the lens of <strong>prospect theory</strong>—the Nobel Prize-winning model of human 
-                    decision-making under uncertainty—KTO matches or exceeds DPO performance at scales from 1B to 30B parameters, 
+                    alignment through the lens of <strong>prospect theory</strong> (work for which Daniel Kahneman shared 
+                    the 2002 Nobel memorial prize in economics)—KTO matches or exceeds DPO performance at scales from 1B to 30B parameters, 
                     despite learning from a weaker signal.
                 </p>
             </div>
@@ -91,7 +91,7 @@
                 <li>Human-Aware Losses (HALOs): why DPO and PPO succeed beyond their data</li>
                 <li>KTO's loss function: binary signals, value function, and reference point z₀</li>
                 <li>Hyperparameters: β (risk aversion), λ_D/λ_U (loss aversion), and their effects</li>
-                <li>Results: KTO matches DPO at 1B-30B scale, handles 90% data imbalance, skips SFT when base model is good</li>
+                <li>Results: KTO matches DPO at 1B-30B scale, matches DPO with up to 90% fewer desirable examples (1:10 ratio, Llama-7B), skips SFT when base model is good</li>
                 <li>When to use KTO vs DPO: noise, intransitivity, and data format</li>
             </ul>
 
@@ -102,7 +102,7 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">90%</div>
-                    <div class="stat-label">Data Imbalance Tolerance</div>
+                    <div class="stat-label">Fewer desirable examples (up to 90%, Llama-7B)</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">Binary</div>
@@ -124,14 +124,15 @@
             <h3>The Classical Problem</h3>
             <p>
                 Classical economics assumes humans maximize expected value. Given a gamble that returns $100 with 80% 
-                probability and $60 with 20% probability, a rational agent should value it at $92 (expected value). 
-                But in experiments, many people accept only $60 to avoid the gamble—even though their certainty 
-                equivalent ($60) is less than the expected value ($92).
+                probability and $0 with 20% probability, a person might accept a sure $60 to avoid the gamble, even 
+                though their certainty equivalent ($60) is less than the expected value ($80). (Example from arXiv v1 
+                §3.1; later versions misprint the 20% outcome as $60.)
             </p>
 
             <p>
-                <strong>Why?</strong> Kahneman & Tversky (1979) showed that humans perceive value in a biased but 
-                well-defined way, described by a <strong>value function</strong>.
+                <strong>Why?</strong> Kahneman & Tversky (1979) introduced prospect theory, and Tversky & Kahneman 
+                (1992) proposed the parametric value function below, estimating the median parameters from experiments 
+                with monetary gambles.
             </p>
 
             <h3>The Kahneman-Tversky Value Function</h3>
@@ -245,9 +246,10 @@
                 <div class="comparison-card">
                     <h4>PPO-Clip as a HALO</h4>
                     <p>
-                        PPO-Clip's clipping function creates an asymmetric value function: flat beyond \([1-\epsilon, 1+\epsilon]\) 
-                        probability ratios. This reflects bounded sensitivity to extreme advantage values, similar to prospect 
-                        theory's diminishing sensitivity.
+                        Treating one PPO-Clip update as offline (advantages A fixed, \(\pi_{\text{ref}} = \pi_{\text{old}}\)), 
+                        the paper writes it as a HALO with \(a = -A\) and \(v(z) = \min(e^z, 1+\epsilon)\) when \(A > 0\), 
+                        \(\max(e^z, 1-\epsilon)\) when \(A < 0\) (Appendix B). The value stops increasing once the probability 
+                        ratio leaves the trust region in the direction the advantage favors.
                     </p>
                 </div>
             </div>
@@ -400,7 +402,8 @@
             </ul>
 
             <p>
-                <strong>Default: \(\beta = 0.1\)</strong> works well in most cases (Table 1, Section 4.2). Smaller values 
+                <strong>Default: \(\beta = 0.1\)</strong> works well in most cases (Section 4.2; arXiv v5). Table 1 lists 
+                the tuned per-setup values (0.05–0.50). Smaller values 
                 (\(\beta \in [0.01, 0.10)\)) are recommended when applying KTO to a model that has already been finetuned 
                 on the same data. Larger values (\(\beta \in (0.10, 0.50]\)) are recommended when the reference model is 
                 already very performant (e.g., Llama-3 8B Instruct: \(\beta = 0.25\)).
@@ -444,8 +447,10 @@
 
             <p>
                 <strong>Default: 5e-6 with AdamW</strong> works well for 8B models across all setups (with SFT, without SFT, 
-                when using an already instruction-tuned model, and with LoRA instead of full finetuning). DPO's default at 8B 
-                is 5e-7 with RMSProp. Smaller or larger models benefit from proportionally smaller or larger learning rates.
+                when using an already instruction-tuned model, and with LoRA instead of full finetuning). The default DPO 
+                learning rate at the 8B scale is 5e-7. The paper's own experiments use the default DPO learning rate with 
+                RMSProp for all methods (for an apples-to-apples comparison), but recommend starting KTO at 5e-6 with AdamW. 
+                Smaller or larger models benefit from proportionally smaller or larger learning rates.
             </p>
 
             <div class="info-box">
@@ -479,7 +484,7 @@
                         <strong>BBH:</strong> 52.6% → 43.2% (−9.4 pts) <br>
                         <strong>GSM8K:</strong> 53.5% → 42.5% (−11.0 pts)
                     </p>
-                    <p>Removing the asymmetry (loss-averse value function) significantly hurts performance.</p>
+                    <p>Removing the symmetric S-shape (concave in gains, convex in losses) by making the value function concave everywhere, as in DPO, significantly hurts performance.</p>
                 </div>
                 <div class="comparison-card">
                     <h4>Risk-neutral (identity function)</h4>
@@ -509,8 +514,8 @@
 
             <ul>
                 <li><strong>SFT+KTO is competitive with SFT+DPO</strong> at scales from 1B to 30B.</li>
-                <li><strong>KTO alone is significantly better than DPO alone</strong> for Llama-{7B, 13B, 30B} (p < 0.01 
-                at 7B and 30B after multiple-comparison correction).</li>
+                <li><strong>KTO alone is better than DPO alone</strong> for Llama-{7B, 13B, 30B}; the gap is significant 
+                (p < 0.01, Holm-corrected) at 7B and 30B.</li>
                 <li>Among Pythia models, there is no significant difference, suggesting a minimum model capacity is needed 
                 for these differences to emerge.</li>
             </ul>
@@ -587,13 +592,14 @@
 
             <p>
                 <strong>Most striking:</strong> On GSM8K (mathematical reasoning), swapping DPO for KTO improves performance 
-                by <strong>13.5 points</strong> (40.0% → 53.5%), a 34% relative improvement.
+                by <strong>13.5 points</strong> (40.0% → 53.5%), ≈34% relative (our calculation: 13.5/40.0). The paper notes 
+                the gain is most pronounced on certain tasks such as GSM8K (Section 4.3).
             </p>
 
             <h3>KTO Does Not Need SFT (at Sufficient Scale)</h3>
             <p>
-                KTO-aligned Llama-{13B, 30B} models are competitive with their SFT+KTO counterparts <em>despite not undergoing 
-                SFT first</em> (Figure 3, Section 4.3). This is unique to KTO among the methods tested. The paper hypothesizes 
+                In the paper's experiments, KTO-aligned Llama-13B and 30B without SFT were competitive with SFT+KTO 
+                (Section 4.3). This is unique to KTO among the methods tested. The paper hypothesizes 
                 this is because KTO alone keeps the average response length roughly the same, while running DPO without SFT 
                 prior causes response length to increase dramatically (Figure 4).
             </p>
@@ -601,9 +607,9 @@
             <div class="info-box">
                 <h4>When to Skip SFT</h4>
                 <p>
-                    If your pretrained base model is sufficiently good (e.g., Llama-{13B, 30B} or larger), you can go straight 
-                    to KTO without SFT and still match SFT+KTO performance. This saves a training stage. However, at smaller 
-                    scales (e.g., 7B), SFT+KTO still outperforms KTO alone.
+                    In the paper's experiments, KTO-aligned Llama-13B and 30B without SFT were competitive with SFT+KTO 
+                    (Section 4.3). This saves a training stage. However, at Llama-7B, Figure 3 shows SFT+KTO ahead of 
+                    KTO alone (approximate read).
                 </p>
             </div>
 
@@ -681,8 +687,9 @@
 
             <h3>Human Evaluation: Larger KTO-DPO Gap</h3>
             <p>
-                The paper also runs human evaluation on Mistral-7B models aligned on OpenAssistant (256 prompts, third-party 
-                annotators; Appendix D):
+                The paper also runs human evaluation on Mistral-7B models aligned on OpenAssistant (256 sampled prompts, 
+                214 comparisons per method after skipping domain-expert questions; third-party annotation service; ± are 
+                90% binomial CIs; Appendix D):
             </p>
 
             <ul>
@@ -718,18 +725,23 @@
 
             <div class="explorer-controls">
                 <div class="control-group">
-                    <label for="beta-slider">Risk Aversion (\(\beta\)): <span id="beta-value">0.1</span></label>
-                    <input type="range" id="beta-slider" min="0.01" max="0.50" step="0.01" value="0.1">
+                    <label for="beta-slider">Risk Aversion (\(\beta\)): <span id="beta-value">0.10</span></label>
+                    <input type="range" id="beta-slider" min="0.01" max="0.50" step="0.01" value="0.10">
                     <p class="slider-caption">Higher β = more risk-averse (faster saturation)</p>
                 </div>
                 <div class="control-group">
-                    <label for="lambda-slider">Loss Aversion (\(\lambda\)): <span id="lambda-value">2.25</span></label>
-                    <input type="range" id="lambda-slider" min="1.0" max="4.0" step="0.05" value="2.25">
-                    <p class="slider-caption">Higher λ = more loss-averse (losses hurt more than gains feel good)</p>
+                    <label for="lambda-d-slider">λ_D (desirable weight): <span id="lambda-d-value">1.00</span></label>
+                    <input type="range" id="lambda-d-slider" min="1.0" max="4.0" step="0.05" value="1.00">
+                    <p class="slider-caption">Weight for desirable examples (KTO default: 1.0)</p>
                 </div>
                 <div class="control-group">
-                    <label for="z0-slider">Reference Point (\(z_0\)): <span id="z0-value">0.0</span></label>
-                    <input type="range" id="z0-slider" min="-1.0" max="1.0" step="0.05" value="0.0">
+                    <label for="lambda-u-slider">λ_U (undesirable weight): <span id="lambda-u-value">1.00</span></label>
+                    <input type="range" id="lambda-u-slider" min="1.0" max="4.0" step="0.05" value="1.00">
+                    <p class="slider-caption">Weight for undesirable examples (KTO default: 1.0; KT median λ = 2.25)</p>
+                </div>
+                <div class="control-group">
+                    <label for="z0-slider">Reference Point (\(z_0\)): <span id="z0-value">0.00</span></label>
+                    <input type="range" id="z0-slider" min="0" max="1.0" step="0.05" value="0.00">
                     <p class="slider-caption">Baseline KL divergence separating gains from losses</p>
                 </div>
             </div>
@@ -746,8 +758,10 @@
                     For <strong>undesirable examples</strong> (red), the value is \( \lambda_U \sigma(\beta(z_0 - r_\theta)) \).
                 </p>
                 <p>
-                    Notice the S-shaped curve for each type: it saturates quickly if \( \beta \) is high (risk-averse) and 
-                    is steeper in losses if \( \lambda \) is high (loss-averse). The reference point \( z_0 \) shifts the 
+                    Notice the S-shaped curve for each type: it saturates quickly if \( \beta \) is high (risk-averse). 
+                    Loss aversion is modeled by separate weights: \( \lambda_D \) applies only to desirable (gain) examples, 
+                    and \( \lambda_U \) applies only to undesirable (loss) examples. Setting \( \lambda_U > \lambda_D \) 
+                    makes losses hurt more than gains feel good. The reference point \( z_0 \) shifts the 
                     boundary between gains and losses.
                 </p>
             </div>
@@ -760,8 +774,8 @@
             <div class="chart-container">
                 <canvas id="kto-vs-dpo-chart"></canvas>
                 <p class="chart-caption">
-                    Winrates from Figure 3 of the paper. KTO alone (no SFT) significantly outperforms DPO alone for 
-                    Llama-{7B, 13B, 30B} (p < 0.01 at 7B and 30B). SFT+KTO is competitive with SFT+DPO at all scales.
+                    Approximate values read from Figure 3 (±2 pp). KTO alone (no SFT) is better than DPO alone for 
+                    Llama-{7B, 13B, 30B}; the gap is significant (p < 0.01, Holm-corrected) at 7B and 30B. SFT+KTO is competitive with SFT+DPO at all scales.
                 </p>
             </div>
 
@@ -778,7 +792,7 @@
             <div class="chart-container">
                 <canvas id="data-imbalance-chart"></canvas>
                 <p class="chart-caption">
-                    Values from Figure 5. KTO-aligned Llama-7B matches or exceeds DPO performance while using up to 90% 
+                    Approximate values read from Figure 5 (left panel, ±1–2 pp). KTO-aligned Llama-7B matches or exceeds DPO performance while using up to 90% 
                     fewer desirable examples (1:10 ratio). \(\lambda_D, \lambda_U\) are adjusted per Equation 9.
                 </p>
             </div>
@@ -823,8 +837,8 @@
                     <p>
                         KTO, like DPO and SimPO, is an offline alternative to RLHF's PPO stage. The paper proves that 
                         PPO-Clip is a HALO, and KTO uses a similar but more principled prospect-theoretic value function. 
-                        KTO's offline PPO baseline (with dummy +1/-1 rewards) shows that even simple rewards can succeed 
-                        with the right inductive bias.
+                        The paper's offline-PPO baseline (Section 3.3, dummy +1/−1 rewards) shows that even simple rewards 
+                        can succeed with the right inductive bias.
                     </p>
                 </div>
 
@@ -843,7 +857,8 @@
                     <p>
                         Tülu 3's pipeline (SFT → DPO → RLVR) could substitute KTO for DPO, potentially improving data 
                         efficiency (KTO handles extreme imbalances) and skipping SFT when the base model is strong enough. 
-                        KTO's one-y-per-x mode aligns with Tülu 3's philosophy of using diverse, non-preference data sources.
+                        Tülu 3's preference stage uses paired data with DPO; KTO would be a candidate drop-in where only 
+                        unpaired thumbs-up/down labels exist (our suggestion, not tested in either paper).
                     </p>
                 </div>
 
@@ -897,7 +912,7 @@
                         <li>You have clean, paired preference data</li>
                         <li>Your data has low noise and little intransitivity</li>
                         <li>You have existing DPO pipelines and infrastructure</li>
-                        <li>You want explicit KL regularization via the reference model</li>
+                        <li>You need a strictly paired (y_w, y_l) formulation, e.g., to reuse existing DPO tooling</li>
                     </ul>
                 </div>
                 <div class="comparison-card">
