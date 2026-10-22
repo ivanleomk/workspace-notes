@@ -80,7 +80,7 @@
                 <ul>
                     <li>KubeRay: v1.2.2 (released 29 Sep 2024, per <a href="https://github.com/ray-project/kuberay/releases/tag/v1.2.2" target="_blank">GitHub releases</a>)</li>
                     <li>Ray: 2.40.0 (released 3 Dec 2024, per <a href="https://pypi.org/project/ray/2.40.0/" target="_blank">PyPI</a>)</li>
-                    <li>Kubernetes: 1.31.0 (kind v0.24.0 default node image, per <a href="https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0" target="_blank">kind releases</a>)</li>
+                    <li>Kubernetes: 1.29.8 (kind v0.24.0 with the pinned <code>kindest/node:v1.29.8</code> image from the <a href="https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0" target="_blank">kind v0.24.0 release notes</a>; kind's own default would be 1.31.0)</li>
                 </ul>
                 <p>
                     <strong>Primary sources:</strong>
@@ -89,7 +89,7 @@
                     <li><a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/index.html" target="_blank">Ray 2.40.0 Docs: KubeRay</a> 
                     — Official KubeRay documentation hosted on Ray docs</li>
                     <li><a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html" target="_blank">Ray 2.40.0 Docs: Configuring Autoscaling</a> 
-                    — Autoscaler config reference (applies to both KubeRay and VM autoscaler)</li>
+                    — VM cluster-launcher autoscaler config reference (idle_timeout_minutes, upscaling_speed); KubeRay sets these via <code>spec.autoscalerOptions</code> instead</li>
                     <li><a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance</a> 
                     — GCS HA setup with Redis</li>
                     <li><a href="https://github.com/ray-project/kuberay" target="_blank">ray-project/kuberay</a> 
@@ -98,9 +98,7 @@
                     source code (Apache-2.0) — All Ray code references link to tag <code>ray-2.40.0</code></li>
                 </ul>
                 <p>
-                    <strong>Fact-checking:</strong> Every number, default value, config field name, and source path 
-                    in this lesson has been verified against the cited primary sources (Ray/KubeRay docs at specific versions, 
-                    or source code at pinned tags). Quotes are verbatim from linked sources. The core autoscaling exercise (Steps 1-5) was verified on kind v0.24.0 + kuberay-operator 1.2.2 helm chart + the lesson's RayCluster YAML (kind with Kubernetes 1.29.8 node images): autoscaling from 0 to 5 workers and back to 0 worked as described.
+                    <strong>Fact-checking:</strong> Numbers, defaults, field names and source paths cite Ray/KubeRay docs at the pinned versions or source at pinned tags. The core exercise (Steps 1-5) was run on kind v0.24.0 (Kubernetes 1.29.8 node images) + kuberay-operator 1.2.2: the autoscaler scaled the worker group up to <code>maxReplicas: 5</code> and back to 0 about 60 s after the tasks finished.
                 </p>
             </div>
         </section>
@@ -299,7 +297,7 @@ spec:
             <h3>rayStartParams: Ray CLI Flags</h3>
             <p>
                 <code>rayStartParams</code> is a map of flags passed to <code>ray start</code>. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#rayStartParams" target="_blank">Ray 2.40.0 Docs: Configure RayCluster</a>:
+                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#raystartparams" target="_blank">Ray 2.40.0 Docs: Configure RayCluster</a>:
             </p>
             <blockquote>
                 "The <code>rayStartParams</code> field of each group spec is a string-string map of arguments to the Ray container's <code>ray start</code> entrypoint. […] For most use-cases, [dashboard-host] should be set to "0.0.0.0" for the Ray head pod. This is required to expose the Ray dashboard outside the Ray cluster."
@@ -370,10 +368,10 @@ spec:
 
             <h3>The Autoscaler Sidecar in KubeRay</h3>
             <p>
-                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#kuberay-autoscaling-config" target="_blank">Ray 2.40.0 Docs</a>:
+                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/configuring-autoscaling.html" target="_blank">Ray 2.40.0 Docs: KubeRay Autoscaling</a>:
             </p>
             <blockquote>
-                "the KubeRay operator will inject an autoscaler container into the Ray head pod"
+                "Although depicted as a separate entity for clarity, the Ray Autoscaler is actually a sidecar container within the Ray head Pod in the actual implementation."
             </blockquote>
             <p>
                 The autoscaler sidecar runs <code>ray kuberay-autoscaler</code> (entry point: <code>ray kuberay-autoscaler</code> in <code>python/ray/scripts/scripts.py</code> → <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/kuberay/run_autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/kuberay/run_autoscaler.py</code></a>). 
@@ -413,13 +411,13 @@ sequenceDiagram
     
     loop Every 5 seconds
         AUTOSCALER->>GCS: Read pending tasks, resource availability
-        AUTOSCALER->>AUTOSCALER: Calculate: need 90 more CPUs<br/>= 90 workers (if 1 CPU each)
-        AUTOSCALER->>K8S_API: Patch RayCluster spec.workerGroupSpecs[0].replicas = 90
+        AUTOSCALER->>AUTOSCALER: Calculate: need 90 more CPUs<br/>= 90 more workers (1 CPU each), target 100
+        AUTOSCALER->>K8S_API: Patch RayCluster spec.workerGroupSpecs[0].replicas = 100
     end
     
     K8S_API-->>OPERATOR: Watch event: RayCluster spec updated
-    OPERATOR->>OPERATOR: Reconcile: current 10 workers → desired 90
-    OPERATOR->>K8S_API: Create 80 new worker Pods
+    OPERATOR->>OPERATOR: Reconcile: current 10 workers → desired 100
+    OPERATOR->>K8S_API: Create 90 new worker Pods
     K8S_API->>WORKERS: Schedule and start new Pods
     WORKERS->>GCS: Workers register with GCS
     GCS->>GCS: Update available resources
@@ -434,12 +432,15 @@ sequenceDiagram
 
             <h3>Upscaling Speed: How Fast Can the Autoscaler Scale Up?</h3>
             <p>
-                The autoscaler scales up gradually to avoid resource exhaustion and API rate limits. From 
+                By default, KubeRay's autoscaler requests every needed worker at once; rate limiting is opt-in. From 
                 <a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html" target="_blank">Ray 2.40.0 Docs: Configuring Autoscaling</a>:
             </p>
             <blockquote>
-                "`upscaling_speed[default_value=1.0, min_value=1.0]`: The number of nodes allowed to be pending as a multiple of the current number of nodes." (At least 5 nodes may always be pending.) KubeRay doesn't expose <code>upscaling_speed</code> directly. Set <code>spec.autoscalerOptions.upscalingMode</code>: <code>Conservative</code> (upscaling_speed=1, pending ≤ current count), <code>Default</code> or <code>Aggressive</code> (upscaling_speed=1000, effectively no rate limit; the KubeRay default).
+                "`upscaling_speed[default_value=1.0, min_value=1.0]`: The number of nodes allowed to be pending as a multiple of the current number of nodes."
             </blockquote>
+            <p>
+                (The autoscaler always allows at least 5 pending nodes.) KubeRay doesn't expose <code>upscaling_speed</code> directly; set <code>spec.autoscalerOptions.upscalingMode</code>: <code>Conservative</code> (upscaling_speed=1), <code>Default</code> or <code>Aggressive</code> (upscaling_speed=1000, effectively no rate limit; the KubeRay default).
+            </p>
             <p>
                 <strong>Example:</strong> With <code>upscalingMode: Conservative</code> (upscaling_speed=1) and 10 running workers, at most 10 (minimum 5) workers can be pending at once, so the cluster grows geometrically. With the KubeRay default (1000), every needed worker up to <code>maxReplicas</code> is requested in one step.
             </p>
@@ -450,8 +451,11 @@ sequenceDiagram
                 From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/configuring-autoscaling.html" target="_blank">KubeRay autoscaling guide</a>:
             </p>
             <blockquote>
-                "A worker Pod will be deleted after `idleTimeoutSeconds` (default 60s) seconds." (For VM clusters, `idle_timeout_minutes` defaults to 5: "The number of minutes that need to pass before an idle worker node is removed by the autoscaler.")
+                "A worker Pod will be deleted after `idleTimeoutSeconds` (default 60s) seconds."
             </blockquote>
+            <p>
+                For VM clusters, <code>idle_timeout_minutes</code> defaults to 5: "The number of minutes that need to pass before an idle worker node is removed by the autoscaler." (<a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html">VM autoscaling docs</a>)
+            </p>
             <p>
                 <strong>Scale-to-zero:</strong> If <code>minReplicas: 0</code>, all workers in a group can be removed 
                 when idle. The next task submission will trigger scale-up, but there will be a cold-start delay 
@@ -467,13 +471,13 @@ sequenceDiagram
 
             <h3>Autoscaler Metrics and Observability</h3>
             <p>
-                The autoscaler exposes Prometheus metrics on port 44217 (<code>AUTOSCALER_METRIC_PORT</code>), and Ray re-exports them on the head's metrics-export port (8080 in KubeRay). Definitions: <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/prom_metrics.py"><code>python/ray/autoscaler/_private/prom_metrics.py</code></a>:
+                The autoscaler serves its own Prometheus endpoint on port 44217 (<code>AUTOSCALER_METRIC_PORT</code>, <code>python/ray/autoscaler/_private/constants.py</code> L87) in the autoscaler container. This is separate from Ray's metrics-export port (8080 in KubeRay), so scrape both. Definitions: <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/prom_metrics.py"><code>python/ray/autoscaler/_private/prom_metrics.py</code></a>:
             </p>
             <ul>
                 <li><code>autoscaler_cluster_resources</code>: Total/used/available resources per resource type (CPU, GPU, memory)</li>
                 <li><code>autoscaler_pending_nodes</code>: Number of nodes pending creation</li>
-                <li><code>autoscaler_active_nodes</code>: Active (non-idle) nodes per node type</li>
-                <li><code>autoscaler_failed_create_nodes</code>: Count of nodes that failed to create</li>
+                <li><code>autoscaler_active_nodes</code>: Number of live (registered) nodes per node type, idle or busy</li>
+                <li><code>autoscaler_failed_create_nodes_total</code>: Count of nodes that failed to create</li>
                 <li><code>autoscaler_pending_resources</code>: Pending resource requests (tasks/actors waiting for resources)</li>
             </ul>
             <p>
@@ -603,7 +607,7 @@ spec:
             <h3>Failure Mode 1: Head Node Bottleneck (GCS Overload)</h3>
             <p>
                 <strong>Symptom:</strong> Tasks take seconds to schedule, even though workers have free resources. 
-                Dashboard shows high head Pod CPU usage (>80%). Autoscaler thrashes (adds workers, then removes them 
+                Dashboard / <code>kubectl top pod</code> shows the head Pod's CPU near its limit. Autoscaler thrashes (adds workers, then removes them 
                 immediately).
             </p>
             <p>
@@ -648,7 +652,7 @@ spec:
                 external storage (local disk or S3). [...] Object spilling is fully abstracted away to user applications."
             </blockquote>
             <p>
-                but spilling is <strong>slow</strong>: disk I/O latency is 100× slower than RAM access. If your workload 
+                but spilling is <strong>much slower</strong> than in-memory access (it adds disk writes/reads and serialization). If your workload 
                 creates many large objects (e.g., 1 GB per task), and you have 100 concurrent tasks per worker, you need 
                 100 GB of object store per worker — far more than the default 30% of RAM.
             </p>
@@ -681,8 +685,7 @@ spec:
             <ul>
                 <li><strong>OOM kill:</strong> Pod exceeds memory limit, Kubernetes kills it</li>
                 <li><strong>Node failure:</strong> Node crashes, all Pods on it are lost</li>
-                <li><strong>Autoscaler scale-down:</strong> Idle worker removed by autoscaler (if running actors on it, 
-                they die)</li>
+                <li><strong>Pod deletion / eviction:</strong> e.g. <code>kubectl delete pod</code>, node drain, or preemption (the autoscaler itself only removes idle nodes: no active tasks, actors, or referenced objects)</li>
                 <li><strong>Process crash:</strong> e.g. segfault or <code>os._exit</code> in the actor process (Python exceptions don't kill the actor)</li>
             </ul>
             <p>
@@ -738,8 +741,7 @@ class ResilientActor:
                 and reload in <code>__init__</code></li>
                 <li>Use placement groups (Lesson 11) to gang-schedule multi-GPU training workers and ensure they stay on 
                 the same node(s)</li>
-                <li>Size head node generously (8+ CPUs) for large clusters (1,000+ actors); GCS overhead is proportional 
-                to actor count</li>
+                <li>Give the head Pod generous CPU/memory and <code>num-cpus: "0"</code> for large clusters; GCS load grows with the number of actors, nodes and placement groups (there's no official sizing figure)</li>
             </ul>
         </section>
 
@@ -858,7 +860,8 @@ spec:
             <pre><code class="language-bash"># Apply RayCluster
 kubectl apply -f raycluster-autoscale.yaml
 
-# Wait for head Pod to be ready
+# Wait for the operator to create the head Pod, then for it to be ready
+until kubectl get pod -l ray.io/node-type=head -o name | grep -q .; do sleep 2; done
 kubectl wait --for=condition=ready pod -l ray.io/node-type=head --timeout=300s
 
 # Check Pods
@@ -921,7 +924,7 @@ python3 autoscale_demo.py</code></pre>
                 <li>Autoscaler log: <code>Adding 5 node(s) of type worker-group</code>; the operator creates 5 worker Pods (or 4 more if the initial worker is still up)</li>
             </ul>
             <p>
-                Expected: You'll see new worker Pods created (STATUS: ContainerCreating → Running) over (Pod scheduling, image pull, and Ray startup; seconds if the image is cached on the node, minutes if the multi-GB Ray image must be pulled).
+                Expected: You'll see new worker Pods created (STATUS: Init → Running). This takes seconds if the Ray image is already cached on the node, and minutes if the multi-GB image must be pulled.
             </p>
 
             <h3>Step 5: Observe Scale-Down (Idle Timeout)</h3>
@@ -975,7 +978,7 @@ kind delete cluster --name ray-cluster</code></pre>
                 <li>KubeRay operator manages RayCluster CRs, creates head/worker Pods, and reconciles autoscaler decisions</li>
                 <li>Autoscaler sidecar runs in head Pod, reads demand from GCS, patches the worker group's replicas in the RayCluster spec</li>
                 <li>Operator reconciles worker Pods to match desired replicas</li>
-                <li>Scale-up happens immediately (within Pod creation time, ~20-60s). Scale-down waits for the idle timeout (default 60 s in KubeRay)</li>
+                <li>Scale-up is requested within one autoscaler iteration (~5 s); Pods are ready once scheduled, the image is pulled and Ray starts. Scale-down waits for the idle timeout (default 60 s in KubeRay)</li>
                 <li><code>minReplicas: 0</code> allows scale-to-zero (saves cost), but adds cold-start latency for bursty workloads</li>
             </ul>
 
@@ -1033,7 +1036,7 @@ kind delete cluster --name ray-cluster</code></pre>
             </p>
             <ul>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/autoscaler.py</code></a></strong> 
-                — Autoscaler v1/v2 core logic (scale-up/down decisions, idle timeout, upscaling speed)</li>
+                — Autoscaler v1 (StandardAutoscaler) core logic: scale-up/down decisions, idle timeout, upscaling speed. v2 lives under <code>python/ray/autoscaler/v2/</code></li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/kuberay/run_autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/kuberay/run_autoscaler.py</code></a></strong> 
                 — KubeRay sidecar entry point: <code>ray kuberay-autoscaler</code></li>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/prom_metrics.py" target="_blank"><code>python/ray/autoscaler/_private/prom_metrics.py</code></a></strong> 
