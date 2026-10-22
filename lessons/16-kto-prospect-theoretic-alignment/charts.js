@@ -12,28 +12,28 @@ function createKtoVsDpoChart() {
             datasets: [
                 {
                     label: 'DPO Alone',
-                    data: ktoData.ktoVsDpoWinrates.dpoAlone.filter((_, i) => i >= 4).map(v => v * 100),
+                    data: ktoData.ktoVsDpoWinrates.dpoAlone.filter((_, i) => i >= 4),
                     backgroundColor: 'rgba(239, 68, 68, 0.7)',
                     borderColor: 'rgba(239, 68, 68, 1)',
                     borderWidth: 2
                 },
                 {
                     label: 'KTO Alone',
-                    data: ktoData.ktoVsDpoWinrates.ktoAlone.filter((_, i) => i >= 4).map(v => v * 100),
+                    data: ktoData.ktoVsDpoWinrates.ktoAlone.filter((_, i) => i >= 4),
                     backgroundColor: 'rgba(59, 130, 246, 0.7)',
                     borderColor: 'rgba(59, 130, 246, 1)',
                     borderWidth: 2
                 },
                 {
                     label: 'SFT+DPO',
-                    data: ktoData.ktoVsDpoWinrates.sftPlusDpo.filter((_, i) => i >= 4).map(v => v * 100),
+                    data: ktoData.ktoVsDpoWinrates.sftPlusDpo.filter((_, i) => i >= 4),
                     backgroundColor: 'rgba(251, 146, 60, 0.7)',
                     borderColor: 'rgba(251, 146, 60, 1)',
                     borderWidth: 2
                 },
                 {
                     label: 'SFT+KTO',
-                    data: ktoData.ktoVsDpoWinrates.sftPlusKto.filter((_, i) => i >= 4).map(v => v * 100),
+                    data: ktoData.ktoVsDpoWinrates.sftPlusKto.filter((_, i) => i >= 4),
                     backgroundColor: 'rgba(16, 185, 129, 0.7)',
                     borderColor: 'rgba(16, 185, 129, 1)',
                     borderWidth: 2
@@ -56,11 +56,12 @@ function createKtoVsDpoChart() {
             },
             scales: {
                 y: {
-                    beginAtZero: true,
-                    max: 60,
+                    beginAtZero: false,
+                    min: -25,
+                    max: 20,
                     title: {
                         display: true,
-                        text: 'Winrate Above Chance (%)',
+                        text: 'Winrate above chance (winrate − 50, pp; approx. from Figure 3)',
                         color: '#cbd5e1'
                     },
                     ticks: { color: '#cbd5e1' },
@@ -151,8 +152,7 @@ function createDataImbalanceChart() {
         type: 'line',
         data: {
             labels: ktoData.dataImbalance.desirableFractions.map(f => {
-                const ratio = f === 1 ? '1:1' : f === 0.9 ? '0.9:1' : f === 0.75 ? '0.75:1' : 
-                              f === 0.5 ? '0.5:1' : f === 0.25 ? '0.25:1' : '0.1:1';
+                const ratio = `${f.toFixed(2)}:1`;
                 return `${ratio}\n(${Math.round(f * 100)}% desirable)`;
             }),
             datasets: [
@@ -192,11 +192,12 @@ function createDataImbalanceChart() {
             },
             scales: {
                 y: {
-                    beginAtZero: true,
-                    max: 60,
+                    beginAtZero: false,
+                    min: 20,
+                    max: 50,
                     title: {
                         display: true,
-                        text: 'Winrate Above Chance (%)',
+                        text: 'KTO winrate vs SFT target (%; approx. from Figure 5)',
                         color: '#cbd5e1'
                     },
                     ticks: { color: '#cbd5e1' },
@@ -228,22 +229,22 @@ function createHaloComparisonChart() {
             datasets: [
                 {
                     label: 'CSFT (Non-HALO)',
-                    data: ktoData.haloComparison.csft.map(v => v * 100),
+                    data: ktoData.haloComparison.csft,
                     backgroundColor: 'rgba(156, 163, 175, 0.7)'
                 },
                 {
                     label: 'SLiC (Non-HALO)',
-                    data: ktoData.haloComparison.slic.map(v => v * 100),
+                    data: ktoData.haloComparison.slic,
                     backgroundColor: 'rgba(107, 114, 128, 0.7)'
                 },
                 {
                     label: 'DPO (HALO)',
-                    data: ktoData.haloComparison.dpo.map(v => v * 100),
+                    data: ktoData.haloComparison.dpo,
                     backgroundColor: 'rgba(59, 130, 246, 0.7)'
                 },
                 {
                     label: 'PPO Offline (HALO)',
-                    data: ktoData.haloComparison.ppoOffline.map(v => v * 100),
+                    data: ktoData.haloComparison.ppoOffline,
                     backgroundColor: 'rgba(16, 185, 129, 0.7)'
                 }
             ]
@@ -264,11 +265,12 @@ function createHaloComparisonChart() {
             },
             scales: {
                 y: {
-                    beginAtZero: true,
-                    max: 60,
+                    beginAtZero: false,
+                    min: -15,
+                    max: 15,
                     title: {
                         display: true,
-                        text: 'Winrate Above Chance (%)',
+                        text: 'Winrate above chance (winrate − 50, pp; approx. from Figure 2)',
                         color: '#cbd5e1'
                     },
                     ticks: { color: '#cbd5e1' },
@@ -288,13 +290,15 @@ let valueFunctionChart = null;
 
 function initValueFunctionExplorer() {
     const betaSlider = document.getElementById('beta-slider');
-    const lambdaSlider = document.getElementById('lambda-slider');
+    const lambdaDSlider = document.getElementById('lambda-d-slider');
+    const lambdaUSlider = document.getElementById('lambda-u-slider');
     const z0Slider = document.getElementById('z0-slider');
 
-    if (!betaSlider || !lambdaSlider || !z0Slider) return;
+    if (!betaSlider || !lambdaDSlider || !lambdaUSlider || !z0Slider) return;
 
     betaSlider.addEventListener('input', updateValueFunction);
-    lambdaSlider.addEventListener('input', updateValueFunction);
+    lambdaDSlider.addEventListener('input', updateValueFunction);
+    lambdaUSlider.addEventListener('input', updateValueFunction);
     z0Slider.addEventListener('input', updateValueFunction);
 
     updateValueFunction();
@@ -302,11 +306,13 @@ function initValueFunctionExplorer() {
 
 function updateValueFunction() {
     const beta = parseFloat(document.getElementById('beta-slider').value);
-    const lambda = parseFloat(document.getElementById('lambda-slider').value);
+    const lambdaD = parseFloat(document.getElementById('lambda-d-slider').value);
+    const lambdaU = parseFloat(document.getElementById('lambda-u-slider').value);
     const z0 = parseFloat(document.getElementById('z0-slider').value);
 
     document.getElementById('beta-value').textContent = beta.toFixed(2);
-    document.getElementById('lambda-value').textContent = lambda.toFixed(2);
+    document.getElementById('lambda-d-value').textContent = lambdaD.toFixed(2);
+    document.getElementById('lambda-u-value').textContent = lambdaU.toFixed(2);
     document.getElementById('z0-value').textContent = z0.toFixed(2);
 
     // Generate value function data
@@ -316,14 +322,14 @@ function updateValueFunction() {
 
     for (let r = -2; r <= 2; r += 0.05) {
         rewardRange.push(r);
-        // Desirable: v = lambda * sigma(beta * (r - z0))
+        // Desirable: v = lambdaD * sigma(beta * (r - z0))
         const desirableArg = beta * (r - z0);
-        const desirableValue = lambda * (1 / (1 + Math.exp(-desirableArg)));
+        const desirableValue = lambdaD * (1 / (1 + Math.exp(-desirableArg)));
         desirableValues.push(desirableValue);
         
-        // Undesirable: v = lambda * sigma(beta * (z0 - r))
+        // Undesirable: v = lambdaU * sigma(beta * (z0 - r))
         const undesirableArg = beta * (z0 - r);
-        const undesirableValue = lambda * (1 / (1 + Math.exp(-undesirableArg)));
+        const undesirableValue = lambdaU * (1 / (1 + Math.exp(-undesirableArg)));
         undesirableValues.push(undesirableValue);
     }
 
@@ -365,7 +371,7 @@ function updateValueFunction() {
             plugins: {
                 title: {
                     display: true,
-                    text: `KTO Value Function: v(r_θ - z₀) with β=${beta.toFixed(2)}, λ=${lambda.toFixed(2)}, z₀=${z0.toFixed(2)}`,
+                    text: `KTO Value Function: v(r_θ - z₀) with β=${beta.toFixed(2)}, λ_D=${lambdaD.toFixed(2)}, λ_U=${lambdaU.toFixed(2)}, z₀=${z0.toFixed(2)}`,
                     color: '#f1f5f9',
                     font: { size: 14 }
                 },

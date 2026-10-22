@@ -78,13 +78,13 @@ This document verifies all numeric claims, statistics, equations, and key facts 
 | Claim | Source |
 |-------|--------|
 | SFT+KTO competitive with SFT+DPO at 1B-30B | Section 4.3, page 8: "SFT+KTO is competitive with SFT+DPO at scales from 1B to 30B" |
-| KTO alone significantly better than DPO alone for Llama-{7B, 30B} | Section 4.3, page 8: "KTO alone is better than DPO alone for the Llama-{7B, 13B, 30B} models, and this gap is significant (p < 0.01) at 7B and 30B" |
+| KTO alone better than DPO alone for Llama-{7B, 13B, 30B}; significant (p < 0.01, Holm-corrected) at 7B and 30B | Section 4.3, page 8: "KTO alone is better than DPO alone for the Llama-{7B, 13B, 30B} models, and this gap is significant (p < 0.01) at 7B and 30B" |
 | No significant difference for Pythia models | Section 4.3, page 8: "Among the Pythia models, there is no significant difference between the two" |
 
-Note: Exact winrate values from Figure 3 are approximate (read from graph):
-- Llama-7B: DPO ~51.5%, KTO ~54.5%
-- Llama-13B: DPO ~49.5%, KTO ~51.0%
-- Llama-30B: DPO ~49.0%, KTO ~53.0%
+Note: Exact winrate values from Figure 3 are approximate (read from graph; y-axis is winrate − 50 in pp):
+- Llama-7B: DPO ≈ −19, KTO ≈ −9
+- Llama-13B: DPO ≈ −8, KTO ≈ −3
+- Llama-30B: DPO ≈ +3.5, KTO ≈ +16.5
 
 ## Benchmark Results: Zephyr-β-SFT on UltraFeedback (Table 2)
 
@@ -146,9 +146,10 @@ Note: Figure 5 shows approximate winrates maintained across imbalance levels; ex
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Sample size | 256 prompts, 214 comparisons (after domain skipping) | Appendix D, page 18: "256 prompts...leading to 214 comparisons for DPO and KTO each" |
+| Sample size | 256 sampled prompts, 214 comparisons per method (after skipping domain-expert questions) | Appendix D, page 18: "256 prompts...leading to 214 comparisons for DPO and KTO each" |
 | KTO winrate (human) | 72.9% ± 5.3% | Appendix D, page 18: "72.9% ± 5.3 for KTO" |
 | DPO winrate (human) | 62.1% ± 5.7% | Appendix D, page 18: "62.1% ± 5.7 for DPO" |
+| Confidence intervals | 90% binomial CIs | Appendix D, page 18 |
 | Significance | p < 0.05 | Appendix D, page 18: "there is a significant difference with human evaluation at p < 0.05" |
 | Human-GPT4 agreement (KTO) | 68.7% | Appendix D, page 18: "68.7% of the individual human judgments concurred with the GPT-4 judgments for KTO" |
 | Human-GPT4 agreement (DPO) | 65.9% | Appendix D, page 18: "this number fell to 65.9% for DPO" |
@@ -183,7 +184,7 @@ All quotes are verbatim from the paper:
 
 > "Kahneman & Tversky's prospect theory tells us that humans perceive random variables in a biased but well-defined manner" (Abstract, page 1)
 
-> "KTO matches or exceeds the performance of preference-based methods at scales from 1B to 30B, despite only learning from a binary signal of whether an output is desirable" (Abstract, page 1)
+> "We call this approach KTO, and it matches or exceeds the performance of preference-based methods at scales from 1B to 30B, despite only learning from a binary signal of whether an output is desirable" (Abstract, page 1)
 
 > "Despite only using dummy +1/-1 rewards, our offline PPO variant performs as well as DPO for all models except Llama-30B" (Section 3.3, page 5)
 
@@ -213,21 +214,14 @@ All links referenced in the lesson are active and correct:
 
 The following values are read from figures and noted as approximate in the lesson:
 
-1. **Figure 3 winrates:** The exact winrate values for KTO vs DPO across Llama models are read from the bar chart and are approximate (±1-2 percentage points). The text confirms the qualitative findings (KTO ≥ DPO, significance at 7B and 30B).
+1. **Figure 3 winrates:** The exact winrate values for KTO vs DPO across Llama models are read from the bar chart and are approximate (±2 pp). The y-axis shows winrate − 50 (pp). The text confirms the qualitative findings (KTO better than DPO alone, significance at 7B and 30B).
 
-2. **Figure 5 data imbalance:** The winrate values at different imbalance levels are read from the line chart and are approximate. The key finding (90% data can be discarded) is stated explicitly in the text.
+2. **Figure 5 data imbalance:** The winrate values at different imbalance levels are read from the line chart and are approximate (±1–2 pp). The y-axis shows absolute winrate vs SFT target (%). The key finding (90% data can be discarded) is stated explicitly in the text.
 
-3. **Figure 2 HALO comparison:** The winrate values for different methods on Llama models are read from the bar chart and are approximate. The significance threshold (p < 0.05 at 13B+) is stated in the text.
+3. **Figure 2 HALO comparison:** The winrate values for different methods on Llama models are read from the bar chart and are approximate (±2 pp). The y-axis shows winrate − 50 (pp). The significance threshold (p < 0.05 at 13B+) is stated in the text.
 
 All other numeric values are exact from tables or explicitly stated in the text.
 
 ## Summary
 
-✓ All equations verified verbatim
-✓ All tables verified exactly
-✓ All author names, affiliations, and paper metadata verified
-✓ All quotes verified verbatim
-✓ All links checked and active
-✓ All approximate values (from figures) noted as such
-✓ No fabricated statistics, tables, or examples
-✓ All claims traceable to specific sections/pages of the paper
+All equations verified verbatim from the paper. All tables verified exactly. All author names, affiliations, and paper metadata verified. All quotes verified verbatim (including corrected abstract quote). All links checked and active. All approximate values (from figures) noted as such in captions and text. All claims traceable to specific sections/pages of the paper.
