@@ -126,7 +126,7 @@
                 Classical economics assumes humans maximize expected value. Given a gamble that returns $100 with 80% 
                 probability and $0 with 20% probability, a person might accept a sure $60 to avoid the gamble, even 
                 though their certainty equivalent ($60) is less than the expected value ($80). (Example from arXiv v1 
-                §3.1; later versions misprint the 20% outcome as $60.)
+                §3; later versions misprint the 20% outcome as $60.)
             </p>
 
             <p>
@@ -248,8 +248,9 @@
                     <p>
                         Treating one PPO-Clip update as offline (advantages A fixed, \(\pi_{\text{ref}} = \pi_{\text{old}}\)), 
                         the paper writes it as a HALO with \(a = -A\) and \(v(z) = \min(e^z, 1+\epsilon)\) when \(A > 0\), 
-                        \(\max(e^z, 1-\epsilon)\) when \(A < 0\) (Appendix B). The value stops increasing once the probability 
-                        ratio leaves the trust region in the direction the advantage favors.
+                        \(\max(e^z, 1-\epsilon)\) when \(A < 0\) (Appendix B). The value goes flat once the probability 
+                        ratio leaves \([1-\epsilon, 1+\epsilon]\) in the direction the advantage favors (above \(1+\epsilon\) 
+                        when \(A > 0\), below \(1-\epsilon\) when \(A < 0\)).
                     </p>
                 </div>
             </div>
@@ -801,8 +802,8 @@
             <div class="chart-container">
                 <canvas id="halo-comparison-chart"></canvas>
                 <p class="chart-caption">
-                    Approximate values from Figure 2. HALOs (DPO, offline PPO) outperform non-HALOs (SLiC, CSFT) at 
-                    13B+ scales. Only HALO-aligned Llama-{13B, 30B} models achieve winrate ≥50% (match or exceed SFT targets).
+                    Approximate values from Figure 2. HALOs (DPO, offline PPO) match or outperform non-HALOs (SLiC, CSFT) at 
+                    every scale; the gap is significant (p < 0.05) only at 13B+. Only HALO-aligned Llama-{13B, 30B} models achieve winrate ≥50% (match or exceed SFT targets).
                 </p>
             </div>
         </section>
@@ -902,7 +903,7 @@
                         <li>You have binary feedback (thumbs-up/down, approval/disapproval)</li>
                         <li>Your data is highly imbalanced (e.g., 10× more negatives than positives)</li>
                         <li>Your preference data is noisy or intransitive (multiple annotators disagree)</li>
-                        <li>You want to skip SFT (if base model is strong enough, e.g., 13B+)</li>
+                        <li>You want to skip SFT (the paper found KTO without SFT competitive with SFT+KTO for Llama-13B and 30B)</li>
                         <li>You want to break n preferences into 2n examples for better data efficiency</li>
                     </ul>
                 </div>

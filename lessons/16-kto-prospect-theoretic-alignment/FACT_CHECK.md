@@ -216,7 +216,14 @@ The following values are read from figures and noted as approximate in the lesso
 
 1. **Figure 3 winrates:** The exact winrate values for KTO vs DPO across Llama models are read from the bar chart and are approximate (±2 pp). The y-axis shows winrate − 50 (pp). The text confirms the qualitative findings (KTO better than DPO alone, significance at 7B and 30B).
 
-2. **Figure 5 data imbalance:** The winrate values at different imbalance levels are read from the line chart and are approximate (±1–2 pp). The y-axis shows absolute winrate vs SFT target (%). The key finding (90% data can be discarded) is stated explicitly in the text.
+2. **Figure 5 data imbalance:** The winrate values at different imbalance levels are read from the line chart and are approximate (±2 pp). The x-axis shows positives per negative at 0.01, 0.05, 0.10, 0.25, 0.50, 1.0. The y-axis shows absolute winrate vs SFT target (%). The key finding (90% data can be discarded) is stated explicitly in the text. Approximate reads:
+   - (1.0, 45.4%)
+   - (0.50, 40.4%)
+   - (0.25, 39.9%)
+   - (0.10, 32.9%)
+   - (0.05, 34.4%)
+   - (0.01, 28.5%)
+   - DPO (1:1) ≈ 31.0%
 
 3. **Figure 2 HALO comparison:** The winrate values for different methods on Llama models are read from the bar chart and are approximate (±2 pp). The y-axis shows winrate − 50 (pp). The significance threshold (p < 0.05 at 13B+) is stated in the text.
 
@@ -224,4 +231,4 @@ All other numeric values are exact from tables or explicitly stated in the text.
 
 ## Summary
 
-All equations verified verbatim from the paper. All tables verified exactly. All author names, affiliations, and paper metadata verified. All quotes verified verbatim (including corrected abstract quote). All links checked and active. All approximate values (from figures) noted as such in captions and text. All claims traceable to specific sections/pages of the paper.
+Equations, tables, metadata, quotes and links were checked against arXiv v5. Figure-derived values (Figures 2, 3, 5) are approximate reads (±2 pp; Figure 5 x-positions 0.01/0.05/0.10/0.25/0.50/1.0) and are labelled approximate in the lesson.

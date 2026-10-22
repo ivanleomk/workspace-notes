@@ -105,7 +105,7 @@ const quizQuestions = [
         options: [
             "When you have clean, paired preference data with low noise",
             "When you have binary feedback, imbalanced data, or noisy/intransitive preferences",
-            "When you need explicit KL regularization",
+            "When you need strictly paired (y_w, y_l) comparisons",
             "Never; DPO is always better"
         ],
         correctIndex: 1,

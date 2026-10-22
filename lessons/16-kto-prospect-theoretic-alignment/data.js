@@ -22,10 +22,10 @@ const ktoData = {
 
     // Data imbalance results (Figure 5, left panel)
     dataImbalance: {
-        desirableFractions: [1.0, 0.5, 0.3, 0.15, 0.1, 0.05],
-        // Approximate winrates read from Figure 5 (left panel, absolute winrate vs SFT target)
-        ktoWinrate: [0.455, 0.405, 0.40, 0.33, 0.345, 0.285], // approximate reads of Figure 5 (left), absolute winrate vs SFT target
-        dpoWinrate: 0.31  // approximate, dashed line in Figure 5
+        desirableFractions: [1.0, 0.5, 0.25, 0.1, 0.05, 0.01],
+        // Approximate reads of Figure 5 (left panel; x = positive examples per negative), absolute winrate vs SFT target
+        ktoWinrate: [0.454, 0.404, 0.399, 0.329, 0.344, 0.285],
+        dpoWinrate: 0.31  // approximate, dashed line in Figure 5 (1:1 DPO)
     },
 
     // HALO vs non-HALO comparison (Figure 2, approximate values)
