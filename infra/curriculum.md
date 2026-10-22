@@ -68,8 +68,8 @@ Survey microsandbox (libkrun microVMs, embeddable), kubernetes-sigs/agent-sandbo
 **11. Ray Scheduling, Placement Groups, and Resource Management** ✅ *Complete*  
 <a href="11-ray-scheduling-placement-groups/" target="_blank">Lesson 11</a> | <a href="https://ivanleomk.github.io/workspace-notes/infra/11-ray-scheduling-placement-groups/" target="_blank">Live</a> — Master Ray's resource-based scheduler. Use placement groups to gang-schedule GPU workers. Understand DEFAULT vs SPREAD vs PACK strategies and soft vs hard node affinity.
 
-**12. KubeRay, Autoscaling, and GCS Fault Tolerance** 📝 *Planned*  
-Deploy Ray on Kubernetes with the RayCluster CRD. Enable GCS HA with Redis. Size head nodes properly. Handle the three failure modes: head-node bottleneck, object store full, actor death.
+**12. KubeRay, Autoscaling, and GCS Fault Tolerance** ✅ *Complete*  
+<a href="12-kuberay-autoscaling-gcs-ft/" target="_blank">Lesson 12</a> | <a href="https://ivanleomk.github.io/workspace-notes/infra/12-kuberay-autoscaling-gcs-ft/" target="_blank">Live</a> — Deploy Ray on Kubernetes with KubeRay (RayCluster, RayJob, RayService CRDs; the operator's reconcile loop), the Ray autoscaler v1 vs v2 and how it runs as a sidecar in KubeRay and decides to scale worker groups (resource demand, idle timeout, min/max replicas, upscaling speed), GCS fault tolerance with external Redis, head-node sizing, and the failure modes: head-node bottleneck, object store full / spilling, actor/worker death and restart semantics.
 
 **13. Ray in Production RL: verl, OpenRLHF, SkyRL** 📝 *Planned*  
 Study how real systems use Ray for RL rollouts. verl's HybridFlow architecture, OpenRLHF's hybrid engine (80% time on generation), and SkyRL-OpenHands' crun + aiodocker runtime (80–100 containers per 16 CPUs).
