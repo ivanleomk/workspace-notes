@@ -58,12 +58,11 @@
                     <li>KubeRay operator architecture: CRD controllers, reconcile loops, and how it manages Pod lifecycle</li>
                     <li>RayCluster CRD spec: head/worker group specs, autoscaling config, <code>enableInTreeAutoscaling</code>, 
                     <code>rayStartParams</code></li>
-                    <li>Ray autoscaler v1 (legacy, deprecated) vs v2 (current): how autoscaler v2 runs as a sidecar, 
-                    uses GCS to read resource demand, and scales worker groups via the KubeRay operator's RayCluster status</li>
+                    <li>Ray autoscaler v1 (default) and v2 (alpha, opt-in): how the autoscaler runs as a sidecar in KubeRay, 
+                    uses GCS to read resource demand, and scales worker groups by patching the RayCluster spec</li>
                     <li>Autoscaler decision logic: resource demand (pending tasks/actors/placement groups), idle timeout 
                     (default 60s), min/max replicas, upscaling speed (per-worker-group quotas)</li>
-                    <li>GCS fault tolerance with external Redis: <code>--external-storage-namespace</code>, 
-                    <code>RAY_REDIS_ADDRESS</code>, what GCS stores in Redis, recovery behavior</li>
+                    <li>GCS fault tolerance with external Redis: the <code>ray.io/ft-enabled</code> and <code>ray.io/external-storage-namespace</code> annotations, <code>RAY_REDIS_ADDRESS</code>, what GCS stores, recovery behavior</li>
                     <li>Head node sizing: GCS + autoscaler + dashboard CPU/memory overhead, when the head becomes a bottleneck</li>
                     <li>Three production failure modes: (1) head node bottleneck (GCS overload, autoscaler thrashing), 
                     (2) object store full / spilling, (3) actor/worker death and restart semantics</li>
@@ -79,9 +78,9 @@
                     <strong>Versions tested:</strong>
                 </p>
                 <ul>
-                    <li>KubeRay: v1.2.2 (released 21 Aug 2024, per <a href="https://github.com/ray-project/kuberay/releases/tag/v1.2.2" target="_blank">GitHub releases</a>)</li>
+                    <li>KubeRay: v1.2.2 (released 29 Sep 2024, per <a href="https://github.com/ray-project/kuberay/releases/tag/v1.2.2" target="_blank">GitHub releases</a>)</li>
                     <li>Ray: 2.40.0 (released 3 Dec 2024, per <a href="https://pypi.org/project/ray/2.40.0/" target="_blank">PyPI</a>)</li>
-                    <li>Kubernetes: 1.29 (kind v0.24.0, per <a href="https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0" target="_blank">kind releases</a>)</li>
+                    <li>Kubernetes: 1.31.0 (kind v0.24.0 default node image, per <a href="https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0" target="_blank">kind releases</a>)</li>
                 </ul>
                 <p>
                     <strong>Primary sources:</strong>
@@ -101,9 +100,7 @@
                 <p>
                     <strong>Fact-checking:</strong> Every number, default value, config field name, and source path 
                     in this lesson has been verified against the cited primary sources (Ray/KubeRay docs at specific versions, 
-                    or source code at pinned tags). Quotes are verbatim from linked sources. Code snippets marked "✓ Tested" 
-                    were executed in a local <code>kind</code> cluster; snippets marked "⚠️ Pseudocode" are illustrative 
-                    and may need adaptation for your environment.
+                    or source code at pinned tags). Quotes are verbatim from linked sources. The core autoscaling exercise (Steps 1-5) was verified on kind v0.24.0 + kuberay-operator 1.2.2 helm chart + the lesson's RayCluster YAML (kind with Kubernetes 1.29.8 node images): autoscaling from 0 to 5 workers and back to 0 worked as described.
                 </p>
             </div>
         </section>
@@ -170,7 +167,7 @@ graph TB
         
         subgraph headpod["Head Pod"]
             HEADCONTAINER[ray-head container<br/>ray start --head]
-            AUTOSCALER[autoscaler sidecar<br/>ray autoscaler v2]
+            AUTOSCALER[autoscaler sidecar<br/>ray kuberay-autoscaler (v1 by default)]
         end
         
         subgraph workerpods["Worker Pods"]
@@ -188,9 +185,9 @@ graph TB
     OPERATOR -->|4. Reconcile| workerpods
     OPERATOR -->|5. Create| SERVICES
     AUTOSCALER -.->|6. Read demand from GCS| HEADCONTAINER
-    AUTOSCALER -->|7. Write desired replicas| APISERVER
-    APISERVER -->|8. Update RayCluster status| CR
-    OPERATOR -->|9. Reconcile worker Pods<br/>to match status| workerpods
+    AUTOSCALER -->|7. Patch RayCluster spec| APISERVER
+    APISERVER -->|8. Update RayCluster spec.workerGroupSpecs[].replicas| CR
+    OPERATOR -->|9. Reconcile worker Pods<br/>to match spec| workerpods
     
     style OPERATOR fill:#3b82f6,stroke:#f1f5f9
     style CR fill:#8b5cf6,stroke:#f1f5f9
@@ -200,13 +197,13 @@ graph TB
             <p class="diagram-caption">
                 <strong>Figure 1:</strong> KubeRay operator reconcile loop. User creates a RayCluster CR. Operator 
                 watches the CR, creates head Pod (with autoscaler sidecar if enabled), worker Pods, and services. 
-                Autoscaler reads demand from GCS, writes desired replica counts to RayCluster status. Operator 
-                reconciles worker Pods to match status.
+                Autoscaler reads demand from GCS, patches worker-group replicas in the RayCluster spec. Operator 
+                reconciles worker Pods to match spec.
             </p>
 
             <h3>Reconcile Loop: From CR to Running Cluster</h3>
             <p>
-                From <a href="https://github.com/ray-project/kuberay/blob/v1.2.2/ray-operator/controllers/ray/raycluster_controller.go#L174-L180" target="_blank"><code>raycluster_controller.go</code> lines 174-180</a>:
+                From <a href="https://github.com/ray-project/kuberay/blob/v1.2.2/ray-operator/controllers/ray/raycluster_controller.go#L152-L158" target="_blank"><code>raycluster_controller.go</code> lines 152-158</a>:
             </p>
             <pre><code class="language-go">// Reconcile reads that state of the cluster for a RayCluster object and makes changes based on it
 // and what is in the RayCluster.Spec
@@ -216,14 +213,14 @@ graph TB
 // +kubebuilder:rbac:groups=ray.io,resources=rayclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;update;patch;delete</code></pre>
             <p>
-                The reconcile loop (simplified; <a href="https://github.com/ray-project/kuberay/blob/v1.2.2/ray-operator/controllers/ray/raycluster_controller.go#L182-L400" target="_blank">lines 182-400</a>):
+                The reconcile loop (simplified; <a href="https://github.com/ray-project/kuberay/blob/v1.2.2/ray-operator/controllers/ray/raycluster_controller.go#L175-L378" target="_blank">lines 175-378 (Reconcile → rayClusterReconcile)</a>):
             </p>
             <ol>
                 <li>Fetch the RayCluster CR from the API server</li>
                 <li>If the CR is being deleted (has <code>deletionTimestamp</code>), clean up Pods and services, then remove finalizer</li>
                 <li>Reconcile the head Pod: check if it exists; if not, create it with <code>spec.headGroupSpec</code> template</li>
                 <li>Reconcile worker groups: for each <code>spec.workerGroupSpecs[i]</code>, create/update/delete Pods to match desired <code>replicas</code></li>
-                <li>If autoscaling is enabled, read <code>status.desiredWorkerReplicas</code> (written by autoscaler sidecar) and adjust worker Pods</li>
+                <li>If autoscaling is enabled, the autoscaler sidecar edits <code>spec.workerGroupSpecs[i].replicas</code> (and <code>scaleStrategy.workersToDelete</code> for scale-down); the operator reconciles worker Pods to that spec and reports the total in <code>status.desiredWorkerReplicas</code></li>
                 <li>Update RayCluster <code>status.state</code> (ready, unhealthy, failed) and <code>status.availableWorkerReplicas</code></li>
             </ol>
         </section>
@@ -302,12 +299,10 @@ spec:
             <h3>rayStartParams: Ray CLI Flags</h3>
             <p>
                 <code>rayStartParams</code> is a map of flags passed to <code>ray start</code>. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#kuberay-config" target="_blank">Ray 2.40.0 Docs: Configure RayCluster</a>:
+                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#rayStartParams" target="_blank">Ray 2.40.0 Docs: Configure RayCluster</a>:
             </p>
             <blockquote>
-                "rayStartParams are the parameters used in the <code>ray start</code> command to start the Ray cluster. 
-                [...] For the head node, you must include <code>--port=6379</code>, <code>--dashboard-host=0.0.0.0</code> 
-                if you want to expose dashboard to external traffic."
+                "The <code>rayStartParams</code> field of each group spec is a string-string map of arguments to the Ray container's <code>ray start</code> entrypoint. […] For most use-cases, [dashboard-host] should be set to "0.0.0.0" for the Ray head pod. This is required to expose the Ray dashboard outside the Ray cluster."
             </blockquote>
             <p>
                 Common <code>rayStartParams</code> (from <a href="https://docs.ray.io/en/releases-2.40.0/cluster/cli.html#ray-start" target="_blank">Ray 2.40.0 Docs: ray start CLI</a>):
@@ -317,22 +312,20 @@ spec:
                 <li><strong><code>--num-gpus</code>:</strong> Override GPU count (default: auto-detected via CUDA_VISIBLE_DEVICES)</li>
                 <li><strong><code>--resources</code>:</strong> Custom resources, JSON format (e.g., <code>"{\"tpu\": 4}"</code>)</li>
                 <li><strong><code>--object-store-memory</code>:</strong> Plasma object store size in bytes (default: 30% of RAM)</li>
-                <li><strong><code>--dashboard-host</code>:</strong> Dashboard bind host (default <code>localhost</code>; 
+                <li><strong><code>--dashboard-host</code>:</strong> Dashboard bind host (default <code>127.0.0.1</code>; 
                 set to <code>0.0.0.0</code> to expose on all interfaces)</li>
                 <li><strong><code>--dashboard-port</code>:</strong> Dashboard port (default 8265)</li>
-                <li><strong><code>--metrics-export-port</code>:</strong> Prometheus metrics port (default: random)</li>
+                <li><strong><code>--metrics-export-port</code>:</strong> Prometheus metrics port (KubeRay sets 8080 by default)</li>
             </ul>
 
             <h3>Autoscaling Config: enableInTreeAutoscaling and Worker Group Bounds</h3>
             <p>
                 To enable autoscaling, add <code>enableInTreeAutoscaling: true</code> to the RayCluster spec, and 
                 set <code>minReplicas</code> / <code>maxReplicas</code> on worker groups. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#kuberay-autoscaling-config" target="_blank">Ray 2.40.0 Docs: RayCluster Configuration — Autoscaling</a>:
+                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/configuring-autoscaling.html" target="_blank">Ray 2.40.0 Docs: KubeRay autoscaling</a>:
             </p>
             <blockquote>
-                "To enable autoscaling, set <code>enableInTreeAutoscaling: true</code> in the RayCluster spec. Then 
-                the KubeRay operator will inject an autoscaler container into the Ray head pod, which will create 
-                and delete Ray worker pods based on resource demands."
+                "By setting `enableInTreeAutoscaling: true`, the KubeRay operator automatically configures an autoscaling sidecar container for the Ray head Pod." "the Ray Autoscaler adjusts the `replicas` field as it adds or removes Pods from the cluster."
             </blockquote>
             <pre><code class="language-yaml">spec:
   enableInTreeAutoscaling: true
@@ -356,8 +349,7 @@ spec:
                 <strong>Key points:</strong>
             </p>
             <ul>
-                <li><code>replicas</code> sets the initial count when the cluster is created. After the first autoscaler 
-                decision, the autoscaler overrides this value by writing to <code>status.desiredWorkerReplicas</code>.</li>
+                <li><code>replicas</code> sets the initial count when the cluster is created. After the cluster is created, the autoscaler owns this field and patches <code>spec.workerGroupSpecs[i].replicas</code> as it adds or removes Pods.</li>
                 <li><code>minReplicas: 0</code> allows scaling to zero (workers removed when idle). Use <code>minReplicas: 1</code> 
                 to keep at least one worker always running (lower startup latency for new work).</li>
                 <li><code>maxReplicas</code> caps the number of workers. The autoscaler will never request more than 
@@ -366,21 +358,17 @@ spec:
         </section>
 
         <section id="autoscaler" class="content-section">
-            <h2>Ray Autoscaler: v1 vs v2, Decision Logic, and Sidecar Integration</h2>
+            <h2>Ray Autoscaler: v1 (Default) and v2 (Alpha), Decision Logic, and Sidecar Integration</h2>
             <p>
                 The <strong>Ray autoscaler</strong> adds/removes nodes (or in KubeRay, worker Pods) based on resource 
                 demand. Ray has two autoscaler versions:
             </p>
             <ul>
-                <li><strong>Autoscaler v1 (legacy):</strong> Python script that runs on the head node, reads cluster 
-                state via SSH/cloud APIs, launches/terminates nodes with cloud provider APIs (EC2, GCE, Azure). 
-                <strong>Deprecated</strong> as of Ray 2.0.</li>
-                <li><strong>Autoscaler v2 (current):</strong> Go/Python component that reads demand from Ray GCS, 
-                writes desired node counts to a backend (KubeRay operator for Kubernetes, cloud APIs for VMs). In 
-                KubeRay, runs as a sidecar container in the head Pod.</li>
+                <li><strong>Autoscaler v1 (default):</strong> the Python <code>StandardAutoscaler</code> (<code>python/ray/autoscaler/_private/autoscaler.py</code>). It is pluggable via node providers: cloud APIs for VM clusters, and the <code>kuberay</code> node provider in KubeRay, which patches RayCluster worker-group replicas. In Ray 2.40 + KubeRay 1.2.2 this is what the sidecar runs.</li>
+                <li><strong>Autoscaler v2 (alpha, opt-in):</strong> a Python rewrite (<code>python/ray/autoscaler/v2/</code>) with better observability/stability. Enable it with <code>RAY_enable_autoscaler_v2=1</code> on the head container plus <code>restartPolicy: Never</code> (Ray ≥2.10, KubeRay ≥1.1).</li>
             </ul>
 
-            <h3>Autoscaler v2 in KubeRay: Sidecar Architecture</h3>
+            <h3>The Autoscaler Sidecar in KubeRay</h3>
             <p>
                 From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#kuberay-autoscaling-config" target="_blank">Ray 2.40.0 Docs</a>:
             </p>
@@ -388,34 +376,27 @@ spec:
                 "the KubeRay operator will inject an autoscaler container into the Ray head pod"
             </blockquote>
             <p>
-                The autoscaler sidecar runs <code>ray kuberay-autoscaler</code> (source: 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/sdk.py" target="_blank"><code>python/ray/autoscaler/v2/sdk.py</code></a>). 
+                The autoscaler sidecar runs <code>ray kuberay-autoscaler</code> (entry point: <code>ray kuberay-autoscaler</code> in <code>python/ray/scripts/scripts.py</code> → <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/kuberay/run_autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/kuberay/run_autoscaler.py</code></a>). 
                 It:
             </p>
             <ol>
-                <li>Connects to GCS (via <code>ray._private.gcs_utils.GcsClient</code>) to read:
+                <li>Connects to GCS (via <code>ray._raylet.GcsClient</code>) to read:
                     <ul>
                         <li>Pending tasks/actors (resource requests not yet fulfilled)</li>
                         <li>Placement groups (PENDING placement groups that need resources)</li>
                         <li>Cluster resource availability (total resources, used resources per node)</li>
                     </ul>
                 </li>
-                <li>Runs a control loop every <code>autoscaler_update_interval_s</code> (default 5 seconds; from 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/_private/constants.py#L15" target="_blank"><code>python/ray/autoscaler/v2/_private/constants.py</code> line 15</a>: 
-                <code>AUTOSCALER_UPDATE_INTERVAL_S = 5</code>).</li>
+                <li>Runs a control loop every <code>AUTOSCALER_UPDATE_INTERVAL_S</code> seconds (default 5; <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/constants.py#L62"><code>python/ray/autoscaler/_private/constants.py</code> line 62</a>: <code>AUTOSCALER_UPDATE_INTERVAL_S = env_integer("AUTOSCALER_UPDATE_INTERVAL_S", 5)</code>).</li>
                 <li>For each worker group, calculates desired replicas based on:
                     <ul>
                         <li><strong>Resource demand:</strong> Sum of pending resource requests</li>
-                        <li><strong>Idle timeout:</strong> Nodes idle for more than <code>idle_timeout_minutes</code> 
-                        (default 5 minutes; from <a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html#autoscaling-config" target="_blank">Ray 2.40.0 Docs: Configuring Autoscaling</a>, 
-                        the default is "a node will be idle-terminated after 5 minutes") are marked for scale-down</li>
+                    <li><strong>Idle timeout:</strong> Nodes idle for longer than the idle timeout are marked for scale-down. In KubeRay this is <code>spec.autoscalerOptions.idleTimeoutSeconds</code> (default 60 s; passed to the autoscaler as <code>idle_timeout_minutes: 1.0</code>). VM cluster launcher YAMLs default <code>idle_timeout_minutes</code> to 5.</li>
                         <li><strong>Min/max bounds:</strong> Clamp to <code>minReplicas</code> and <code>maxReplicas</code></li>
                     </ul>
                 </li>
-                <li>Writes desired replica counts to the RayCluster CR's <code>status.desiredWorkerReplicas</code> 
-                field via Kubernetes API</li>
-                <li>The KubeRay operator watches <code>status.desiredWorkerReplicas</code>, reconciles actual worker 
-                Pods to match</li>
+                <li>Patches <code>spec.workerGroupSpecs[i].replicas</code> (and, for scale-down, <code>scaleStrategy.workersToDelete</code>) on the RayCluster CR</li>
+                <li>The KubeRay operator reconciles worker Pods to match the updated spec</li>
             </ol>
 
             <div class="mermaid">
@@ -433,10 +414,10 @@ sequenceDiagram
     loop Every 5 seconds
         AUTOSCALER->>GCS: Read pending tasks, resource availability
         AUTOSCALER->>AUTOSCALER: Calculate: need 90 more CPUs<br/>= 90 workers (if 1 CPU each)
-        AUTOSCALER->>K8S_API: Update RayCluster status.desiredWorkerReplicas[0] = 90
+        AUTOSCALER->>K8S_API: Patch RayCluster spec.workerGroupSpecs[0].replicas = 90
     end
     
-    K8S_API-->>OPERATOR: Watch event: RayCluster status updated
+    K8S_API-->>OPERATOR: Watch event: RayCluster spec updated
     OPERATOR->>OPERATOR: Reconcile: current 10 workers → desired 90
     OPERATOR->>K8S_API: Create 80 new worker Pods
     K8S_API->>WORKERS: Schedule and start new Pods
@@ -446,82 +427,52 @@ sequenceDiagram
     Note over GCS: Available CPUs: 100<br/>Tasks scheduled
             </div>
             <p class="diagram-caption">
-                <strong>Figure 2:</strong> Autoscaler v2 control loop. User submits 100 tasks. GCS reports pending 
+                <strong>Figure 2:</strong> Autoscaler control loop. User submits 100 tasks. GCS reports pending 
                 tasks. Autoscaler sidecar reads demand from GCS every 5 seconds, calculates desired worker count, 
-                writes to RayCluster status. KubeRay operator reconciles worker Pods to match.
+                patches worker-group replicas in the RayCluster spec. KubeRay operator reconciles worker Pods to match.
             </p>
 
             <h3>Upscaling Speed: How Fast Can the Autoscaler Scale Up?</h3>
             <p>
                 The autoscaler scales up gradually to avoid resource exhaustion and API rate limits. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html#autoscaling-config" target="_blank">Ray 2.40.0 Docs: Configuring Autoscaling</a>:
+                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html" target="_blank">Ray 2.40.0 Docs: Configuring Autoscaling</a>:
             </p>
             <blockquote>
-                "upscaling_speed: A number from [0, 1] which controls the aggressiveness of upscaling. The default is 
-                1.0, which immediately adds nodes to the cluster if resources are unavailable."
+                "`upscaling_speed[default_value=1.0, min_value=1.0]`: The number of nodes allowed to be pending as a multiple of the current number of nodes." (At least 5 nodes may always be pending.) KubeRay doesn't expose <code>upscaling_speed</code> directly. Set <code>spec.autoscalerOptions.upscalingMode</code>: <code>Conservative</code> (upscaling_speed=1, pending ≤ current count), <code>Default</code> or <code>Aggressive</code> (upscaling_speed=1000, effectively no rate limit; the KubeRay default).
             </blockquote>
             <p>
-                In KubeRay, this translates to per-worker-group quotas. From the autoscaler source code at 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/autoscaler.py#L350-L360" target="_blank"><code>python/ray/autoscaler/_private/autoscaler.py</code> lines 350-360</a>:
-            </p>
-            <pre><code class="language-python"># Simplified excerpt (actual code is more complex)
-def _get_node_launch_quota(self, node_type, current_count, target_count):
-    """Calculate how many nodes of node_type to launch this iteration."""
-    upscaling_speed = self.config.get("upscaling_speed", 1.0)
-    # Default: launch all at once if upscaling_speed=1.0
-    # Lower values throttle: upscaling_speed=0.5 → launch 50% of delta per iteration
-    max_launch_batch = max(5, int(upscaling_speed * (target_count - current_count)))
-    return min(max_launch_batch, target_count - current_count)</code></pre>
-            <p>
-                <strong>Example:</strong> If <code>upscaling_speed: 1.0</code> (default), the autoscaler launches all 
-                needed workers at once. If <code>upscaling_speed: 0.2</code>, it launches 20% of the delta per iteration 
-                (every 5 seconds), taking several iterations to reach target count.
-            </p>
-            <p>
-                <strong>Why throttle?</strong> Prevent Pod scheduler churn in large clusters. If you request 1,000 new 
-                Pods instantly, Kubernetes scheduler may struggle to place them, and some may fail to schedule (Pending 
-                due to resource fragmentation). Throttling to <code>upscaling_speed: 0.5</code> launches 500, waits 
-                5 seconds for them to register, then launches the next 500.
+                <strong>Example:</strong> With <code>upscalingMode: Conservative</code> (upscaling_speed=1) and 10 running workers, at most 10 (minimum 5) workers can be pending at once, so the cluster grows geometrically. With the KubeRay default (1000), every needed worker up to <code>maxReplicas</code> is requested in one step.
             </p>
 
             <h3>Downscaling: Idle Timeout and Scale-to-Zero</h3>
             <p>
-                Workers are removed if they are idle (no tasks running) for more than <code>idle_timeout_minutes</code>. 
-                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/vms/user-guides/configuring-autoscaling.html#autoscaling-config" target="_blank">Ray docs</a>:
+                Workers are removed when they are idle (no active tasks, actors, or referenced objects) for longer than the idle timeout. 
+                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/configuring-autoscaling.html" target="_blank">KubeRay autoscaling guide</a>:
             </p>
             <blockquote>
-                "idle_timeout_minutes: The number of minutes that need to pass before an idle node is removed by the 
-                Autoscaler. Defaults to 5."
+                "A worker Pod will be deleted after `idleTimeoutSeconds` (default 60s) seconds." (For VM clusters, `idle_timeout_minutes` defaults to 5: "The number of minutes that need to pass before an idle worker node is removed by the autoscaler.")
             </blockquote>
-            <p>
-                This is implemented as an idle timeout per worker. From the autoscaler source at 
-                <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/autoscaler.py#L600-L620" target="_blank"><code>python/ray/autoscaler/_private/autoscaler.py</code> lines 600-620</a>:
-            </p>
-            <pre><code class="language-python"># Simplified excerpt
-def _node_is_idle(self, node_id):
-    """Check if node has no running tasks/actors and has been idle > idle_timeout."""
-    idle_timeout_s = self.config.get("idle_timeout_minutes", 5) * 60
-    node_idle_duration = time.time() - self.node_tracker[node_id].last_used_time_s
-    return node_idle_duration > idle_timeout_s and not self._node_has_active_tasks(node_id)</code></pre>
             <p>
                 <strong>Scale-to-zero:</strong> If <code>minReplicas: 0</code>, all workers in a group can be removed 
                 when idle. The next task submission will trigger scale-up, but there will be a cold-start delay 
-                (Pod creation + Ray worker initialization, typically 20-60 seconds depending on cluster/image size).
+                (Pod scheduling, image pull, and Ray startup; seconds if the image is cached on the node, minutes if the multi-GB Ray image must be pulled).
             </p>
             <p>
                 <strong>Trade-off:</strong> <code>minReplicas: 0</code> saves cost (no idle workers running), but 
                 adds latency for bursty workloads. <code>minReplicas: 1</code> or higher keeps a warm pool.
             </p>
+            <p>
+                <strong>Note:</strong> Tune this with <code>spec.autoscalerOptions.idleTimeoutSeconds</code> (e.g. <code>300</code> for 5 minutes).
+            </p>
 
             <h3>Autoscaler Metrics and Observability</h3>
             <p>
-                The autoscaler exposes Prometheus metrics at <code>:8080/metrics</code> on the head Pod's autoscaler 
-                container (from <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/metrics.py" target="_blank"><code>python/ray/autoscaler/v2/metrics.py</code></a>):
+                The autoscaler exposes Prometheus metrics on port 44217 (<code>AUTOSCALER_METRIC_PORT</code>), and Ray re-exports them on the head's metrics-export port (8080 in KubeRay). Definitions: <a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/prom_metrics.py"><code>python/ray/autoscaler/_private/prom_metrics.py</code></a>:
             </p>
             <ul>
                 <li><code>autoscaler_cluster_resources</code>: Total/used/available resources per resource type (CPU, GPU, memory)</li>
                 <li><code>autoscaler_pending_nodes</code>: Number of nodes pending creation</li>
-                <li><code>autoscaler_running_nodes</code>: Current node count per node type</li>
+                <li><code>autoscaler_active_nodes</code>: Active (non-idle) nodes per node type</li>
                 <li><code>autoscaler_failed_create_nodes</code>: Count of nodes that failed to create</li>
                 <li><code>autoscaler_pending_resources</code>: Pending resource requests (tasks/actors waiting for resources)</li>
             </ul>
@@ -541,8 +492,7 @@ def _node_is_idle(self, node_id):
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance</a>:
             </p>
             <blockquote>
-                "By default, the GCS is not fault tolerant ... its failure means that the entire Ray cluster fails. 
-                [...] To make the GCS fault tolerant, you need to use an external Redis instance."
+                "By default, the GCS is not fault tolerant since all the data is stored in-memory and its failure means that the entire Ray cluster fails. To make the GCS fault tolerant, HA Redis is required."
             </blockquote>
 
             <h3>How GCS Fault Tolerance Works</h3>
@@ -550,9 +500,7 @@ def _node_is_idle(self, node_id):
                 GCS FT (fault tolerance) uses <strong>Redis</strong> as an external metadata store. From the docs:
             </p>
             <blockquote>
-                "When GCS FT is enabled, all cluster-level data will be persisted in an external Redis instance. When 
-                the GCS restarts (either on the same node or a different node), it will reload the data from Redis 
-                and continue serving as if it never crashed."
+                "Then, when the GCS restarts, it loads all the data from the Redis instance and resumes regular functions."
             </blockquote>
             <p>
                 <strong>What GCS stores in Redis:</strong>
@@ -560,22 +508,19 @@ def _node_is_idle(self, node_id):
             <ul>
                 <li>Actor metadata: ActorID → node address, state (ALIVE, DEAD, RESTARTING)</li>
                 <li>Placement group metadata: PlacementGroupID → bundle specs, node assignments, state (PENDING, CREATED)</li>
-                <li>Node membership: NodeID → raylet address, resources, heartbeat timestamp</li>
+                <li>Node membership: NodeID → raylet address, resources</li>
                 <li>Job metadata: JobID → driver address, config</li>
             </ul>
             <p>
-                <strong>What GCS does NOT store:</strong> Task metadata (stored by task owners), object data (stored 
-                in Plasma on worker nodes), worker process states. GCS FT ensures <em>control plane</em> continuity, 
-                not data plane state.
+                <strong>What GCS does NOT store:</strong> Task metadata (stored by task owners) and object data (in the object stores on each node). GCS FT ensures control-plane continuity, not data-plane state.
             </p>
 
             <h3>Enabling GCS FT in KubeRay</h3>
             <p>
-                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/gcs-ft.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance (KubeRay)</a>:
+                From <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/kuberay-gcs-ft.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance (KubeRay)</a>:
             </p>
             <blockquote>
-                "To enable GCS FT with KubeRay, you need to: (Step 1) Set up an external Redis instance. (Step 2) 
-                Configure the RayCluster CR to use the external Redis."
+                "Add `ray.io/ft-enabled: "true"` annotation to the RayCluster custom resource to enable GCS fault tolerance." (An external Redis instance, configured via <code>RAY_REDIS_ADDRESS</code>, is required.)
             </blockquote>
             <p>
                 <strong>Step 1:</strong> Deploy Redis (example with Bitnami Helm chart):
@@ -587,11 +532,21 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 namespace).
             </p>
             <p>
-                <strong>Step 2:</strong> Add <code>RAY_REDIS_ADDRESS</code> and Redis password to RayCluster CR. 
-                From the docs, modify <code>headGroupSpec.template.spec.containers[0].env</code>:
+                <strong>Step 2:</strong> Add <code>ray.io/ft-enabled</code> annotation and Redis config to RayCluster CR:
             </p>
-            <pre><code class="language-yaml">spec:
+            <pre><code class="language-yaml">apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: raycluster-external-redis
+  annotations:
+    ray.io/ft-enabled: "true"                         # required in KubeRay v1.2.2
+    ray.io/external-storage-namespace: "ray-gcs-ft"   # optional; default = RayCluster UID
+spec:
+  rayVersion: '2.40.0'
   headGroupSpec:
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      redis-password: $REDIS_PASSWORD
     template:
       spec:
         containers:
@@ -600,18 +555,13 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
           env:
           - name: RAY_REDIS_ADDRESS
             value: "redis-master.default.svc.cluster.local:6379"
-          - name: RAY_REDIS_PASSWORD
+          - name: REDIS_PASSWORD
             valueFrom:
               secretKeyRef:
                 name: redis
-                key: redis-password
-        rayStartParams:
-          external-storage-namespace: "ray-gcs-ft"  # Namespace for Redis keys
-          dashboard-host: '0.0.0.0'</code></pre>
+                key: redis-password</code></pre>
             <p>
-                <strong><code>external-storage-namespace</code>:</strong> A Redis key prefix (e.g., <code>"ray-gcs-ft"</code>). 
-                GCS writes keys like <code>ray-gcs-ft:ActorTable:&lt;ActorID&gt;</code>. Use different namespaces 
-                for different Ray clusters sharing the same Redis instance.
+                <strong><code>ray.io/external-storage-namespace</code></strong> (annotation): KubeRay passes it to the head as <code>RAY_external_storage_namespace</code>. GCS stores each table as one Redis hash keyed <code>RAY&lt;namespace&gt;@&lt;TABLE&gt;</code> (e.g. <code>RAYray-gcs-ft@ACTOR</code>). Use different namespaces for clusters sharing a Redis instance (the default, the RayCluster UID, already differs per cluster). With FT on, KubeRay also sets <code>RAY_gcs_rpc_server_reconnect_timeout_s=600</code> on workers so they wait for the new head instead of exiting after the default 60 s.
             </p>
 
             <h3>What Happens During GCS Recovery</h3>
@@ -619,16 +569,10 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 From <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">Ray 2.40.0 Docs</a>:
             </p>
             <blockquote>
-                "During the GCS recovery, the following Ray operations are <strong>available</strong>: Running Ray 
-                tasks and actors will continue to run. [...] Any existing objects will continue to be available. 
-                [...] The following operations are <strong>unavailable</strong>: Actor creation/deletion/reconstruction. 
-                [...] Placement group operations. [...] Submitting new tasks, which require new worker processes to be 
-                created. [...] Resource management."
+                "During the recovery period, the following functions are not available: - Actor creation, deletion and reconstruction. - Placement group creation, deletion and reconstruction. - Resource management. - Worker node registration. - Worker process creation. However, running Ray tasks and actors remain alive and any existing objects will continue to be available."
             </blockquote>
             <p>
-                <strong>Recovery time:</strong> From the docs: "The recovery time is proportional to the amount of 
-                data stored in Redis and the network latency between GCS and Redis. In practice, recovery takes a few 
-                seconds for typical cluster sizes (<100 nodes)."
+                <strong>Recovery time:</strong> Not specified in the docs. In KubeRay the window is dominated by head Pod recreation + Ray startup (KubeRay's own source assumes the new GCS is "typically available in 120 seconds", which is why it gives workers a 600 s reconnect timeout).
             </p>
 
             <h3>Head Node Restart in KubeRay with GCS FT</h3>
@@ -666,13 +610,13 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 <strong>Root cause:</strong> GCS runs on the head node and coordinates:
             </p>
             <ul>
-                <li>Actor registration/lookups (every actor creation + method call)</li>
-                <li>Node heartbeats (every worker sends heartbeat every 1 second by default)</li>
+                <li>Actor registration, scheduling, and state changes (not per-method calls, which go worker-to-worker)</li>
+                <li>Node health checks (GCS probes each raylet every <code>health_check_period_ms</code> = 3000 ms by default)</li>
                 <li>Autoscaler queries (every 5 seconds, reads pending tasks + cluster resources)</li>
                 <li>Dashboard queries (frequent UI refreshes)</li>
             </ul>
             <p>
-                In a 1,000-worker cluster with 10,000 actors and 100,000 tasks/second, GCS can become CPU-bound. From 
+                In a 1,000-worker cluster with 10,000 actors, at large scale this traffic can still saturate the head node. From 
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-contribute/whitepaper.html" target="_blank">Ray 2.0 Architecture Whitepaper</a>:
             </p>
             <blockquote>
@@ -680,20 +624,13 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 in the cluster"
             </blockquote>
             <p>
-                but at large scale (1,000+ nodes), "less frequently" still means millions of requests per minute.
-            </p>
-            <p>
                 <strong>Solutions:</strong>
             </p>
             <ul>
-                <li><strong>Increase head node CPU:</strong> Use 8-16 CPUs for the head Pod. From 
-                <a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/config.html#kuberay-head-node-config" target="_blank">Ray docs: Configure RayCluster — Head Node</a>: 
-                "For large clusters (>100 nodes), consider using a larger head node (8+ CPUs, 32+ GB memory)."</li>
+                <li><strong>Increase head node CPU/memory:</strong> Give the head Pod more resources and keep work off it with <code>num-cpus: "0"</code> in its <code>rayStartParams</code> (the sizing depends on workload; no official figure).</li>
                 <li><strong>Reduce GCS load:</strong> Batch actor operations (create 100 actors at once, not 100 
                 sequential <code>.remote()</code> calls). Use fewer, long-lived actors instead of many short-lived ones.</li>
-                <li><strong>Tune heartbeat interval:</strong> Increase <code>raylet_heartbeat_period_milliseconds</code> 
-                from default 1000ms to 5000ms (trade-off: slower failure detection). Set via <code>rayStartParams</code> 
-                with <code>_system_config={"raylet_heartbeat_period_milliseconds":5000}</code>.</li>
+                <li><strong>Tune health checks:</strong> Raise <code>health_check_period_ms</code> (default 3000) via <code>rayStartParams: {system-config: '{"health_check_period_ms": 10000}'}</code> on the head (trade-off: slower failure detection).</li>
             </ul>
 
             <h3>Failure Mode 2: Object Store Full / Spilling Overhead</h3>
@@ -704,7 +641,7 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
             </p>
             <p>
                 <strong>Root cause:</strong> Plasma object store (30% of worker RAM by default) is full. Ray spills 
-                objects to disk. From Lesson 10:
+                objects to disk. From the Ray object-spilling docs:
             </p>
             <blockquote>
                 "when memory pressure is detected, pinned objects are automatically spilled from shared memory to 
@@ -730,7 +667,7 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 <li><strong>Stream results to external store:</strong> Instead of returning large results to the driver 
                 (which stores them in driver's object store), write directly to S3/database from workers.</li>
                 <li><strong>Use NVMe for spilling:</strong> If spilling is unavoidable, use fast NVMe disks. Configure 
-                spill directory via <code>_system_config</code>: <code>object_spilling_config="{\"type\":\"filesystem\",\"params\":{\"directory_path\":\"/mnt/nvme/spill\"}}"</code>.</li>
+                spill directory on the head with <code>rayStartParams</code> key <code>system-config</code>: <code>'{"object_spilling_config": "{\"type\":\"filesystem\",\"params\":{\"directory_path\":\"/mnt/nvme/spill\"}}"}'</code>.</li>
             </ul>
 
             <h3>Failure Mode 3: Actor/Worker Death and Restart Semantics</h3>
@@ -746,31 +683,29 @@ helm install redis bitnami/redis --set auth.enabled=true --set auth.password=myp
                 <li><strong>Node failure:</strong> Node crashes, all Pods on it are lost</li>
                 <li><strong>Autoscaler scale-down:</strong> Idle worker removed by autoscaler (if running actors on it, 
                 they die)</li>
-                <li><strong>User code crash:</strong> Uncaught exception in actor <code>__init__</code> or method</li>
+                <li><strong>Process crash:</strong> e.g. segfault or <code>os._exit</code> in the actor process (Python exceptions don't kill the actor)</li>
             </ul>
             <p>
                 <strong>Ray's restart semantics:</strong> From 
                 <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/tasks.html" target="_blank">Ray 2.40.0 Docs: Task Fault Tolerance</a>:
             </p>
             <blockquote>
-                "By default, Ray will not retry failed tasks. You can change this behavior by setting 
-                <code>max_retries</code>."
+                "The default number of retries is 3 and can be overridden by specifying ``max_retries`` in the ``@ray.remote`` decorator." […] "By default, Ray will **not** retry tasks upon exceptions thrown by application code."
             </blockquote>
             <p>
                 For actors, from <a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/actors.html" target="_blank">Ray 2.40.0 Docs: Actor Fault Tolerance</a>:
             </p>
             <blockquote>
-                "By default, Ray will not restart actors. You can enable actor restarts by setting 
-                <code>max_restarts</code> to a non-zero value."
+                "The default value of ``max_restarts`` is 0, meaning that the actor won't be restarted."
             </blockquote>
             <pre><code class="language-python">@ray.remote(max_restarts=3, max_task_retries=3)
 class ResilientActor:
     def __init__(self):
-        # Actor init; retried up to 3 times on failure
+        # Re-run if the actor process dies (up to 3 restarts); exceptions here are NOT retried
         pass
     
     def work(self):
-        # Method retried up to 3 times on failure
+        # Re-executed up to 3 times if the actor dies mid-call (system failures only unless retry_exceptions=True)
         pass</code></pre>
             <p>
                 <strong>Caveats:</strong>
@@ -779,12 +714,8 @@ class ResilientActor:
                 <li><strong>Actor state is lost:</strong> When an actor restarts, <code>__init__</code> runs again. 
                 Any in-memory state from before the crash is lost. For stateful actors (e.g., holding a cache), 
                 persist state to external storage (Redis, database) and reload in <code>__init__</code>.</li>
-                <li><strong>Pending methods are resubmitted:</strong> If the actor had 10 method calls queued when it 
-                died, all 10 are resubmitted to the restarted actor. This can cause duplicate work if methods have side 
-                effects (e.g., writing to a database). Make methods idempotent.</li>
-                <li><strong>Actors not restarted during autoscaler scale-down:</strong> If autoscaler removes a worker 
-                Pod with a running actor, the actor dies and is NOT restarted (even with <code>max_restarts</code>). 
-                Use <code>minReplicas</code> or actor affinity (pinning to specific nodes) to avoid this.</li>
+                <li><strong>Pending methods:</strong> By default (<code>max_task_retries=0</code>) calls in flight when the actor dies fail with <code>RayActorError</code>. With <code>max_task_retries&gt;0</code> they are retried on the restarted actor, so make methods idempotent.</li>
+                <li><strong>Scale-down and actors:</strong> The autoscaler only removes nodes that are idle (no active tasks, actors, or referenced objects), so a node hosting a live actor isn't scaled down. Actors are lost to OOM kills, node failures, or Pod deletion; <code>max_restarts</code> applies to those.</li>
             </ul>
 
             <h3>Applying This to Eval Sandboxes and RL Rollouts</h3>
@@ -846,8 +777,11 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
+  image: kindest/node:v1.29.8@sha256:d46b7aa29567e93b27f7531d258c372e829d7224b25e3fc6ffdefed12476d3aa
 - role: worker
+  image: kindest/node:v1.29.8@sha256:d46b7aa29567e93b27f7531d258c372e829d7224b25e3fc6ffdefed12476d3aa
 - role: worker
+  image: kindest/node:v1.29.8@sha256:d46b7aa29567e93b27f7531d258c372e829d7224b25e3fc6ffdefed12476d3aa
 EOF
 
 # Verify cluster is ready
@@ -930,7 +864,7 @@ kubectl wait --for=condition=ready pod -l ray.io/node-type=head --timeout=300s
 # Check Pods
 kubectl get pods -l ray.io/cluster=raycluster-autoscale</code></pre>
             <p>
-                Expected output: 1 head Pod (Running), 1 worker Pod (Running, initial <code>replicas: 1</code>).
+                Expected output: 1 head Pod (2/2 Running: ray-head + autoscaler) and 1 worker Pod. The idle worker is scaled down after ~60 s.
             </p>
 
             <h3>Step 4: Submit Workload and Observe Scale-Up</h3>
@@ -945,8 +879,8 @@ observe autoscaler scaling up worker Pods.
 import ray
 import time
 
-# Connect to Ray cluster (via port-forward to head Pod)
-ray.init(address="auto")
+# Connect via Ray Client through the port-forward (client Python must match the image's 3.9)
+ray.init("ray://localhost:10001")
 
 print(f"Connected to Ray cluster: {ray.cluster_resources()}")
 
@@ -956,9 +890,7 @@ def cpu_task(task_id):
     time.sleep(10)
     return f"Task {task_id} completed"
 
-# Submit 20 tasks, each needs 1 CPU
-# Cluster starts with 2 CPUs (1 worker × 2 CPUs), so 18 tasks will be pending
-# Autoscaler should scale up to accommodate
+# The idle worker (replicas: 1) is removed after ~60 s, so the cluster may start with 0 worker CPUs; 20 x 1-CPU tasks need 10 workers, capped at maxReplicas=5 (10 CPUs)
 print("\nSubmitting 20 tasks (each needs 1 CPU)...")
 futures = [cpu_task.remote(i) for i in range(20)]
 
@@ -969,8 +901,8 @@ print("(Check `kubectl get pods -l ray.io/cluster=raycluster-autoscale -w` in an
 results = ray.get(futures)
 print(f"\n✓ All {len(results)} tasks completed")
 
-# Cluster should now scale down after idle timeout (5 minutes by default)
-print("\nCluster will scale down to minReplicas=0 after workers are idle for 5 minutes")
+# Cluster should now scale down after idle timeout (60 s by default in KubeRay)
+print("\nCluster will scale down to minReplicas=0 after workers are idle for ~60 seconds")
 print("(You can watch with: kubectl get pods -l ray.io/cluster=raycluster-autoscale -w)")
 
 ray.shutdown()</code></pre>
@@ -983,34 +915,24 @@ python3 autoscale_demo.py</code></pre>
                 <strong>Observe:</strong>
             </p>
             <ul>
-                <li>Initial cluster has 2 CPUs (1 worker × 2 CPUs)</li>
-                <li>20 tasks submitted, each needs 1 CPU</li>
-                <li>2 tasks run immediately, 18 are pending</li>
-                <li>Autoscaler detects pending tasks, calculates: need 18 more CPUs = 9 workers</li>
-                <li>But <code>maxReplicas: 5</code>, so autoscaler caps at 5 workers total (10 CPUs)</li>
-                <li>KubeRay operator creates 4 new worker Pods (total: 5 workers)</li>
-                <li>Watch with: <code>kubectl get pods -l ray.io/cluster=raycluster-autoscale -w</code></li>
+                <li>If the initial worker was already scaled down (idle &gt; 60 s), the cluster has 0 worker CPUs</li>
+                <li>20 tasks are submitted, each needing 1 CPU; all pending</li>
+                <li>Autoscaler: 20 CPUs needed = 10 workers, capped at <code>maxReplicas: 5</code></li>
+                <li>Autoscaler log: <code>Adding 5 node(s) of type worker-group</code>; the operator creates 5 worker Pods (or 4 more if the initial worker is still up)</li>
             </ul>
             <p>
-                Expected: You'll see new worker Pods created (STATUS: ContainerCreating → Running) over ~30 seconds.
+                Expected: You'll see new worker Pods created (STATUS: ContainerCreating → Running) over (Pod scheduling, image pull, and Ray startup; seconds if the image is cached on the node, minutes if the multi-GB Ray image must be pulled).
             </p>
 
             <h3>Step 5: Observe Scale-Down (Idle Timeout)</h3>
             <p>
-                After tasks complete, workers are idle. Default idle timeout is 5 minutes. The autoscaler will scale 
-                down to <code>minReplicas: 0</code> after 5 minutes.
+                After tasks complete, workers are idle. KubeRay's default idle timeout is 60 seconds (<code>autoscalerOptions.idleTimeoutSeconds</code>), so the autoscaler scales down to <code>minReplicas: 0</code> about a minute later.
             </p>
-            <pre><code class="language-bash"># Watch Pods for 5-10 minutes
+            <pre><code class="language-bash"># Watch Pods for ~2 minutes
 kubectl get pods -l ray.io/cluster=raycluster-autoscale -w
 
-# After ~5 minutes, you should see worker Pods terminating (STATUS: Terminating → gone)
+# After ~60 seconds idle, worker Pods terminate
 # Eventually only the head Pod remains</code></pre>
-            <p>
-                <strong>Note:</strong> To speed up testing, you can reduce idle timeout by setting <code>idle_timeout_minutes: 1</code> 
-                in autoscaler config. However, KubeRay v1.2.2 does not expose this field in the RayCluster CRD. You'd 
-                need to modify the autoscaler sidecar's environment variables directly (advanced). For this exercise, 
-                just observe the default 5-minute timeout.
-            </p>
 
             <h3>(Optional) Step 6: GCS Fault Tolerance with External Redis</h3>
             <p>
@@ -1051,9 +973,9 @@ kind delete cluster --name ray-cluster</code></pre>
             <h3>What You Learned</h3>
             <ul>
                 <li>KubeRay operator manages RayCluster CRs, creates head/worker Pods, and reconciles autoscaler decisions</li>
-                <li>Autoscaler sidecar runs in head Pod, reads demand from GCS, writes desired replica counts to RayCluster status</li>
+                <li>Autoscaler sidecar runs in head Pod, reads demand from GCS, patches the worker group's replicas in the RayCluster spec</li>
                 <li>Operator reconciles worker Pods to match desired replicas</li>
-                <li>Scale-up happens immediately (within Pod creation time, ~20-60s). Scale-down waits for idle timeout (default 5 minutes)</li>
+                <li>Scale-up happens immediately (within Pod creation time, ~20-60s). Scale-down waits for the idle timeout (default 60 s in KubeRay)</li>
                 <li><code>minReplicas: 0</code> allows scale-to-zero (saves cost), but adds cold-start latency for bursty workloads</li>
             </ul>
 
@@ -1090,7 +1012,7 @@ kind delete cluster --name ray-cluster</code></pre>
                 — Autoscaler config reference (idle_timeout_minutes, upscaling_speed, per-node-type configs)</li>
                 <li><strong><a href="https://docs.ray.io/en/releases-2.40.0/ray-core/fault_tolerance/gcs.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance</a></strong> 
                 — How to enable GCS HA with external Redis, recovery behavior, limitations</li>
-                <li><strong><a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/gcs-ft.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance (KubeRay)</a></strong> 
+                <li><strong><a href="https://docs.ray.io/en/releases-2.40.0/cluster/kubernetes/user-guides/kuberay-gcs-ft.html" target="_blank">Ray 2.40.0 Docs: GCS Fault Tolerance (KubeRay)</a></strong> 
                 — KubeRay-specific GCS FT setup (Redis deployment, RayCluster CR config)</li>
             </ul>
 
@@ -1112,11 +1034,9 @@ kind delete cluster --name ray-cluster</code></pre>
             <ul>
                 <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/autoscaler.py</code></a></strong> 
                 — Autoscaler v1/v2 core logic (scale-up/down decisions, idle timeout, upscaling speed)</li>
-                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/sdk.py" target="_blank"><code>python/ray/autoscaler/v2/sdk.py</code></a></strong> 
-                — Autoscaler v2 SDK (KubeRay sidecar entry point: <code>ray kuberay-autoscaler</code>)</li>
-                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/_private/constants.py" target="_blank"><code>python/ray/autoscaler/v2/_private/constants.py</code></a></strong> 
-                — Autoscaler v2 constants (update interval, default timeouts)</li>
-                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/v2/metrics.py" target="_blank"><code>python/ray/autoscaler/v2/metrics.py</code></a></strong> 
+                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/kuberay/run_autoscaler.py" target="_blank"><code>python/ray/autoscaler/_private/kuberay/run_autoscaler.py</code></a></strong> 
+                — KubeRay sidecar entry point: <code>ray kuberay-autoscaler</code></li>
+                <li><strong><a href="https://github.com/ray-project/ray/blob/ray-2.40.0/python/ray/autoscaler/_private/prom_metrics.py" target="_blank"><code>python/ray/autoscaler/_private/prom_metrics.py</code></a></strong> 
                 — Autoscaler Prometheus metrics definitions</li>
             </ul>
 
