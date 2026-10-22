@@ -153,7 +153,7 @@ function createDataImbalanceChart() {
         data: {
             labels: ktoData.dataImbalance.desirableFractions.map(f => {
                 const ratio = `${f.toFixed(2)}:1`;
-                return `${ratio}\n(${Math.round(f * 100)}% desirable)`;
+                return `${ratio}\n(${Math.round((1 - f) * 100)}% of desirable discarded)`;
             }),
             datasets: [
                 {
@@ -206,7 +206,7 @@ function createDataImbalanceChart() {
                 x: {
                     title: {
                         display: true,
-                        text: 'Desirable:Undesirable Ratio',
+                        text: 'Desirable:Undesirable Ratio (not to scale)',
                         color: '#cbd5e1'
                     },
                     ticks: { color: '#cbd5e1', maxRotation: 0, minRotation: 0 },
